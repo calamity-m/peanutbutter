@@ -4,6 +4,10 @@
 
 The idea behind peanutbutter is for it to feel natural at thought, requiring as little input/nudging to work as possible. This is basically impossible, but peanutbutter tries to get as close as it can:
     -> no snippet tools have a nice inline tui, with fuzzy/frecency algo searching
+    -> the frecency algorithm should take location into account, which nobody seems to do
+        1. for example, snippets run in ~/Downloads is probably different to /tmp, or a common /../my-repo/. Weighting this may make life easier.
+        2. Frequency should still be an overrider - e.g. git may show up due to high frequency if we have a snippet for git we constantly use, same with recency.
+        3. Fuzzy finding should be over the name of the snippet (The `##` heading), the snippet itself, and then the snippet file' frontmatter.
     -> snippet tools generally force users into obscure formats that can't be plainly read by others
     -> snippet tools need to understand there are multiple use-cases:
         1. A user knows what they want to do, but doesn't remember the command
