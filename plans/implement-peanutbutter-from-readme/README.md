@@ -1,6 +1,6 @@
 # Implement Peanutbutter from README
 
-Status: planned
+Status: done
 Review status: blocked-no-subagents
 Part count: 4
 Context: [`PLAN_CONTEXT.md`](../../PLAN_CONTEXT.md)
@@ -25,16 +25,20 @@ When this task is complete, a user should be able to manage snippets with the CL
 
 | Part | File | Status | Notes |
 | ---- | ---- | ------ | ----- |
-| 01 | [Core Foundations and Snippet Parsing](part-01-core-foundations-and-snippet-parsing.md) | planned | Establish crate layout, snippet discovery, parser behavior, and fixture coverage. |
-| 02 | [Ranking, Search, and Tree Navigation](part-02-ranking-search-and-tree-navigation.md) | planned | Build the in-memory index, cwd-aware frecency, fuzzy matching, and browse model. |
-| 03 | [Inline TUI Execution and Variable Resolution](part-03-inline-tui-execution-and-variable-resolution.md) | planned | Implement the terminal interaction flow that selects snippets and renders commands. |
-| 04 | [CLI Surface and Shell Integration](part-04-cli-surface-and-shell-integration.md) | planned | Wire the user-facing commands, persistence, and Bash integration around the core flow. |
+| 01 | [Core Foundations and Snippet Parsing](part-01-core-foundations-and-snippet-parsing.md) | done | Crate layout, snippet discovery, line-oriented parser with frontmatter + variable extraction, 17 tests covering every `examples/` file. |
+| 02 | [Ranking, Search, and Tree Navigation](part-02-ranking-search-and-tree-navigation.md) | done | SnippetIndex, nucleo-backed fuzzy scoring, ratatui-aware fuzzy/browse state, file-backed frecency store with location+recency+frequency scoring, ranked search combining them. 37 unit + 6 integration tests green. |
+| 03 | [Inline TUI Execution and Variable Resolution](part-03-inline-tui-execution-and-variable-resolution.md) | done | `pb execute` now runs the selector, preview, and variable prompts; v1 uses the standard ratatui viewport after inline probing proved unreliable in PTY smoke testing. |
+| 04 | [CLI Surface and Shell Integration](part-04-cli-surface-and-shell-integration.md) | done | Added the CLI parser, Bash integration output, safe add/delete commands, post-emission frecency persistence, and shell-safe execute wiring. |
 
 ## Global Progress Log
 
 - [x] 2026-04-11: Created the initial four-part implementation bundle from `README.md`, `AGENTS.md`, `Cargo.toml`, `src/main.rs`, and `examples/`.
 - [x] 2026-04-11: Recorded that the full four-pass review loop could not be run because this session does not permit sub-agent use.
 - [x] 2026-04-11: Aligned `examples/nested/root.md` with the README snippet-heading rule so the examples now consistently use `##` for snippets.
+- [x] 2026-04-11: Completed Part 01 — module tree, discovery, parser, and 17 tests (11 unit + 6 integration) green under `cargo test`, `cargo clippy --all-targets -- -D warnings`, and `cargo fmt --check`.
+- [x] 2026-04-11: Completed Part 02 — added `nucleo-matcher` + `ratatui` deps; introduced `index`, `fuzzy`, `browse`, `frecency`, and `search` modules. Frecency formula blends time decay, path affinity, and a sublinear frequency boost. 37 unit + 6 integration tests green under all three checks.
+- [x] 2026-04-11: Completed Part 03 — added `src/execute.rs`, minimal `pb execute` wiring, variable resolution and command rendering, 10 new execution tests, and a PTY smoke script. `cargo test`, `cargo clippy --all-targets --all-features -- -D warnings`, and `cargo fmt --check` all pass.
+- [x] 2026-04-11: Completed Part 04 — added `src/cli.rs`, full `pb`/`pb execute`/`pb --bash`/`pb add`/`pb del` dispatch, safe snippet deletion, post-emission frecency persistence, and Bash smoke coverage. The TUI now prefers `/dev/tty` output so shell capture keeps stdout clean for the emitted command.
 
 ## Review Findings
 

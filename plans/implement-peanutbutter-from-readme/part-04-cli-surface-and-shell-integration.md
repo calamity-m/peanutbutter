@@ -1,6 +1,6 @@
 # Part 04 - CLI Surface and Shell Integration
 
-Status: planned
+Status: done
 Parent: [`README.md`](README.md)
 Context: [`PLAN_CONTEXT.md`](../../PLAN_CONTEXT.md)
 
@@ -22,17 +22,20 @@ The user-facing CLI matches the README: `pb` is help or no-op by default, `pb ex
 
 ## Checklist
 
-- [ ] Add a CLI parser that exposes `pb`, `pb execute`, `pb add [path]`, `pb del [name]`, and `pb --bash <binding>`.
-- [ ] Keep bare `pb` non-destructive and aligned with the README help or no-op expectation.
-- [ ] Implement Bash integration output that invokes `pb execute` and writes the returned command into the shell buffer.
-- [ ] Implement `pb add` using `$VISUAL` or `$EDITOR`, creating or opening the relevant snippet file in the configured snippet root.
-- [ ] Implement `pb del` with exact-match or clearly disambiguated deletion semantics so the command is safe.
-- [ ] Persist frecency updates only after a command has been successfully selected and emitted.
-- [ ] Add CLI and shell smoke tests and update the README if any behavior needs to be clarified for users.
+- [x] Add a CLI parser that exposes `pb`, `pb execute`, `pb add [path]`, `pb del [name]`, and `pb --bash <binding>`.
+- [x] Keep bare `pb` non-destructive and aligned with the README help or no-op expectation.
+- [x] Implement Bash integration output that invokes `pb execute` and writes the returned command into the shell buffer.
+- [x] Implement `pb add` using `$VISUAL` or `$EDITOR`, creating or opening the relevant snippet file in the configured snippet root.
+- [x] Implement `pb del` with exact-match or clearly disambiguated deletion semantics so the command is safe.
+- [x] Persist frecency updates only after a command has been successfully selected and emitted.
+- [x] Add CLI and shell smoke tests and update the README if any behavior needs to be clarified for users.
 
 ## Progress Log
 
 - [x] 2026-04-11: Scoped the final wiring work around the README CLI contract and Bash-specific shell integration path.
+- [x] 2026-04-11: Added `src/cli.rs` with argument parsing, help text, Bash integration generation, execute persistence, snippet creation/edit launching, and exact-match deletion.
+- [x] 2026-04-11: Switched the Part 03 terminal runner to prefer `/dev/tty` output so `pb execute` can be safely captured by Bash command substitution while still drawing the TUI on the terminal.
+- [x] 2026-04-11: Added `scripts/smoke-part04-bash.sh` and CLI tests covering Bash script generation, add/delete behavior, and frecency persistence.
 
 ## Discoveries
 
@@ -40,16 +43,28 @@ The user-facing CLI matches the README: `pb` is help or no-op by default, `pb ex
   Evidence: `README.md` CLI design section and `AGENTS.md` command examples
 - Observation: The deletion contract is underspecified, so v1 needs exact or clearly disambiguated matching to avoid destructive surprises.
   Evidence: `README.md` lists `pb del [name]` but does not define ambiguous-match behavior
+- Observation: Shell-buffer integration only works cleanly if `pb execute` keeps stdout reserved for the final command and renders the TUI somewhere else, so the runner now prefers `/dev/tty` for terminal output.
+  Evidence: `src/execute.rs` and the 2026-04-11 PTY command-substitution smoke run
+- Observation: `pb add [path]` needs a concrete write policy for multi-root setups, so v1 writes relative add targets into the first configured snippet root and appends `.md` when the requested path has no extension.
+  Evidence: `src/cli.rs` `resolve_add_target` and `cli::tests::resolve_add_target_defaults_and_appends_markdown_extension`
+- Observation: Frecency persistence should not block command insertion after a successful selection, so Part 04 treats post-emission save failures as warnings rather than undoing the emitted command.
+  Evidence: `src/cli.rs` `run_execute_command_with`
 
 ## Validation
 
 - Command or check: `cargo test cli`
-  Result: Pending until implementation.
+  Result: Passed on 2026-04-11 with 9 CLI-focused tests covering parsing, Bash script generation, add/delete behavior, and execute persistence.
 - Command or check: `cargo test`
-  Result: Pending until implementation.
-- Command or check: manual Bash smoke test with `eval "$(pb --bash C+b)"` and a real snippet selection flow.
-  Result: Pending until implementation.
+  Result: Passed on 2026-04-11 with 62 total tests green.
+- Command or check: `cargo clippy --all-targets --all-features -- -D warnings`
+  Result: Passed on 2026-04-11.
+- Command or check: `cargo fmt --check`
+  Result: Passed on 2026-04-11.
+- Command or check: `./scripts/smoke-part04-bash.sh`
+  Result: Passed on 2026-04-11; generated Bash integration and validated it with `bash -n`.
+- Command or check: PTY command-substitution smoke run for `out="$(target/debug/pb execute)"`
+  Result: Passed on 2026-04-11; the interactive flow completed and the captured stdout ended with the emitted command while the TUI rendered on the terminal device.
 
 ## Next Handoff
 
-Implement CLI glue last so deletion, shell wiring, and frecency persistence all sit on top of already-tested core behavior rather than dictating it.
+The README-driven v1 is now functionally complete. Future work can focus on packaging, broader shell integrations, and tuning default snippet-root ergonomics rather than core behavior gaps.

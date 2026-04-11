@@ -2,5 +2,14 @@
 name = "peanutbutter"
 version = "0.1.0"
 edition = "2024"
+default-run = "pb"
+
+[[bin]]
+name = "pb"
+path = "src/main.rs"
 
 [dependencies]
+crossterm = "0.28"
+libc = "0.2"
+nucleo-matcher = "0.3"
+ratatui = "0.29"
