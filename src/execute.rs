@@ -419,12 +419,14 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
 
     fn render_select(&mut self, frame: &mut Frame<'_>) {
         let area = frame.area();
+        let fuzzy_hits = self.search_hits();
+        let browse_visible = self.browse.visible(&self.tree);
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(3),
+                Constraint::Length(1),
                 Constraint::Min(10),
-                Constraint::Length(2),
+                Constraint::Length(1),
             ])
             .split(area);
         let main = Layout::default()
@@ -432,23 +434,30 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
             .constraints([Constraint::Percentage(42), Constraint::Percentage(58)])
             .split(chunks[1]);
 
-        let title = match self.nav_mode {
-            NavigationMode::Fuzzy => format!("Search {}", self.fuzzy.query),
+        let header = match self.nav_mode {
+            NavigationMode::Fuzzy => format!(
+                "pb  search: {}  [{}]",
+                if self.fuzzy.query.is_empty() {
+                    "all".to_string()
+                } else {
+                    self.fuzzy.query.clone()
+                },
+                fuzzy_hits.len()
+            ),
             NavigationMode::Browse => {
-                format!("Browse {}{}", self.browse.path_display(), self.browse.input)
+                format!(
+                    "pb  browse: {}{}  [{}]",
+                    self.browse.path_display(),
+                    self.browse.input,
+                    browse_visible.len()
+                )
             }
         };
-        frame.render_widget(
-            Paragraph::new(title)
-                .block(block("pb execute"))
-                .wrap(Wrap { trim: true }),
-            chunks[0],
-        );
+        frame.render_widget(chrome_line(header, Modifier::BOLD), chunks[0]);
 
         match self.nav_mode {
             NavigationMode::Fuzzy => {
-                let hits = self.search_hits();
-                let items: Vec<ListItem<'_>> = hits
+                let items: Vec<ListItem<'_>> = fuzzy_hits
                     .iter()
                     .map(|hit| {
                         ListItem::new(Line::from(format!(
@@ -465,8 +474,7 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
                 frame.render_stateful_widget(list, main[0], &mut self.fuzzy.list);
             }
             NavigationMode::Browse => {
-                let visible = self.browse.visible(&self.tree);
-                let items: Vec<ListItem<'_>> = visible
+                let items: Vec<ListItem<'_>> = browse_visible
                     .iter()
                     .map(|entry| {
                         let label = match entry {
@@ -490,38 +498,25 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
             status.clone()
         } else {
             match self.nav_mode {
-                NavigationMode::Fuzzy => {
-                    "Type to search. Enter opens preview. Ctrl+T/F2 toggles browse. Esc cancels."
-                        .to_string()
-                }
+                NavigationMode::Fuzzy => "enter preview  ctrl+t browse  esc cancel".to_string(),
                 NavigationMode::Browse => {
-                    "Type to filter, Tab completes dirs, Enter opens, Ctrl+T/F2 toggles search."
-                        .to_string()
+                    "tab complete  enter preview  ctrl+t search  esc cancel".to_string()
                 }
             }
         };
-        frame.render_widget(
-            Paragraph::new(help)
-                .block(block("Help"))
-                .wrap(Wrap { trim: true }),
-            chunks[2],
-        );
+        frame.render_widget(chrome_line(help, Modifier::DIM), chunks[2]);
     }
 
     fn render_preview(&self, frame: &mut Frame<'_>, snippet_id: &SnippetId) {
         let area = frame.area();
         let chunks = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([Constraint::Min(10), Constraint::Length(2)])
+            .constraints([Constraint::Min(10), Constraint::Length(1)])
             .split(area);
         let snippet = self.index.get(snippet_id);
         self.render_snippet_preview(frame, chunks[0], snippet);
         frame.render_widget(
-            Paragraph::new(
-                "Enter prompts for variables and emits the command. Backspace/Esc returns.",
-            )
-            .block(block("Help"))
-            .wrap(Wrap { trim: true }),
+            chrome_line("enter accept  backspace/esc return", Modifier::DIM),
             chunks[1],
         );
     }
@@ -531,65 +526,62 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(3),
+                Constraint::Length(1),
                 Constraint::Min(10),
-                Constraint::Length(2),
+                Constraint::Length(1),
             ])
             .split(area);
-        let main = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(38), Constraint::Percentage(62)])
-            .split(chunks[1]);
-
         let variable = prompt.current_variable();
         let source = describe_source(variable);
         let title = format!(
-            "Variable {}/{}: <@{}> ({source})",
+            "input <@{}>  [{}/{}]  ({source}): {}",
+            variable.name,
             prompt.index + 1,
             prompt.variables.len(),
-            variable.name
+            prompt.input
         );
-        frame.render_widget(
-            Paragraph::new(prompt.input.clone())
-                .block(block(&title))
-                .wrap(Wrap { trim: false }),
-            chunks[0],
-        );
-
-        let suggestion_items: Vec<ListItem<'_>> = prompt
-            .visible_suggestions()
-            .into_iter()
-            .map(|value| ListItem::new(Line::from(value.clone())))
-            .collect();
-        let suggestion_title = if prompt.suggestions.is_empty() {
-            "Suggestions".to_string()
-        } else {
-            format!("Suggestions ({})", prompt.suggestions.len())
-        };
-        let list = List::new(suggestion_items)
-            .block(block(&suggestion_title))
-            .highlight_symbol("> ")
-            .highlight_style(Style::default().add_modifier(Modifier::REVERSED));
-        let mut list_state = prompt.list.clone();
-        frame.render_stateful_widget(list, main[0], &mut list_state);
+        frame.render_widget(chrome_line(title, Modifier::BOLD), chunks[0]);
 
         let preview = self.partial_command().unwrap_or_default();
-        frame.render_widget(
-            Paragraph::new(preview)
-                .block(block("Rendered command"))
-                .wrap(Wrap { trim: false }),
-            main[1],
-        );
+        if prompt.suggestions.is_empty() {
+            frame.render_widget(
+                Paragraph::new(preview)
+                    .block(block("Rendered command"))
+                    .wrap(Wrap { trim: false }),
+                chunks[1],
+            );
+        } else {
+            let main = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([Constraint::Percentage(38), Constraint::Percentage(62)])
+                .split(chunks[1]);
 
-        let help = prompt.error.as_deref().unwrap_or(
-            "Type a value, Tab chooses a suggestion, Enter accepts, Backspace walks back.",
-        );
-        frame.render_widget(
-            Paragraph::new(help)
-                .block(block("Help"))
-                .wrap(Wrap { trim: true }),
-            chunks[2],
-        );
+            let suggestion_items: Vec<ListItem<'_>> = prompt
+                .visible_suggestions()
+                .into_iter()
+                .map(|value| ListItem::new(Line::from(value.clone())))
+                .collect();
+            let suggestion_title = format!("Suggestions ({})", prompt.suggestions.len());
+            let list = List::new(suggestion_items)
+                .block(block(&suggestion_title))
+                .highlight_symbol("> ")
+                .highlight_style(Style::default().add_modifier(Modifier::REVERSED));
+            let mut list_state = prompt.list.clone();
+            frame.render_stateful_widget(list, main[0], &mut list_state);
+
+            frame.render_widget(
+                Paragraph::new(preview)
+                    .block(block("Rendered command"))
+                    .wrap(Wrap { trim: false }),
+                main[1],
+            );
+        }
+
+        let help = prompt
+            .error
+            .as_deref()
+            .unwrap_or("tab next  shift+tab prev  enter accept  esc return");
+        frame.render_widget(chrome_line(help, Modifier::DIM), chunks[2]);
     }
 
     fn render_snippet_preview(
@@ -687,16 +679,15 @@ fn handle_prompt_key<P: SuggestionProvider>(
             PromptTransition::Stay
         }
         KeyCode::Tab => {
-            if let Some(choice) = prompt.selected_visible_suggestion() {
-                prompt.input = choice.clone();
-                prompt.reset_selection();
-            }
+            cycle_prompt_variable(prompt, 1, provider, cwd, status);
+            PromptTransition::Stay
+        }
+        KeyCode::BackTab => {
+            cycle_prompt_variable(prompt, -1, provider, cwd, status);
             PromptTransition::Stay
         }
         KeyCode::Enter => {
-            let variable = prompt.current_variable().clone();
-            let value = prompt.current_value();
-            prompt.values.insert(variable.name.clone(), value);
+            store_current_value(prompt);
             if prompt.index + 1 < prompt.variables.len() {
                 prompt.index += 1;
                 load_prompt_state(prompt, provider, cwd, status);
@@ -712,6 +703,30 @@ fn handle_prompt_key<P: SuggestionProvider>(
         }
         _ => PromptTransition::Stay,
     }
+}
+
+fn store_current_value(prompt: &mut PromptState) {
+    let variable = prompt.current_variable().clone();
+    prompt
+        .values
+        .insert(variable.name.clone(), prompt.current_value());
+}
+
+fn cycle_prompt_variable<P: SuggestionProvider>(
+    prompt: &mut PromptState,
+    delta: isize,
+    provider: &P,
+    cwd: &Path,
+    status: &mut Option<String>,
+) {
+    store_current_value(prompt);
+    if prompt.variables.len() <= 1 {
+        return;
+    }
+
+    let len = prompt.variables.len() as isize;
+    prompt.index = (prompt.index as isize + delta).rem_euclid(len) as usize;
+    load_prompt_state(prompt, provider, cwd, status);
 }
 
 fn load_prompt_state<P: SuggestionProvider>(
@@ -927,6 +942,12 @@ fn cleanup_terminal(
 
 fn block(title: &str) -> Block<'_> {
     Block::default().borders(Borders::ALL).title(title)
+}
+
+fn chrome_line<'a, T: Into<Text<'a>>>(text: T, modifier: Modifier) -> Paragraph<'a> {
+    Paragraph::new(text)
+        .style(Style::default().add_modifier(modifier))
+        .wrap(Wrap { trim: true })
 }
 
 fn unique_variables(variables: &[Variable]) -> Vec<Variable> {
@@ -1206,7 +1227,7 @@ mod tests {
     }
 
     #[test]
-    fn variable_flow_uses_suggestion_selection() {
+    fn variable_flow_accepts_default_suggestion() {
         let variables = vec![Variable {
             name: "method".to_string(),
             source: VariableSource::Command("ignored".to_string()),
@@ -1215,9 +1236,63 @@ mod tests {
         let mut app = app_with_body("curl -X <@method:ignored>", variables, provider);
         let _ = app.handle_key(press(KeyCode::Enter));
         let _ = app.handle_key(press(KeyCode::Enter));
-        let _ = app.handle_key(press(KeyCode::Tab));
         let outcome = completed(app.handle_key(press(KeyCode::Enter)));
         assert_eq!(outcome.command, "curl -X GET");
+    }
+
+    #[test]
+    fn prompt_tab_cycles_forward_between_variables() {
+        let variables = vec![
+            Variable {
+                name: "one".to_string(),
+                source: VariableSource::Free,
+            },
+            Variable {
+                name: "two".to_string(),
+                source: VariableSource::Free,
+            },
+        ];
+        let mut app = app_with_body("echo <@one> <@two>", variables, TestProvider::default());
+        let _ = app.handle_key(press(KeyCode::Enter));
+        let _ = app.handle_key(press(KeyCode::Enter));
+        let _ = app.handle_key(press(KeyCode::Char('a')));
+        let _ = app.handle_key(press(KeyCode::Tab));
+
+        let Screen::Prompt(prompt) = &app.screen else {
+            panic!("expected prompt");
+        };
+        assert_eq!(prompt.current_variable().name, "two");
+        assert_eq!(prompt.values.get("one").map(String::as_str), Some("a"));
+
+        let _ = app.handle_key(press(KeyCode::Tab));
+        let Screen::Prompt(prompt) = &app.screen else {
+            panic!("expected prompt");
+        };
+        assert_eq!(prompt.current_variable().name, "one");
+        assert_eq!(prompt.input, "a");
+    }
+
+    #[test]
+    fn prompt_shift_tab_cycles_backward_between_variables() {
+        let variables = vec![
+            Variable {
+                name: "one".to_string(),
+                source: VariableSource::Free,
+            },
+            Variable {
+                name: "two".to_string(),
+                source: VariableSource::Free,
+            },
+        ];
+        let mut app = app_with_body("echo <@one> <@two>", variables, TestProvider::default());
+        let _ = app.handle_key(press(KeyCode::Enter));
+        let _ = app.handle_key(press(KeyCode::Enter));
+        let _ = app.handle_key(press(KeyCode::BackTab));
+
+        let Screen::Prompt(prompt) = &app.screen else {
+            panic!("expected prompt");
+        };
+        assert_eq!(prompt.current_variable().name, "two");
     }
 
     #[test]

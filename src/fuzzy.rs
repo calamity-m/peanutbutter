@@ -121,7 +121,12 @@ pub struct FuzzyState {
 
 impl FuzzyState {
     pub fn new() -> Self {
-        Self::default()
+        let mut list = ListState::default();
+        list.select(Some(0));
+        Self {
+            query: String::new(),
+            list,
+        }
     }
 
     pub fn set_query<S: Into<String>>(&mut self, query: S) {
@@ -222,6 +227,12 @@ mod tests {
         let mut state = FuzzyState::new();
         state.list.select(Some(5));
         state.type_char('a');
+        assert_eq!(state.selected(), Some(0));
+    }
+
+    #[test]
+    fn new_state_selects_first_result_by_default() {
+        let state = FuzzyState::new();
         assert_eq!(state.selected(), Some(0));
     }
 
