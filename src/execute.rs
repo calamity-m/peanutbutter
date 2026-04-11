@@ -43,7 +43,7 @@ impl Default for ExecuteOptions {
         Self {
             cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             now: unix_now(),
-            viewport_height: 12,
+            viewport_height: 20,
         }
     }
 }
@@ -298,6 +298,12 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
             KeyCode::Backspace => {
                 self.fuzzy.backspace();
             }
+            KeyCode::Left => {
+                self.fuzzy.cursor_left();
+            }
+            KeyCode::Right => {
+                self.fuzzy.cursor_right();
+            }
             KeyCode::Up => {
                 self.fuzzy.move_cursor(-1, hits.len());
             }
@@ -446,39 +452,45 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
                 "Browse",
             ),
         };
-        frame.render_widget(select_header(&prompt, &stats, mode, chunks[0].width), chunks[0]);
+        frame.render_widget(
+            select_header(&prompt, &stats, mode, chunks[0].width),
+            chunks[0],
+        );
 
         match self.nav_mode {
             NavigationMode::Fuzzy => {
+                let total = fuzzy_hits.len();
+                let selected = self.fuzzy.selected().unwrap_or(0);
                 let items: Vec<ListItem<'_>> = fuzzy_hits
                     .iter()
-                    .map(|hit| {
-                        ListItem::new(Line::from(format!(
+                    .enumerate()
+                    .map(|(idx, hit)| {
+                        let content = format!(
                             "{}  [{}]",
                             hit.snippet.name(),
                             hit.snippet.relative_path_display()
-                        )))
+                        );
+                        ListItem::new(snippet_list_line(idx, total, selected, &content))
                     })
                     .collect();
-                let list = List::new(items)
-                    .highlight_symbol("> ")
-                    .highlight_style(Style::default().add_modifier(Modifier::REVERSED));
+                let list = List::new(items);
                 frame.render_stateful_widget(list, main[0], &mut self.fuzzy.list);
             }
             NavigationMode::Browse => {
+                let total = browse_visible.len();
+                let selected = self.browse.list.selected().unwrap_or(0);
                 let items: Vec<ListItem<'_>> = browse_visible
                     .iter()
-                    .map(|entry| {
+                    .enumerate()
+                    .map(|(idx, entry)| {
                         let label = match entry {
                             BrowseEntry::Directory(name) => format!("{name}/"),
                             BrowseEntry::Snippet(snippet) => snippet.name.clone(),
                         };
-                        ListItem::new(Line::from(label))
+                        ListItem::new(snippet_list_line(idx, total, selected, &label))
                     })
                     .collect();
-                let list = List::new(items)
-                    .highlight_symbol("> ")
-                    .highlight_style(Style::default().add_modifier(Modifier::REVERSED));
+                let list = List::new(items);
                 frame.render_stateful_widget(list, main[0], &mut self.browse.list);
             }
         }
@@ -496,6 +508,12 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
             }
         };
         frame.render_widget(chrome_line(help, Modifier::DIM), chunks[2]);
+
+        if matches!(self.nav_mode, NavigationMode::Fuzzy) {
+            // "> " prefix is 2 columns; cursor_col() gives char-count offset into the query
+            let x = chunks[0].x + 2 + self.fuzzy.cursor_col() as u16;
+            frame.set_cursor_position(Position { x, y: chunks[0].y });
+        }
     }
 
     fn render_preview(&self, frame: &mut Frame<'_>, snippet_id: &SnippetId) {
@@ -1143,7 +1161,9 @@ fn try_highlight_match(line: &str, i: usize) -> Option<(usize, Span<'static>)> {
                 token.len(),
                 Span::styled(
                     token.to_string(),
-                    Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
                 ),
             ));
         }
@@ -1211,11 +1231,9 @@ fn try_highlight_match(line: &str, i: usize) -> Option<(usize, Span<'static>)> {
     // shell keywords at word boundaries
     if at_word_start {
         const KEYWORDS: &[&str] = &[
-            "if", "then", "else", "elif", "fi",
-            "for", "while", "until", "do", "done",
-            "case", "esac", "in", "function",
-            "return", "local", "export", "source",
-            "readonly", "declare", "unset",
+            "if", "then", "else", "elif", "fi", "for", "while", "until", "do", "done", "case",
+            "esac", "in", "function", "return", "local", "export", "source", "readonly", "declare",
+            "unset",
         ];
         for kw in KEYWORDS {
             if rest.starts_with(kw) {
@@ -1231,10 +1249,7 @@ fn try_highlight_match(line: &str, i: usize) -> Option<(usize, Span<'static>)> {
                 if end_ok {
                     return Some((
                         after,
-                        Span::styled(
-                            kw.to_string(),
-                            Style::default().fg(Color::Magenta),
-                        ),
+                        Span::styled(kw.to_string(), Style::default().fg(Color::Magenta)),
                     ));
                 }
             }
@@ -1268,6 +1283,34 @@ fn select_header(prompt: &str, stats: &str, mode: &str, width: u16) -> Paragraph
         Span::raw(format!(" {right}")),
     ]);
     Paragraph::new(Text::from(vec![prompt_line, status_line]))
+}
+
+fn snippet_list_line<'a>(idx: usize, total: usize, selected: usize, content: &str) -> Line<'a> {
+    let w = digits(total);
+    if idx == selected {
+        Line::from(vec![
+            Span::styled("▌ ", Style::default().fg(Color::Red).bg(Color::DarkGray)),
+            Span::styled(
+                format!("{:>w$}  {content}", idx + 1),
+                Style::default()
+                    .bg(Color::DarkGray)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ])
+    } else {
+        Line::from(vec![
+            Span::raw("  "),
+            Span::styled(
+                format!("{:>w$}  ", idx + 1),
+                Style::default().add_modifier(Modifier::DIM),
+            ),
+            Span::raw(content.to_string()),
+        ])
+    }
+}
+
+fn digits(n: usize) -> usize {
+    if n == 0 { 1 } else { n.ilog10() as usize + 1 }
 }
 
 fn unique_variables(variables: &[Variable]) -> Vec<Variable> {
