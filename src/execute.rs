@@ -424,7 +424,7 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(1),
+                Constraint::Length(2),
                 Constraint::Min(10),
                 Constraint::Length(1),
             ])
@@ -434,26 +434,17 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
             .constraints([Constraint::Percentage(42), Constraint::Percentage(58)])
             .split(chunks[1]);
 
-        let header = match self.nav_mode {
-            NavigationMode::Fuzzy => format!(
-                "pb  search: {}  [{}]",
-                if self.fuzzy.query.is_empty() {
-                    "all".to_string()
-                } else {
-                    self.fuzzy.query.clone()
-                },
-                fuzzy_hits.len()
+        let (prompt, stats) = match self.nav_mode {
+            NavigationMode::Fuzzy => (
+                self.fuzzy.query.clone(),
+                format!("{}/{}", fuzzy_hits.len(), self.index.len()),
             ),
-            NavigationMode::Browse => {
-                format!(
-                    "pb  browse: {}{}  [{}]",
-                    self.browse.path_display(),
-                    self.browse.input,
-                    browse_visible.len()
-                )
-            }
+            NavigationMode::Browse => (
+                format!("{}{}", self.browse.path_display(), self.browse.input),
+                browse_visible.len().to_string(),
+            ),
         };
-        frame.render_widget(chrome_line(header, Modifier::BOLD), chunks[0]);
+        frame.render_widget(select_header(&prompt, &stats, chunks[0].width), chunks[0]);
 
         match self.nav_mode {
             NavigationMode::Fuzzy => {
@@ -468,7 +459,6 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
                     })
                     .collect();
                 let list = List::new(items)
-                    .block(block("Results"))
                     .highlight_symbol("> ")
                     .highlight_style(Style::default().add_modifier(Modifier::REVERSED));
                 frame.render_stateful_widget(list, main[0], &mut self.fuzzy.list);
@@ -1091,6 +1081,20 @@ fn chrome_line<'a, T: Into<Text<'a>>>(text: T, modifier: Modifier) -> Paragraph<
     Paragraph::new(text)
         .style(Style::default().add_modifier(modifier))
         .wrap(Wrap { trim: true })
+}
+
+fn select_header(prompt: &str, stats: &str, width: u16) -> Paragraph<'static> {
+    let prompt = Line::from(vec![
+        Span::raw("> "),
+        Span::styled(
+            prompt.to_string(),
+            Style::default().add_modifier(Modifier::BOLD),
+        ),
+    ]);
+    let prefix = format!("[{stats}] ");
+    let divider_width = width.max(prefix.len() as u16) as usize - prefix.len();
+    let divider = format!("{prefix}{}", "─".repeat(divider_width));
+    Paragraph::new(Text::from(vec![prompt, Line::from(divider)]))
 }
 
 fn unique_variables(variables: &[Variable]) -> Vec<Variable> {

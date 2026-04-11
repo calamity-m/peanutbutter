@@ -13,6 +13,7 @@ use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const DEFAULT_ADD_PATH: &str = "snippets.md";
+const DEFAULT_BASH_BINDING: &str = "C+b";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CliCommand {
@@ -76,8 +77,10 @@ where
             (Some(binding), None) => Ok(CliCommand::Bash {
                 binding: binding.to_string_lossy().into_owned(),
             }),
-            (None, _) => Err("--bash requires a readline binding like C+b".to_string()),
-            (_, Some(_)) => Err("--bash accepts exactly one binding".to_string()),
+            (None, None) => Ok(CliCommand::Bash {
+                binding: DEFAULT_BASH_BINDING.to_string(),
+            }),
+            (_, Some(_)) => Err("--bash accepts at most one binding".to_string()),
         },
         other => Err(format!("unknown command or flag: {other}")),
     }
@@ -89,7 +92,7 @@ pub fn help_text(paths: &Paths) -> String {
     out.push_str("usage:\n");
     out.push_str("  pb\n");
     out.push_str("  pb execute\n");
-    out.push_str("  pb --bash C+b\n");
+    out.push_str("  pb --bash [C+b]\n");
     out.push_str("  pb add [path]\n");
     out.push_str("  pb del <name-or-id>\n");
     out.push('\n');
@@ -413,6 +416,12 @@ mod tests {
         assert_eq!(
             parse_args(vec![OsString::from("del"), OsString::from("Echo")]).unwrap(),
             CliCommand::Del("Echo".to_string())
+        );
+        assert_eq!(
+            parse_args(vec![OsString::from("--bash")]).unwrap(),
+            CliCommand::Bash {
+                binding: "C+b".to_string()
+            }
         );
         assert_eq!(
             parse_args(vec![OsString::from("--bash"), OsString::from("C+b")]).unwrap(),
