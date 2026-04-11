@@ -7,12 +7,12 @@ use crate::index::{IndexedSnippet, SnippetIndex};
 use crate::search;
 use crossterm::cursor;
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
-use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
+use crossterm::terminal::{self, ClearType, disable_raw_mode, enable_raw_mode};
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::Position;
 use ratatui::layout::{Constraint, Direction, Layout};
 use ratatui::style::{Modifier, Style};
-use ratatui::text::{Line, Text};
+use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Wrap};
 use ratatui::{Frame, Terminal, TerminalOptions, Viewport};
 use std::collections::{BTreeMap, HashMap};
@@ -43,7 +43,7 @@ impl Default for ExecuteOptions {
         Self {
             cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             now: unix_now(),
-            viewport_height: 20,
+            viewport_height: 12,
         }
     }
 }
@@ -533,16 +533,30 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
             .split(area);
         let variable = prompt.current_variable();
         let source = describe_source(variable);
-        let title = format!(
-            "input <@{}>  [{}/{}]  ({source}): {}",
-            variable.name,
-            prompt.index + 1,
-            prompt.variables.len(),
-            prompt.input
-        );
-        frame.render_widget(chrome_line(title, Modifier::BOLD), chunks[0]);
+        let title = Line::from(vec![
+            Span::raw("input "),
+            Span::styled(format!("<@{}>", variable.name), active_prompt_style()),
+            Span::raw(format!(
+                "  [{}/{}]  ({source}): ",
+                prompt.index + 1,
+                prompt.variables.len(),
+            )),
+            Span::styled(
+                if prompt.input.is_empty() {
+                    "<empty>".to_string()
+                } else {
+                    prompt.input.clone()
+                },
+                if prompt.input.is_empty() {
+                    placeholder_prompt_style()
+                } else {
+                    Style::default().add_modifier(Modifier::BOLD)
+                },
+            ),
+        ]);
+        frame.render_widget(chrome_line(title, Modifier::empty()), chunks[0]);
 
-        let preview = self.partial_command().unwrap_or_default();
+        let preview = self.prompt_preview_text(prompt);
         if prompt.suggestions.is_empty() {
             frame.render_widget(
                 Paragraph::new(preview)
@@ -582,6 +596,24 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
             .as_deref()
             .unwrap_or("tab next  shift+tab prev  enter accept  esc return");
         frame.render_widget(chrome_line(help, Modifier::DIM), chunks[2]);
+    }
+
+    fn prompt_preview_text(&self, prompt: &PromptState) -> Text<'static> {
+        let Some(snippet) = self.index.get(&prompt.snippet_id) else {
+            return Text::default();
+        };
+
+        let mut values = prompt.values.clone();
+        let value = prompt.current_value();
+        if !value.is_empty() {
+            values.insert(prompt.current_variable().name.clone(), value);
+        }
+
+        render_command_text(
+            snippet.body(),
+            &values,
+            Some(prompt.current_variable().name.as_str()),
+        )
     }
 
     fn render_snippet_preview(
@@ -785,6 +817,102 @@ pub fn render_command(template: &str, values: &BTreeMap<String, String>) -> Stri
     out
 }
 
+fn render_command_text(
+    template: &str,
+    values: &BTreeMap<String, String>,
+    active_variable: Option<&str>,
+) -> Text<'static> {
+    let mut chunks = Vec::new();
+    let bytes = template.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if i + 1 < bytes.len() && bytes[i] == b'<' && bytes[i + 1] == b'@' {
+            let start = i + 2;
+            if let Some(end_offset) = template[start..].find('>') {
+                let end = start + end_offset;
+                let placeholder = &template[i..=end];
+                if let Some(name) = placeholder_name(&template[start..end]) {
+                    if let Some(value) = values.get(name) {
+                        let style = if Some(name) == active_variable {
+                            active_prompt_style()
+                        } else {
+                            Style::default()
+                        };
+                        chunks.push(StyledChunk::new(value.clone(), style));
+                        i = end + 1;
+                        continue;
+                    }
+
+                    let style = if Some(name) == active_variable {
+                        active_prompt_style()
+                    } else {
+                        placeholder_prompt_style()
+                    };
+                    chunks.push(StyledChunk::new(placeholder.to_string(), style));
+                    i = end + 1;
+                    continue;
+                }
+            }
+        }
+
+        let ch = template[i..]
+            .chars()
+            .next()
+            .expect("slice at valid char boundary");
+        chunks.push(StyledChunk::plain(ch.to_string()));
+        i += ch.len_utf8();
+    }
+
+    styled_text(chunks)
+}
+
+#[derive(Debug, Clone)]
+struct StyledChunk {
+    text: String,
+    style: Style,
+}
+
+impl StyledChunk {
+    fn plain(text: String) -> Self {
+        Self {
+            text,
+            style: Style::default(),
+        }
+    }
+
+    fn new(text: String, style: Style) -> Self {
+        Self { text, style }
+    }
+}
+
+fn styled_text(chunks: Vec<StyledChunk>) -> Text<'static> {
+    let mut lines: Vec<Line<'static>> = vec![Line::default()];
+    for chunk in chunks {
+        let mut parts = chunk.text.split('\n').peekable();
+        while let Some(part) = parts.next() {
+            if !part.is_empty() {
+                lines
+                    .last_mut()
+                    .expect("text always has at least one line")
+                    .spans
+                    .push(Span::styled(part.to_string(), chunk.style));
+            }
+            if parts.peek().is_some() {
+                lines.push(Line::default());
+            }
+        }
+    }
+    Text::from(lines)
+}
+
+fn active_prompt_style() -> Style {
+    Style::default().add_modifier(Modifier::BOLD | Modifier::REVERSED)
+}
+
+fn placeholder_prompt_style() -> Style {
+    Style::default().add_modifier(Modifier::DIM)
+}
+
 pub fn execute_default() -> io::Result<Option<ExecutionOutcome>> {
     let paths = config::default_paths();
     let index = crate::index::load_from_roots(&paths.snippet_roots)?;
@@ -827,12 +955,13 @@ pub fn run_execute_with_provider<P: SuggestionProvider>(
             AppEvent::Completed(outcome) => break Some(outcome),
         }
     };
-    cleanup_terminal(&mut terminal, restore_cursor)?;
+    cleanup_terminal(restore_cursor)?;
     Ok(outcome)
 }
 
 fn build_terminal(viewport_height: u16) -> io::Result<Terminal<CrosstermBackend<io::Stdout>>> {
     let backend = CrosstermBackend::new(io::stdout());
+    let viewport_height = inline_viewport_height(viewport_height)?;
     match Terminal::with_options(
         backend,
         TerminalOptions {
@@ -842,6 +971,16 @@ fn build_terminal(viewport_height: u16) -> io::Result<Terminal<CrosstermBackend<
         Ok(terminal) => Ok(terminal),
         Err(_) => Terminal::new(CrosstermBackend::new(io::stdout())),
     }
+}
+
+fn inline_viewport_height(max_height: u16) -> io::Result<u16> {
+    let (_, rows) = terminal::size()?;
+    Ok(compact_viewport_height(rows, max_height))
+}
+
+fn compact_viewport_height(rows: u16, max_height: u16) -> u16 {
+    let compact = (rows / 3).max(6);
+    compact.min(max_height.max(1))
 }
 
 struct RawModeGuard;
@@ -928,15 +1067,19 @@ fn current_cursor_position() -> Option<Position> {
     cursor::position().ok().map(|(x, y)| Position { x, y })
 }
 
-fn cleanup_terminal(
-    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
-    restore_cursor: Option<Position>,
-) -> io::Result<()> {
-    terminal.clear()?;
+fn cleanup_terminal(restore_cursor: Option<Position>) -> io::Result<()> {
+    let mut stdout = io::stdout();
     if let Some(position) = restore_cursor {
-        terminal.set_cursor_position(position)?;
+        crossterm::execute!(
+            stdout,
+            cursor::MoveTo(position.x, position.y),
+            terminal::Clear(ClearType::FromCursorDown),
+            cursor::Show
+        )?;
+    } else {
+        crossterm::execute!(stdout, cursor::Show)?;
     }
-    terminal.show_cursor()?;
+    stdout.flush()?;
     Ok(())
 }
 
@@ -1125,6 +1268,13 @@ mod tests {
         }
     }
 
+    fn line_text(line: &Line<'_>) -> String {
+        line.spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect()
+    }
+
     #[test]
     fn render_command_replaces_each_placeholder_form() {
         let mut values = BTreeMap::new();
@@ -1143,6 +1293,32 @@ mod tests {
         let values = BTreeMap::new();
         let rendered = render_command("echo <@missing>", &values);
         assert_eq!(rendered, "echo <@missing>");
+    }
+
+    #[test]
+    fn render_command_text_highlights_active_value() {
+        let mut values = BTreeMap::new();
+        values.insert("file".to_string(), "Cargo.toml".to_string());
+        let rendered = render_command_text("cat <@file>", &values, Some("file"));
+        assert_eq!(line_text(&rendered.lines[0]), "cat Cargo.toml");
+        assert_eq!(rendered.lines[0].spans[4].style, active_prompt_style());
+    }
+
+    #[test]
+    fn render_command_text_highlights_active_placeholder_and_dims_others() {
+        let values = BTreeMap::new();
+        let rendered = render_command_text("echo <@missing> <@later>", &values, Some("missing"));
+        assert_eq!(line_text(&rendered.lines[0]), "echo <@missing> <@later>");
+        assert_eq!(rendered.lines[0].spans[5].style, active_prompt_style());
+        assert_eq!(rendered.lines[0].spans[7].style, placeholder_prompt_style());
+    }
+
+    #[test]
+    fn compact_viewport_height_stays_small_but_respects_limits() {
+        assert_eq!(compact_viewport_height(60, 12), 12);
+        assert_eq!(compact_viewport_height(24, 12), 8);
+        assert_eq!(compact_viewport_height(9, 12), 6);
+        assert_eq!(compact_viewport_height(60, 4), 4);
     }
 
     #[test]

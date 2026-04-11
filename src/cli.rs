@@ -119,6 +119,8 @@ pub fn bash_integration_script(binding: &str, executable: &Path) -> io::Result<S
     return $__pb_status
   fi
   if [[ -z $__pb_cmd ]]; then
+    READLINE_LINE="${{READLINE_LINE}}"
+    READLINE_POINT=${{READLINE_POINT}}
     return 0
   fi
   READLINE_LINE="${{READLINE_LINE:0:$READLINE_POINT}}${{__pb_cmd}}${{READLINE_LINE:$READLINE_POINT}}"
@@ -425,6 +427,8 @@ mod tests {
         let script = bash_integration_script("C+b", Path::new("/tmp/pb")).unwrap();
         assert!(script.contains("bind -x '\"\\C-b\":__pb_insert_command'"));
         assert!(script.contains("'/tmp/pb' execute"));
+        assert!(script.contains("READLINE_LINE=\"${READLINE_LINE}\""));
+        assert!(script.contains("READLINE_POINT=${READLINE_POINT}"));
     }
 
     #[test]
