@@ -85,7 +85,10 @@ fn nested_examples_all_parse() {
     );
     assert_eq!(
         by_file.get("nested/docker/docker.md"),
-        Some(&vec!["Run docker".to_string()])
+        Some(&vec![
+            "Run docker".to_string(),
+            "Execute a shell in a running container".to_string(),
+        ])
     );
     assert_eq!(
         by_file.get("nested/docker/images/images.md"),
