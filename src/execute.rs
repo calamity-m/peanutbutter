@@ -532,90 +532,94 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
 
     fn render_prompt(&self, frame: &mut Frame<'_>, prompt: &PromptState) {
         let area = frame.area();
-        let chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(1),
-                Constraint::Min(10),
-                Constraint::Length(1),
-            ])
-            .split(area);
-        let variable = prompt.current_variable();
-        let source = describe_source(variable);
-        let prefix_cols = format!(
-            "input <@{}>  [{}/{}]  ({source}): ",
-            variable.name,
-            prompt.index + 1,
-            prompt.variables.len()
-        )
-        .chars()
-        .count() as u16;
 
-        let mut title_spans = vec![
-            Span::raw("input "),
-            Span::styled(format!("<@{}>", variable.name), active_prompt_style()),
-            Span::raw(format!(
-                "  [{}/{}]  ({source}): ",
-                prompt.index + 1,
-                prompt.variables.len(),
-            )),
-        ];
-        if prompt.input.is_empty() {
-            title_spans.push(Span::styled("<empty>", placeholder_prompt_style()));
-        } else {
-            title_spans.push(Span::styled(
-                prompt.input.clone(),
-                Style::default().add_modifier(Modifier::BOLD),
-            ));
-            // reset-styled space so the terminal cursor lands on a clean cell
-            title_spans.push(Span::styled(" ", Style::reset()));
-        }
-        frame.render_widget(chrome_line(Line::from(title_spans), Modifier::empty()), chunks[0]);
-        frame.set_cursor_position(Position {
-            x: chunks[0].x + prefix_cols + prompt.input.chars().count() as u16,
-            y: chunks[0].y,
-        });
-
+        // Build preview first so we can measure its height for the layout
         let preview = self.prompt_preview_text(prompt);
-        if prompt.suggestions.is_empty() {
-            frame.render_widget(
-                Paragraph::new(preview)
-                    .block(block("Rendered command"))
-                    .wrap(Wrap { trim: false }),
-                chunks[1],
-            );
+        let cmd_height = (preview.lines.len() as u16).max(1);
+
+        let (cmd_area, status_area, sugg_area, help_area) = if prompt.suggestions.is_empty() {
+            let chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Length(cmd_height),
+                    Constraint::Length(1),
+                    Constraint::Length(1),
+                ])
+                .split(area);
+            (chunks[0], chunks[1], None, chunks[2])
         } else {
-            let main = Layout::default()
-                .direction(Direction::Horizontal)
-                .constraints([Constraint::Percentage(38), Constraint::Percentage(62)])
-                .split(chunks[1]);
+            // cap suggestions so help always has a row
+            let max_sugg = area.height.saturating_sub(cmd_height + 2);
+            let sugg_height = (prompt.visible_suggestions().len() as u16)
+                .min(max_sugg)
+                .max(1);
+            let chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Length(cmd_height),
+                    Constraint::Length(1),
+                    Constraint::Length(sugg_height),
+                    Constraint::Length(1),
+                ])
+                .split(area);
+            (chunks[0], chunks[1], Some(chunks[2]), chunks[3])
+        };
+        frame.render_widget(
+            Paragraph::new(preview).wrap(Wrap { trim: false }),
+            cmd_area,
+        );
 
-            let suggestion_items: Vec<ListItem<'_>> = prompt
-                .visible_suggestions()
-                .into_iter()
-                .map(|value| ListItem::new(Line::from(value.clone())))
-                .collect();
-            let suggestion_title = format!("Suggestions ({})", prompt.suggestions.len());
-            let list = List::new(suggestion_items)
-                .block(block(&suggestion_title))
-                .highlight_symbol("> ")
-                .highlight_style(Style::default().add_modifier(Modifier::REVERSED));
-            let mut list_state = prompt.list.clone();
-            frame.render_stateful_widget(list, main[0], &mut list_state);
-
-            frame.render_widget(
-                Paragraph::new(preview)
-                    .block(block("Rendered command"))
-                    .wrap(Wrap { trim: false }),
-                main[1],
-            );
-        }
-
-        let help = prompt
+        // Status bar
+        let variable = prompt.current_variable();
+        let label = prompt
             .error
             .as_deref()
-            .unwrap_or("tab next  shift+tab prev  enter accept  esc return");
-        frame.render_widget(chrome_line(help, Modifier::DIM), chunks[2]);
+            .unwrap_or(variable.name.as_str());
+        frame.render_widget(
+            Paragraph::new(Line::from(prompt_status_line(
+                prompt.index + 1,
+                prompt.variables.len(),
+                label,
+                status_area.width,
+            ))),
+            status_area,
+        );
+
+        // Suggestions list
+        if let Some(area) = sugg_area {
+            let visible = prompt.visible_suggestions();
+            let total = visible.len();
+            let selected = prompt.list.selected().unwrap_or(0);
+            let items: Vec<ListItem<'_>> = visible
+                .into_iter()
+                .enumerate()
+                .map(|(idx, value)| {
+                    ListItem::new(snippet_list_line(idx, total, selected, value.as_str()))
+                })
+                .collect();
+            let mut list_state = prompt.list.clone();
+            frame.render_stateful_widget(List::new(items), area, &mut list_state);
+        }
+
+        // Cursor: walk the template to find where the active variable lands
+        if let Some(snippet) = self.index.get(&prompt.snippet_id) {
+            let mut values = prompt.values.clone();
+            let value = prompt.current_value();
+            if !value.is_empty() {
+                values.insert(variable.name.clone(), value);
+            }
+            let (cursor_col, cursor_row) =
+                cursor_in_template(snippet.body(), &values, &variable.name);
+            frame.set_cursor_position(Position {
+                x: cmd_area.x + cursor_col,
+                y: cmd_area.y + cursor_row,
+            });
+        }
+
+        frame.render_widget(
+            chrome_line("tab next  shift+tab prev  enter accept  esc return", Modifier::DIM),
+            help_area,
+        );
     }
 
     fn prompt_preview_text(&self, prompt: &PromptState) -> Text<'static> {
@@ -1296,6 +1300,75 @@ fn select_header(prompt: &str, stats: &str, mode: &str, width: u16) -> Paragraph
     Paragraph::new(Text::from(vec![prompt_line, status_line]))
 }
 
+fn prompt_status_line(idx: usize, total: usize, label: &str, width: u16) -> Vec<Span<'static>> {
+    let prefix = format!("[{idx}/{total}] ─ ");
+    let mode = format!("[ {label} ]");
+    let used = prefix.chars().count() + mode.chars().count() + 1;
+    let right = "─".repeat((width as usize).saturating_sub(used));
+    vec![
+        Span::raw(prefix),
+        Span::styled(mode, Style::default().add_modifier(Modifier::BOLD)),
+        Span::raw(format!(" {right}")),
+    ]
+}
+
+/// Walk `template`, rendering variables from `values`, and return the
+/// (col, row) position within the rendered output where `active_variable` ends.
+fn cursor_in_template(
+    template: &str,
+    values: &BTreeMap<String, String>,
+    active_variable: &str,
+) -> (u16, u16) {
+    let mut col: u16 = 0;
+    let mut row: u16 = 0;
+    let mut i = 0;
+    let bytes = template.as_bytes();
+
+    while i < bytes.len() {
+        if i + 1 < bytes.len() && bytes[i] == b'<' && bytes[i + 1] == b'@' {
+            let start = i + 2;
+            if let Some(end_offset) = template[start..].find('>') {
+                let end = start + end_offset;
+                if let Some(name) = placeholder_name(&template[start..end]) {
+                    if name == active_variable {
+                        if let Some(val) = values.get(name) {
+                            advance_cursor(&mut col, &mut row, val);
+                        }
+                        return (col, row);
+                    }
+                    let rendered = values
+                        .get(name)
+                        .cloned()
+                        .unwrap_or_else(|| template[i..=end].to_string());
+                    advance_cursor(&mut col, &mut row, &rendered);
+                    i = end + 1;
+                    continue;
+                }
+            }
+        }
+        let ch = template[i..].chars().next().unwrap();
+        if ch == '\n' {
+            row += 1;
+            col = 0;
+        } else {
+            col += 1;
+        }
+        i += ch.len_utf8();
+    }
+    (col, row)
+}
+
+fn advance_cursor(col: &mut u16, row: &mut u16, text: &str) {
+    for ch in text.chars() {
+        if ch == '\n' {
+            *row += 1;
+            *col = 0;
+        } else {
+            *col += 1;
+        }
+    }
+}
+
 fn snippet_list_line<'a>(idx: usize, total: usize, selected: usize, content: &str) -> Line<'a> {
     let w = digits(total);
     if idx == selected {
@@ -1358,15 +1431,6 @@ fn placeholder_name(inner: &str) -> Option<&str> {
     Some(name)
 }
 
-fn describe_source(variable: &Variable) -> String {
-    match &variable.source {
-        VariableSource::Free if variable.name == "file" => "cwd files".to_string(),
-        VariableSource::Free if variable.name == "directory" => "cwd directories".to_string(),
-        VariableSource::Free => "free-form".to_string(),
-        VariableSource::Default(value) => format!("default {value}"),
-        VariableSource::Command(cmd) => format!("command {cmd}"),
-    }
-}
 
 fn builtin_suggestions(name: &str, cwd: &Path) -> io::Result<Vec<String>> {
     match name {
