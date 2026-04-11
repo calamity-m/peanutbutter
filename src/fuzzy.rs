@@ -116,6 +116,7 @@ pub fn score_snippet(
 #[derive(Debug, Default)]
 pub struct FuzzyState {
     pub query: String,
+    pub cursor: usize, // byte offset into query
     pub list: ListState,
 }
 
@@ -125,26 +126,55 @@ impl FuzzyState {
         list.select(Some(0));
         Self {
             query: String::new(),
+            cursor: 0,
             list,
         }
     }
 
     pub fn set_query<S: Into<String>>(&mut self, query: S) {
         self.query = query.into();
+        self.cursor = self.query.len();
         self.list.select(Some(0));
     }
 
     pub fn type_char(&mut self, c: char) {
-        self.query.push(c);
+        self.query.insert(self.cursor, c);
+        self.cursor += c.len_utf8();
         self.list.select(Some(0));
     }
 
     pub fn backspace(&mut self) -> bool {
-        let changed = self.query.pop().is_some();
-        if changed {
-            self.list.select(Some(0));
+        if self.cursor == 0 {
+            return false;
         }
-        changed
+        let prev = self.query[..self.cursor]
+            .char_indices()
+            .next_back()
+            .map(|(i, _)| i)
+            .unwrap_or(0);
+        self.query.remove(prev);
+        self.cursor = prev;
+        self.list.select(Some(0));
+        true
+    }
+
+    pub fn cursor_left(&mut self) {
+        if self.cursor == 0 {
+            return;
+        }
+        self.cursor = self.query[..self.cursor]
+            .char_indices()
+            .next_back()
+            .map(|(i, _)| i)
+            .unwrap_or(0);
+    }
+
+    pub fn cursor_right(&mut self) {
+        if self.cursor >= self.query.len() {
+            return;
+        }
+        let c = self.query[self.cursor..].chars().next().unwrap();
+        self.cursor += c.len_utf8();
     }
 
     pub fn move_cursor(&mut self, delta: i32, result_len: usize) {
@@ -159,6 +189,11 @@ impl FuzzyState {
 
     pub fn selected(&self) -> Option<usize> {
         self.list.selected()
+    }
+
+    /// Display-column offset of the cursor within the query (for rendering).
+    pub fn cursor_col(&self) -> usize {
+        self.query[..self.cursor].chars().count()
     }
 }
 
