@@ -11,7 +11,7 @@ use crossterm::terminal::{self, ClearType, disable_raw_mode, enable_raw_mode};
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::Position;
 use ratatui::layout::{Constraint, Direction, Layout};
-use ratatui::style::{Modifier, Style};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Wrap};
 use ratatui::{Frame, Terminal, TerminalOptions, Viewport};
@@ -425,7 +425,7 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
             .direction(Direction::Vertical)
             .constraints([
                 Constraint::Length(2),
-                Constraint::Min(10),
+                Constraint::Min(1),
                 Constraint::Length(1),
             ])
             .split(area);
@@ -434,17 +434,19 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
             .constraints([Constraint::Percentage(42), Constraint::Percentage(58)])
             .split(chunks[1]);
 
-        let (prompt, stats) = match self.nav_mode {
+        let (prompt, stats, mode) = match self.nav_mode {
             NavigationMode::Fuzzy => (
                 self.fuzzy.query.clone(),
                 format!("{}/{}", fuzzy_hits.len(), self.index.len()),
+                "Fuzzy",
             ),
             NavigationMode::Browse => (
                 format!("{}{}", self.browse.path_display(), self.browse.input),
                 browse_visible.len().to_string(),
+                "Browse",
             ),
         };
-        frame.render_widget(select_header(&prompt, &stats, chunks[0].width), chunks[0]);
+        frame.render_widget(select_header(&prompt, &stats, mode, chunks[0].width), chunks[0]);
 
         match self.nav_mode {
             NavigationMode::Fuzzy => {
@@ -475,14 +477,13 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
                     })
                     .collect();
                 let list = List::new(items)
-                    .block(block("Tree"))
                     .highlight_symbol("> ")
                     .highlight_style(Style::default().add_modifier(Modifier::REVERSED));
                 frame.render_stateful_widget(list, main[0], &mut self.browse.list);
             }
         }
 
-        self.render_snippet_preview(frame, main[1], self.selected_snippet());
+        self.render_snippet_code(frame, main[1], self.selected_snippet());
 
         let help = if let Some(status) = &self.status {
             status.clone()
@@ -604,6 +605,25 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
             &values,
             Some(prompt.current_variable().name.as_str()),
         )
+    }
+
+    fn render_snippet_code(
+        &self,
+        frame: &mut Frame<'_>,
+        area: ratatui::layout::Rect,
+        snippet: Option<&IndexedSnippet>,
+    ) {
+        let text = if let Some(snippet) = snippet {
+            highlight_shell(snippet.body())
+        } else {
+            Text::from("No snippet selected")
+        };
+        frame.render_widget(
+            Paragraph::new(text)
+                .block(Block::default().borders(Borders::LEFT))
+                .wrap(Wrap { trim: false }),
+            area,
+        );
     }
 
     fn render_snippet_preview(
@@ -1077,24 +1097,177 @@ fn block(title: &str) -> Block<'_> {
     Block::default().borders(Borders::ALL).title(title)
 }
 
+fn highlight_shell(body: &str) -> Text<'static> {
+    Text::from(body.lines().map(highlight_shell_line).collect::<Vec<_>>())
+}
+
+fn highlight_shell_line(line: &str) -> Line<'static> {
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    let mut i = 0;
+    let mut plain_start = 0;
+
+    while i < line.len() {
+        if let Some((len, span)) = try_highlight_match(line, i) {
+            if plain_start < i {
+                spans.push(Span::raw(line[plain_start..i].to_string()));
+            }
+            spans.push(span);
+            i += len;
+            plain_start = i;
+        } else {
+            i += line[i..].chars().next().map(|c| c.len_utf8()).unwrap_or(1);
+        }
+    }
+    if plain_start < line.len() {
+        spans.push(Span::raw(line[plain_start..].to_string()));
+    }
+    Line::from(spans)
+}
+
+fn try_highlight_match(line: &str, i: usize) -> Option<(usize, Span<'static>)> {
+    let rest = &line[i..];
+    let at_word_start = i == 0
+        || line.as_bytes()[i - 1]
+            .is_ascii_whitespace()
+            .then_some(true)
+            .unwrap_or_else(|| {
+                let pb = line.as_bytes()[i - 1];
+                !pb.is_ascii_alphanumeric() && pb != b'_'
+            });
+
+    // <@custom var> — the tool's own variable syntax
+    if rest.starts_with("<@") {
+        if let Some(end) = rest.find('>') {
+            let token = &rest[..end + 1];
+            return Some((
+                token.len(),
+                Span::styled(
+                    token.to_string(),
+                    Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                ),
+            ));
+        }
+    }
+
+    // comment
+    if rest.starts_with('#') {
+        return Some((
+            rest.len(),
+            Span::styled(rest.to_string(), Style::default().fg(Color::DarkGray)),
+        ));
+    }
+
+    // double-quoted string
+    if rest.starts_with('"') {
+        let end = rest[1..].find('"').map(|e| e + 2).unwrap_or(rest.len());
+        return Some((
+            end,
+            Span::styled(rest[..end].to_string(), Style::default().fg(Color::Green)),
+        ));
+    }
+
+    // single-quoted string
+    if rest.starts_with('\'') {
+        let end = rest[1..].find('\'').map(|e| e + 2).unwrap_or(rest.len());
+        return Some((
+            end,
+            Span::styled(rest[..end].to_string(), Style::default().fg(Color::Green)),
+        ));
+    }
+
+    // $var or ${var}
+    if rest.starts_with('$') {
+        let end = if rest.starts_with("${") {
+            rest.find('}').map(|e| e + 1).unwrap_or(rest.len())
+        } else {
+            let inner = &rest[1..];
+            let e = inner
+                .find(|c: char| !c.is_alphanumeric() && c != '_')
+                .unwrap_or(inner.len());
+            if e == 0 {
+                return None;
+            }
+            e + 1
+        };
+        return Some((
+            end,
+            Span::styled(rest[..end].to_string(), Style::default().fg(Color::Cyan)),
+        ));
+    }
+
+    // flags: --flag or -f at word boundaries
+    if at_word_start && rest.starts_with('-') && rest.as_bytes().get(1).copied() != Some(b' ') {
+        let end = rest
+            .find(|c: char| c == ' ' || c == '=' || c == '\'' || c == '"' || c == ';')
+            .unwrap_or(rest.len());
+        if end > 1 {
+            return Some((
+                end,
+                Span::styled(rest[..end].to_string(), Style::default().fg(Color::Blue)),
+            ));
+        }
+    }
+
+    // shell keywords at word boundaries
+    if at_word_start {
+        const KEYWORDS: &[&str] = &[
+            "if", "then", "else", "elif", "fi",
+            "for", "while", "until", "do", "done",
+            "case", "esac", "in", "function",
+            "return", "local", "export", "source",
+            "readonly", "declare", "unset",
+        ];
+        for kw in KEYWORDS {
+            if rest.starts_with(kw) {
+                let after = kw.len();
+                let end_ok = after == rest.len()
+                    || rest.as_bytes()[after]
+                        .is_ascii_whitespace()
+                        .then_some(true)
+                        .unwrap_or_else(|| {
+                            let b = rest.as_bytes()[after];
+                            !b.is_ascii_alphanumeric() && b != b'_'
+                        });
+                if end_ok {
+                    return Some((
+                        after,
+                        Span::styled(
+                            kw.to_string(),
+                            Style::default().fg(Color::Magenta),
+                        ),
+                    ));
+                }
+            }
+        }
+    }
+
+    None
+}
+
 fn chrome_line<'a, T: Into<Text<'a>>>(text: T, modifier: Modifier) -> Paragraph<'a> {
     Paragraph::new(text)
         .style(Style::default().add_modifier(modifier))
         .wrap(Wrap { trim: true })
 }
 
-fn select_header(prompt: &str, stats: &str, width: u16) -> Paragraph<'static> {
-    let prompt = Line::from(vec![
+fn select_header(prompt: &str, stats: &str, mode: &str, width: u16) -> Paragraph<'static> {
+    let prompt_line = Line::from(vec![
         Span::raw("> "),
         Span::styled(
             prompt.to_string(),
             Style::default().add_modifier(Modifier::BOLD),
         ),
     ]);
-    let prefix = format!("[{stats}] ");
-    let divider_width = width.max(prefix.len() as u16) as usize - prefix.len();
-    let divider = format!("{prefix}{}", "─".repeat(divider_width));
-    Paragraph::new(Text::from(vec![prompt, Line::from(divider)]))
+    let prefix = format!("[{stats}] ─ ");
+    let mode_label = format!("[ {mode} ]");
+    let used = prefix.chars().count() + mode_label.chars().count() + 1;
+    let right = "─".repeat((width as usize).saturating_sub(used));
+    let status_line = Line::from(vec![
+        Span::raw(prefix),
+        Span::styled(mode_label, Style::default().add_modifier(Modifier::BOLD)),
+        Span::raw(format!(" {right}")),
+    ]);
+    Paragraph::new(Text::from(vec![prompt_line, status_line]))
 }
 
 fn unique_variables(variables: &[Variable]) -> Vec<Variable> {
