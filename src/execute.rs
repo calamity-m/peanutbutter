@@ -542,7 +542,16 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
             .split(area);
         let variable = prompt.current_variable();
         let source = describe_source(variable);
-        let title = Line::from(vec![
+        let prefix_cols = format!(
+            "input <@{}>  [{}/{}]  ({source}): ",
+            variable.name,
+            prompt.index + 1,
+            prompt.variables.len()
+        )
+        .chars()
+        .count() as u16;
+
+        let mut title_spans = vec![
             Span::raw("input "),
             Span::styled(format!("<@{}>", variable.name), active_prompt_style()),
             Span::raw(format!(
@@ -550,20 +559,22 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
                 prompt.index + 1,
                 prompt.variables.len(),
             )),
-            Span::styled(
-                if prompt.input.is_empty() {
-                    "<empty>".to_string()
-                } else {
-                    prompt.input.clone()
-                },
-                if prompt.input.is_empty() {
-                    placeholder_prompt_style()
-                } else {
-                    Style::default().add_modifier(Modifier::BOLD)
-                },
-            ),
-        ]);
-        frame.render_widget(chrome_line(title, Modifier::empty()), chunks[0]);
+        ];
+        if prompt.input.is_empty() {
+            title_spans.push(Span::styled("<empty>", placeholder_prompt_style()));
+        } else {
+            title_spans.push(Span::styled(
+                prompt.input.clone(),
+                Style::default().add_modifier(Modifier::BOLD),
+            ));
+            // reset-styled space so the terminal cursor lands on a clean cell
+            title_spans.push(Span::styled(" ", Style::reset()));
+        }
+        frame.render_widget(chrome_line(Line::from(title_spans), Modifier::empty()), chunks[0]);
+        frame.set_cursor_position(Position {
+            x: chunks[0].x + prefix_cols + prompt.input.chars().count() as u16,
+            y: chunks[0].y,
+        });
 
         let preview = self.prompt_preview_text(prompt);
         if prompt.suggestions.is_empty() {
