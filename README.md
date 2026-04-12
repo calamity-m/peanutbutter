@@ -1,22 +1,52 @@
 # Peanutbutter
 
-## User Experience
+A command-line snippet tool that tries to mould to your own use-cases.
 
-The idea behind peanutbutter is for it to feel natural at thought, requiring as little input/nudging to work as possible. This is basically impossible, but peanutbutter tries to get as close as it can:
-    -> no snippet tools have a nice inline tui, with fuzzy/frecency algo searching
-    -> the frecency algorithm should take location into account, which nobody seems to do
-        1. for example, snippets run in ~/Downloads is probably different to /tmp, or a common /../my-repo/. Weighting this may make life easier.
-        2. Frequency should still be an overrider - e.g. git may show up due to high frequency if we have a snippet for git we constantly use, same with recency.
-        3. Fuzzy finding should be over the name of the snippet (The `##` heading), the snippet itself, and then the snippet file' frontmatter.
-    -> snippet tools generally force users into obscure formats that can't be plainly read by others
-    -> snippet tools need to understand there are multiple use-cases:
-        1. A user knows what they want to do, but doesn't remember the command
-        2. The user has no idea what they want to do, but they think they might have run a similar command before
-        3. The user has an inclination of what they want to do, but are unsure how to go about it.
+## Quick-Start
 
-This leads me to believe peanutbutter should try to find a middleground of all three, rather than hyper-focusing on one. A user should be able to hit the hot-key in their terminal, e.g. ctrl + b and naturally arrive to where/what they want.
+```bash
+# pb --bash C+b
+# pb --bash C+f
+# etc.
+eval "$(pb --bash)"
+```
 
-This essentially creates two modes - similar to fzf where you might have a "file find", versus a "content fuzzy match". In my opinion an ergonomic snippet tool in the terminal handles both, easily swapping between the two. A user should be able to fumble around until they arrive at something they are familar with, at which point they can take control and find exactly what they want. For example, tab completion/backspacing until they find relevant areas, then quickly honing in on the snippet they want. Another example may be fuzzy searching different terms, until they narrow it down to the sinppet they want - but after selecting it they don't like it, so backspacing enough should take them back to the snippet list TUI with their search at the same spot before they entered the snippet, so they can select the down arrow and try the second, etc.
+## Why
+
+I personally find that other cheatsheet or snippet tools don't adapt to my workflows, and cause me to constantly exit out of my own flow state.
+Ideally a snippet/cheatsheet tool should feel natural and complete at "the speed of thought" or whatever the fuck that means - really just, allow me to express myself naturally.
+Nothing can do that, but peanutbutter tries to do that through understanding:
+
+- Snippets need to be readable outside of the tool.
+- Fuzzy finding is amazing, and allows you to narrow in a command you know exists, or feel out the existence of some shell script; but:
+- Sometimes I have no idea what I want, only a feeling. Sometimes I want a structured way to look through my collectionl.
+
+## Alternatives
+
+There are alternatives to this, as this isn't a unique or new problem. These alternatives probably do this concept better, but they just don't hit every single note I'm looking for.
+
+- `denisidoro/navi` is probably the best, and does most of this tool but better - but has some minor annoyances around searching and the specification for cheats that irks me.
+- `fzf` can do this with a bit of bash-fu - frequency/recency is harder to tune. 
+- `alexpasmantier/television` with a cheatsheet channel. This can be pretty nice, but I didn't like how restricted I felt in channel definitions
+- the "mega" cheatsheet things like tl;dr, but I don't really want 90k commands I'll never use, in formats I don't like.
+
+## Modes
+
+Peanutbutter has a fuzzy find mode, and a structured "file-list" mode. 
+
+- Fuzzy finding is basically like fzf, I just stand on the back of helix's `nucleo-matcher` crate.
+- File-list mode lets you walk through your snippets as they're structured via directories and files. I find this useful when I need inspiration on what I want to do. It's hard to explain,
+but when you __know__ you need to do something, but you want to explore what you have.
+
+:shrug: maybe this is pointless but oh well.
+
+## AI Disclaimer
+
+This tool has been [VIBED] with direction from myself. It's a tool I don't care enough about to craft myself painstakingly after work and on my weekends, 
+but enough that I've thought about it for years.
+
+Code probably shit - but the code would be shit if I wrote every single line myself too. Nothing in the repo would cause a `CVE-999-999` so feel safe to use it,
+or burn it at the stake.
 
 ## Snippet Specification
 
@@ -61,10 +91,6 @@ export PEANUTBUTTER_PATH="$PWD/examples"
 The XDG default (`~/.config/peanutbutter/snippets/`) is always included and doesn't need to be listed explicitly.
 
 ## Peanutbutter CLI
-
-The peanutbutter CLI by default, calling `pb` shouldn't really do anything. This is because we need the hot-key setup and shell completion to put the result into the terminal buffer for the user to execute.
-
-Instead, `pb` should help the user with their usage of peanutbutter. For instance, we would want the following:
 
 1. `pb --bash C+b` <-- create bash for ctrl+b hotkey, so I can put into my bashrc eval "$(...)"
 2. `pb add ...` <-- add a snippet, opening the relevant snippet file in their $EDITOR/$VISUAL
