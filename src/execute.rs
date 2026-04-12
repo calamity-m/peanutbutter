@@ -634,7 +634,7 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
                     ListItem::new(snippet_list_line(idx, total, selected, value.as_str()))
                 })
                 .collect();
-            let mut list_state = prompt.list.clone();
+            let mut list_state = prompt.list;
             frame.render_stateful_widget(List::new(items), area, &mut list_state);
         }
 
@@ -1267,28 +1267,25 @@ fn highlight_shell_line(line: &str) -> Line<'static> {
 fn try_highlight_match(line: &str, i: usize) -> Option<(usize, Span<'static>)> {
     let rest = &line[i..];
     let at_word_start = i == 0
-        || line.as_bytes()[i - 1]
-            .is_ascii_whitespace()
-            .then_some(true)
-            .unwrap_or_else(|| {
-                let pb = line.as_bytes()[i - 1];
-                !pb.is_ascii_alphanumeric() && pb != b'_'
-            });
+        || if line.as_bytes()[i - 1].is_ascii_whitespace() {
+            true
+        } else {
+            let pb = line.as_bytes()[i - 1];
+            !pb.is_ascii_alphanumeric() && pb != b'_'
+        };
 
     // <@custom var> — the tool's own variable syntax
-    if rest.starts_with("<@") {
-        if let Some(end) = rest.find('>') {
-            let token = &rest[..end + 1];
-            return Some((
-                token.len(),
-                Span::styled(
-                    token.to_string(),
-                    Style::default()
-                        .fg(Color::Yellow)
-                        .add_modifier(Modifier::BOLD),
-                ),
-            ));
-        }
+    if rest.starts_with("<@") && let Some(end) = rest.find('>') {
+        let token = &rest[..end + 1];
+        return Some((
+            token.len(),
+            Span::styled(
+                token.to_string(),
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ));
     }
 
     // comment
@@ -1300,8 +1297,8 @@ fn try_highlight_match(line: &str, i: usize) -> Option<(usize, Span<'static>)> {
     }
 
     // double-quoted string
-    if rest.starts_with('"') {
-        let end = rest[1..].find('"').map(|e| e + 2).unwrap_or(rest.len());
+    if let Some(stripped) = rest.strip_prefix('"') {
+        let end = stripped.find('"').map(|e| e + 2).unwrap_or(rest.len());
         return Some((
             end,
             Span::styled(rest[..end].to_string(), Style::default().fg(Color::Green)),
@@ -1309,8 +1306,8 @@ fn try_highlight_match(line: &str, i: usize) -> Option<(usize, Span<'static>)> {
     }
 
     // single-quoted string
-    if rest.starts_with('\'') {
-        let end = rest[1..].find('\'').map(|e| e + 2).unwrap_or(rest.len());
+    if let Some(stripped) = rest.strip_prefix('\'') {
+        let end = stripped.find('\'').map(|e| e + 2).unwrap_or(rest.len());
         return Some((
             end,
             Span::styled(rest[..end].to_string(), Style::default().fg(Color::Green)),
@@ -1318,11 +1315,10 @@ fn try_highlight_match(line: &str, i: usize) -> Option<(usize, Span<'static>)> {
     }
 
     // $var or ${var}
-    if rest.starts_with('$') {
+    if let Some(inner) = rest.strip_prefix('$') {
         let end = if rest.starts_with("${") {
             rest.find('}').map(|e| e + 1).unwrap_or(rest.len())
         } else {
-            let inner = &rest[1..];
             let e = inner
                 .find(|c: char| !c.is_alphanumeric() && c != '_')
                 .unwrap_or(inner.len());
@@ -1340,7 +1336,7 @@ fn try_highlight_match(line: &str, i: usize) -> Option<(usize, Span<'static>)> {
     // flags: --flag or -f at word boundaries
     if at_word_start && rest.starts_with('-') && rest.as_bytes().get(1).copied() != Some(b' ') {
         let end = rest
-            .find(|c: char| c == ' ' || c == '=' || c == '\'' || c == '"' || c == ';')
+            .find([' ', '=', '\'', '"', ';'])
             .unwrap_or(rest.len());
         if end > 1 {
             return Some((
@@ -1361,13 +1357,12 @@ fn try_highlight_match(line: &str, i: usize) -> Option<(usize, Span<'static>)> {
             if rest.starts_with(kw) {
                 let after = kw.len();
                 let end_ok = after == rest.len()
-                    || rest.as_bytes()[after]
-                        .is_ascii_whitespace()
-                        .then_some(true)
-                        .unwrap_or_else(|| {
-                            let b = rest.as_bytes()[after];
-                            !b.is_ascii_alphanumeric() && b != b'_'
-                        });
+                    || if rest.as_bytes()[after].is_ascii_whitespace() {
+                        true
+                    } else {
+                        let b = rest.as_bytes()[after];
+                        !b.is_ascii_alphanumeric() && b != b'_'
+                    };
                 if end_ok {
                     return Some((
                         after,
