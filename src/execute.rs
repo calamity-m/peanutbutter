@@ -1275,7 +1275,9 @@ fn try_highlight_match(line: &str, i: usize) -> Option<(usize, Span<'static>)> {
         };
 
     // <@custom var> — the tool's own variable syntax
-    if rest.starts_with("<@") && let Some(end) = rest.find('>') {
+    if rest.starts_with("<@")
+        && let Some(end) = rest.find('>')
+    {
         let token = &rest[..end + 1];
         return Some((
             token.len(),
@@ -1335,9 +1337,7 @@ fn try_highlight_match(line: &str, i: usize) -> Option<(usize, Span<'static>)> {
 
     // flags: --flag or -f at word boundaries
     if at_word_start && rest.starts_with('-') && rest.as_bytes().get(1).copied() != Some(b' ') {
-        let end = rest
-            .find([' ', '=', '\'', '"', ';'])
-            .unwrap_or(rest.len());
+        let end = rest.find([' ', '=', '\'', '"', ';']).unwrap_or(rest.len());
         if end > 1 {
             return Some((
                 end,

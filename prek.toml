@@ -1,0 +1,52 @@
+#:schema https://www.schemastore.org/prek.json
+# Run `prek install` once per checkout to activate the configured git hooks.
+
+default_install_hook_types = ["pre-commit", "pre-push"]
+
+[[repos]]
+repo = "local"
+
+[[repos.hooks]]
+id = "cargo-fmt"
+name = "cargo fmt"
+entry = "cargo fmt --check"
+language = "system"
+pass_filenames = false
+always_run = true
+stages = ["pre-commit"]
+
+[[repos.hooks]]
+id = "cargo-build"
+name = "cargo build"
+entry = "cargo build"
+language = "system"
+pass_filenames = false
+always_run = true
+stages = ["pre-commit"]
+
+[[repos.hooks]]
+id = "cargo-test"
+name = "cargo test"
+entry = "cargo test"
+language = "system"
+pass_filenames = false
+always_run = true
+stages = ["pre-commit"]
+
+[[repos.hooks]]
+id = "cargo-clippy"
+name = "cargo clippy (dead_code ignored)"
+entry = "cargo clippy -- -D warnings -A dead_code"
+language = "system"
+pass_filenames = false
+always_run = true
+stages = ["pre-commit"]
+
+[[repos.hooks]]
+id = "cargo-clippy-strict"
+name = "cargo clippy strict (push to main)"
+entry = "scripts/pre-push-clippy.sh"
+language = "system"
+pass_filenames = false
+always_run = true
+stages = ["pre-push"]
