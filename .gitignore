@@ -1,1 +1,6 @@
 /target
+.codex
+.claude
+.vscode
+.idea
+.opencode
