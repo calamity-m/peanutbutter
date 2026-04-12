@@ -549,7 +549,7 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
         let area = frame.area();
         let chunks = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([Constraint::Min(10), Constraint::Length(1)])
+            .constraints([Constraint::Min(1), Constraint::Length(1)])
             .split(area);
         let (markdown, body) = match self.index.get(snippet_id) {
             Some(s) => (Some(snippet_preview_markdown(s)), Some(s.body().to_string())),
@@ -758,21 +758,41 @@ fn snippet_preview_markdown(snippet: &IndexedSnippet) -> String {
     md.push_str(snippet.name());
     md.push_str("\n\n");
 
-    md.push_str("`");
+    // path
+    md.push_str("**path** `");
     md.push_str(&snippet.relative_path_display());
-    md.push_str("`");
+    md.push_str("`\n");
+
+    // tags (skip row if none)
     if !snippet.frontmatter.tags.is_empty() {
-        md.push_str(" — ");
+        md.push_str("**tags** ");
         for (i, tag) in snippet.frontmatter.tags.iter().enumerate() {
             if i > 0 {
-                md.push_str(", ");
+                md.push_str(" · ");
             }
-            md.push_str("`");
+            md.push('`');
             md.push_str(tag);
-            md.push_str("`");
+            md.push('`');
         }
+        md.push('\n');
     }
-    md.push_str("\n\n");
+
+    // vars (skip row if none)
+    let vars = unique_variables(&snippet.snippet.variables);
+    if !vars.is_empty() {
+        md.push_str("**vars** ");
+        for (i, var) in vars.iter().enumerate() {
+            if i > 0 {
+                md.push_str(" · ");
+            }
+            md.push('`');
+            md.push_str(&var.name);
+            md.push('`');
+        }
+        md.push('\n');
+    }
+
+    md.push('\n');
 
     let description = snippet.description().trim();
     if !description.is_empty() {
