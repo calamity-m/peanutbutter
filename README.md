@@ -14,64 +14,7 @@ The idea behind peanutbutter is for it to feel natural at thought, requiring as 
         2. The user has no idea what they want to do, but they think they might have run a similar command before
         3. The user has an inclination of what they want to do, but are unsure how to go about it.
 
-This leads me to believe peanutbutter should try to find a middleground of all three, rather than hyper-focusing on one. A user should be able to hit the hot-key in their terminal, e.g. ctrl + b and naturally arrive to where/what they want. As an example:
-
-```
-user@user:/home/working/development$___
--> I need to check git history, I know I have commands but I don't know which one off the top of my head. I could ctrl + r and search history. 
--> Ehh, nothing relevant.
--> User hits ctrl + b, and sees based on their location, frequency common commands
-user@user:/home/working/development$___
-> ...
-| git-snippet1
-| git-snippet2
-| code-build-snippet1
-
--> Ahh ehh, I want compat -ish
-
-user@user:/home/working/development$___
-> compat g
-
-| git-snippet1
-| git-snippet5
-
--> o i want that one
--> user selects it, populates variables
-
-user@user:/home/working/development$git-snippet1
-
--> presses enter, and it executes
-
-```
-
-Versus:
-
-```
-user@user:/home/working/development$___
--> idk, I need to convert a file here to something else.
--> ctrl + r has nothing, let me try ctrl + b
-user@user:/home/working/development$___
-> ...
-| git-snippet1
-| git-snippet2
-| code-build-snippet1
--> nothing here is what i want... idk what i want. what do I even have? let me use a file style...
--> some hotkey change
-> ...
-| git/git-snippet1
-|    /git-snippet2
-| docker/docker-snippet-1
-|       /compose/
-|               /compose-snippet-1
-| files/file-snippet1
-|      /file-snippet2 
--> uhh i need files
--> the user types "f", and hits tab to autocomplete - they dont want to type
-> f<tab> = files/
-| file-snippet1
-| file-snippet2
--> user selects, etc. and so on
-```
+This leads me to believe peanutbutter should try to find a middleground of all three, rather than hyper-focusing on one. A user should be able to hit the hot-key in their terminal, e.g. ctrl + b and naturally arrive to where/what they want.
 
 This essentially creates two modes - similar to fzf where you might have a "file find", versus a "content fuzzy match". In my opinion an ergonomic snippet tool in the terminal handles both, easily swapping between the two. A user should be able to fumble around until they arrive at something they are familar with, at which point they can take control and find exactly what they want. For example, tab completion/backspacing until they find relevant areas, then quickly honing in on the snippet they want. Another example may be fuzzy searching different terms, until they narrow it down to the sinppet they want - but after selecting it they don't like it, so backspacing enough should take them back to the snippet list TUI with their search at the same spot before they entered the snippet, so they can select the down arrow and try the second, etc.
 
@@ -96,6 +39,26 @@ list.
     <@file> <-- list of files in the current working directory
     <@directory> <--- list of directories in the current working directory
 6. Predefined variable inputs can be defined by the user in peanutbutter's config file
+
+## Configuration
+
+### Snippet Paths
+
+By default, peanutbutter looks for snippets in `~/.config/peanutbutter/snippets/`. Additional directories can be added via the `PEANUTBUTTER_PATH` environment variable, using colon-separated paths (same convention as `$PATH`).
+
+For example, to also include the bundled `examples/` directory from this repo:
+
+```bash
+export PEANUTBUTTER_PATH="/path/to/peanutbutter/examples"
+```
+
+Or to try out the examples without moving any files, add this to your `~/.bashrc` or `~/.zshrc`:
+
+```bash
+export PEANUTBUTTER_PATH="$HOME/code/peanutbutter/examples"
+```
+
+The XDG default (`~/.config/peanutbutter/snippets/`) is always included and doesn't need to be listed explicitly.
 
 ## Peanutbutter CLI
 
