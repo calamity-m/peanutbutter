@@ -5,6 +5,7 @@ use crate::frecency::FrecencyStore;
 use crate::fuzzy::FuzzyState;
 use crate::index::{IndexedSnippet, SnippetIndex};
 use crate::search;
+use ansi_to_tui::IntoText;
 use crossterm::cursor;
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use crossterm::terminal::{self, ClearType, disable_raw_mode, enable_raw_mode};
@@ -13,7 +14,6 @@ use ratatui::layout::Position;
 use ratatui::layout::{Constraint, Direction, Layout};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
-use ansi_to_tui::IntoText;
 use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Wrap};
 use ratatui::{Frame, Terminal, TerminalOptions, Viewport};
 use std::collections::{BTreeMap, HashMap};
@@ -543,7 +543,10 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
         if matches!(self.nav_mode, NavigationMode::Fuzzy) {
             // "> " prefix is 2 columns; cursor_col() gives char-count offset into the query
             let x = chunks[1].x + 2 + self.fuzzy.cursor_col() as u16;
-            frame.set_cursor_position(Position { x, y: chunks[1].y + 1 });
+            frame.set_cursor_position(Position {
+                x,
+                y: chunks[1].y + 1,
+            });
         }
     }
 
@@ -554,7 +557,10 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
             .constraints([Constraint::Min(1), Constraint::Length(1)])
             .split(area);
         let (markdown, body) = match self.index.get(snippet_id) {
-            Some(s) => (Some(snippet_preview_markdown(s)), Some(s.body().to_string())),
+            Some(s) => (
+                Some(snippet_preview_markdown(s)),
+                Some(s.body().to_string()),
+            ),
             None => (None, None),
         };
         self.render_snippet_preview(frame, chunks[0], markdown.as_deref(), body.as_deref());
@@ -601,17 +607,11 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
                 .split(area);
             (chunks[0], chunks[1], Some(chunks[2]), chunks[3])
         };
-        frame.render_widget(
-            Paragraph::new(preview).wrap(Wrap { trim: false }),
-            cmd_area,
-        );
+        frame.render_widget(Paragraph::new(preview).wrap(Wrap { trim: false }), cmd_area);
 
         // Status bar
         let variable = prompt.current_variable();
-        let label = prompt
-            .error
-            .as_deref()
-            .unwrap_or(variable.name.as_str());
+        let label = prompt.error.as_deref().unwrap_or(variable.name.as_str());
         frame.render_widget(
             Paragraph::new(Line::from(prompt_status_line(
                 prompt.index + 1,
@@ -654,7 +654,10 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
         }
 
         frame.render_widget(
-            chrome_line("tab next  shift+tab prev  enter accept  esc return", Modifier::DIM),
+            chrome_line(
+                "tab next  shift+tab prev  enter accept  esc return",
+                Modifier::DIM,
+            ),
             help_area,
         );
     }
@@ -731,10 +734,7 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
         let max_scroll = total_lines.saturating_sub(area.height);
         self.preview_scroll = self.preview_scroll.min(max_scroll);
 
-        frame.render_widget(
-            Paragraph::new(text).scroll((self.preview_scroll, 0)),
-            area,
-        );
+        frame.render_widget(Paragraph::new(text).scroll((self.preview_scroll, 0)), area);
     }
 }
 
@@ -749,9 +749,7 @@ fn preview_skin() -> termimad::MadSkin {
     // Code blocks: indent by 2 for visual breathing room, no background.
     skin.code_block.left_margin = 2;
     skin.code_block.right_margin = 2;
-    skin.code_block
-        .compound_style
-        .set_fg(termimad::gray(18));
+    skin.code_block.compound_style.set_fg(termimad::gray(18));
     skin.code_block.compound_style.object_style.background_color = None;
 
     // Inline code: just a lighter fg, no block background.
@@ -1558,7 +1556,6 @@ fn placeholder_name(inner: &str) -> Option<&str> {
     }
     Some(name)
 }
-
 
 fn builtin_suggestions(name: &str, cwd: &Path) -> io::Result<Vec<String>> {
     match name {
