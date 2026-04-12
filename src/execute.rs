@@ -459,15 +459,15 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(2),
                 Constraint::Min(1),
+                Constraint::Length(2),
                 Constraint::Length(1),
             ])
             .split(area);
         let main = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([Constraint::Percentage(42), Constraint::Percentage(58)])
-            .split(chunks[1]);
+            .split(chunks[0]);
 
         let (prompt, stats, mode) = match self.nav_mode {
             NavigationMode::Fuzzy => (
@@ -482,8 +482,8 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
             ),
         };
         frame.render_widget(
-            select_header(&prompt, &stats, mode, chunks[0].width),
-            chunks[0],
+            select_header(&prompt, &stats, mode, chunks[1].width),
+            chunks[1],
         );
 
         match self.nav_mode {
@@ -540,8 +540,8 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
 
         if matches!(self.nav_mode, NavigationMode::Fuzzy) {
             // "> " prefix is 2 columns; cursor_col() gives char-count offset into the query
-            let x = chunks[0].x + 2 + self.fuzzy.cursor_col() as u16;
-            frame.set_cursor_position(Position { x, y: chunks[0].y });
+            let x = chunks[1].x + 2 + self.fuzzy.cursor_col() as u16;
+            frame.set_cursor_position(Position { x, y: chunks[1].y });
         }
     }
 
