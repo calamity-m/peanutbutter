@@ -19,7 +19,7 @@ Nothing can do that, but peanutbutter tries to do that through understanding:
 
 - Snippets need to be readable outside of the tool.
 - Fuzzy finding is amazing, and allows you to narrow in a command you know exists, or feel out the existence of some shell script; but:
-- Sometimes I have no idea what I want, only a feeling. Sometimes I want a structured way to look through my collectionl.
+- Sometimes I have no idea what I want, only a feeling. Sometimes I want a structured way to look through my collection.
 
 ## Alternatives
 
