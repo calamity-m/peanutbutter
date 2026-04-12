@@ -313,10 +313,10 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
                 self.fuzzy.cursor_right();
             }
             KeyCode::Up => {
-                self.fuzzy.move_cursor(-1, hits.len());
+                self.fuzzy.move_cursor(1, hits.len());
             }
             KeyCode::Down => {
-                self.fuzzy.move_cursor(1, hits.len());
+                self.fuzzy.move_cursor(-1, hits.len());
             }
             KeyCode::Enter => {
                 if let Some(snippet) = self.selected_fuzzy_snippet() {
@@ -343,10 +343,10 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
                 self.browse.tab_complete(&self.tree);
             }
             KeyCode::Up => {
-                self.browse.move_cursor(-1, visible.len());
+                self.browse.move_cursor(1, visible.len());
             }
             KeyCode::Down => {
-                self.browse.move_cursor(1, visible.len());
+                self.browse.move_cursor(-1, visible.len());
             }
             KeyCode::Enter => {
                 if let Some(id) = self.browse.activate(&self.tree) {
@@ -482,7 +482,7 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
             ),
         };
         frame.render_widget(
-            select_header(&prompt, &stats, mode, chunks[1].width),
+            select_header(&prompt, &stats, mode, chunks[1].width, main[1].x),
             chunks[1],
         );
 
@@ -490,37 +490,39 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
             NavigationMode::Fuzzy => {
                 let total = fuzzy_hits.len();
                 let selected = self.fuzzy.selected().unwrap_or(0);
-                let items: Vec<ListItem<'_>> = fuzzy_hits
-                    .iter()
-                    .enumerate()
-                    .map(|(idx, hit)| {
-                        let content = format!(
-                            "{}  [{}]",
-                            hit.snippet.name(),
-                            hit.snippet.relative_path_display()
-                        );
-                        ListItem::new(snippet_list_line(idx, total, selected, &content))
-                    })
-                    .collect();
-                let list = List::new(items);
-                frame.render_stateful_widget(list, main[0], &mut self.fuzzy.list);
+                let padding = (main[0].height as usize).saturating_sub(total);
+                let mut items: Vec<ListItem<'_>> =
+                    (0..padding).map(|_| ListItem::new("")).collect();
+                items.extend(fuzzy_hits.iter().enumerate().rev().map(|(idx, hit)| {
+                    let content = format!(
+                        "{}  [{}]",
+                        hit.snippet.name(),
+                        hit.snippet.relative_path_display()
+                    );
+                    ListItem::new(snippet_list_line(idx, total, selected, &content))
+                }));
+                let visual = padding + total.saturating_sub(1).saturating_sub(selected);
+                let mut list_state =
+                    ratatui::widgets::ListState::default().with_selected(Some(visual));
+                frame.render_stateful_widget(List::new(items), main[0], &mut list_state);
             }
             NavigationMode::Browse => {
                 let total = browse_visible.len();
                 let selected = self.browse.list.selected().unwrap_or(0);
-                let items: Vec<ListItem<'_>> = browse_visible
-                    .iter()
-                    .enumerate()
-                    .map(|(idx, entry)| {
-                        let label = match entry {
-                            BrowseEntry::Directory(name) => format!("{name}/"),
-                            BrowseEntry::Snippet(snippet) => snippet.name.clone(),
-                        };
-                        ListItem::new(snippet_list_line(idx, total, selected, &label))
-                    })
-                    .collect();
-                let list = List::new(items);
-                frame.render_stateful_widget(list, main[0], &mut self.browse.list);
+                let padding = (main[0].height as usize).saturating_sub(total);
+                let mut items: Vec<ListItem<'_>> =
+                    (0..padding).map(|_| ListItem::new("")).collect();
+                items.extend(browse_visible.iter().enumerate().rev().map(|(idx, entry)| {
+                    let label = match entry {
+                        BrowseEntry::Directory(name) => format!("{name}/"),
+                        BrowseEntry::Snippet(snippet) => snippet.name.clone(),
+                    };
+                    ListItem::new(snippet_list_line(idx, total, selected, &label))
+                }));
+                let visual = padding + total.saturating_sub(1).saturating_sub(selected);
+                let mut list_state =
+                    ratatui::widgets::ListState::default().with_selected(Some(visual));
+                frame.render_stateful_widget(List::new(items), main[0], &mut list_state);
             }
         }
 
@@ -541,7 +543,7 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
         if matches!(self.nav_mode, NavigationMode::Fuzzy) {
             // "> " prefix is 2 columns; cursor_col() gives char-count offset into the query
             let x = chunks[1].x + 2 + self.fuzzy.cursor_col() as u16;
-            frame.set_cursor_position(Position { x, y: chunks[1].y });
+            frame.set_cursor_position(Position { x, y: chunks[1].y + 1 });
         }
     }
 
@@ -686,11 +688,26 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
         } else {
             Text::from("No snippet selected")
         };
+        // Full-height left border.
+        frame.render_widget(Block::default().borders(Borders::LEFT), area);
+
+        // Bottom-anchor the text inside the border.
+        let inner = ratatui::layout::Rect {
+            x: area.x + 1,
+            y: area.y,
+            width: area.width.saturating_sub(1),
+            height: area.height,
+        };
+        let content_height = (text.height() as u16).min(inner.height);
+        let content_area = ratatui::layout::Rect {
+            x: inner.x,
+            y: inner.y + inner.height.saturating_sub(content_height),
+            width: inner.width,
+            height: content_height,
+        };
         frame.render_widget(
-            Paragraph::new(text)
-                .block(Block::default().borders(Borders::LEFT))
-                .wrap(Wrap { trim: false }),
-            area,
+            Paragraph::new(text).wrap(Wrap { trim: false }),
+            content_area,
         );
     }
 
@@ -1372,7 +1389,13 @@ fn chrome_line<'a, T: Into<Text<'a>>>(text: T, modifier: Modifier) -> Paragraph<
         .wrap(Wrap { trim: true })
 }
 
-fn select_header(prompt: &str, stats: &str, mode: &str, width: u16) -> Paragraph<'static> {
+fn select_header(
+    prompt: &str,
+    stats: &str,
+    mode: &str,
+    width: u16,
+    divider_col: u16,
+) -> Paragraph<'static> {
     let prompt_line = Line::from(vec![
         Span::raw("> "),
         Span::styled(
@@ -1382,14 +1405,27 @@ fn select_header(prompt: &str, stats: &str, mode: &str, width: u16) -> Paragraph
     ]);
     let prefix = format!("[{stats}] ─ ");
     let mode_label = format!("[ {mode} ]");
-    let used = prefix.chars().count() + mode_label.chars().count() + 1;
-    let right = "─".repeat((width as usize).saturating_sub(used));
+    let fixed_len = prefix.chars().count() + mode_label.chars().count() + 1; // +1 for space
+    let total_right = (width as usize).saturating_sub(fixed_len);
+    let right_start = fixed_len; // column where right padding begins
+
+    // Splice ┴ into the padding at the divider column, if it falls there.
+    let divider = divider_col as usize;
+    let right_span = if divider >= right_start && divider < right_start + total_right {
+        let pos = divider - right_start;
+        let left_dashes = "─".repeat(pos);
+        let right_dashes = "─".repeat(total_right.saturating_sub(pos + 1));
+        format!(" {left_dashes}┴{right_dashes}")
+    } else {
+        format!(" {}", "─".repeat(total_right))
+    };
+
     let status_line = Line::from(vec![
         Span::raw(prefix),
         Span::styled(mode_label, Style::default().add_modifier(Modifier::BOLD)),
-        Span::raw(format!(" {right}")),
+        Span::raw(right_span),
     ]);
-    Paragraph::new(Text::from(vec![prompt_line, status_line]))
+    Paragraph::new(Text::from(vec![status_line, prompt_line]))
 }
 
 fn prompt_status_line(idx: usize, total: usize, label: &str, width: u16) -> Vec<Span<'static>> {
