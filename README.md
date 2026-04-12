@@ -55,7 +55,7 @@ export PEANUTBUTTER_PATH="/path/to/peanutbutter/examples"
 Or to try out the examples without moving any files, add this to your `~/.bashrc` or `~/.zshrc`:
 
 ```bash
-export PEANUTBUTTER_PATH="$HOME/code/peanutbutter/examples"
+export PEANUTBUTTER_PATH="$PWD/examples"
 ```
 
 The XDG default (`~/.config/peanutbutter/snippets/`) is always included and doesn't need to be listed explicitly.
