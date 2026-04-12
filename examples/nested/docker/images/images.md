@@ -2,6 +2,6 @@
 
 ## List docker images
 
-```
+```bash
 docker images
 ```

@@ -3,12 +3,12 @@
 
 ## Start docker compose
 
-```
+```bash
 docker compose up
 ```
 
 ## start specific docker compose
 
-```
-docker compose up -f <@compose_file:rg . --files -g "*.rs">
+```bash
+docker compose up -f <@compose_file:rg . --files -g "*.yaml">
 ```

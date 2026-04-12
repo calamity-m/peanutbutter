@@ -44,11 +44,11 @@ fn simple_file_frontmatter_is_parsed() {
     let path = root.join("simple/snippets.md");
     let content = fs::read_to_string(&path).unwrap();
     let parsed = parse_file(&path, &root, &content);
-    assert_eq!(parsed.frontmatter.name.as_deref(), Some("snippet name"));
-    assert_eq!(parsed.frontmatter.tags, vec!["a", "b"]);
+    assert_eq!(parsed.frontmatter.name.as_deref(), Some("Example Snippet Name Metadata"));
+    assert_eq!(parsed.frontmatter.tags, vec!["example tag", "example tag 2"]);
     assert_eq!(
         parsed.frontmatter.description.as_deref(),
-        Some("frontmatter metadata")
+        Some("frontmatter metadata, this stuff gets fuzzy searched so use at your own peril. Helpful, but beyond tags ehhh - do as you see fit.")
     );
 }
 
@@ -103,7 +103,10 @@ fn nested_examples_all_parse() {
     );
     assert_eq!(
         by_file.get("nested/grep/grep.md"),
-        Some(&vec!["Grep contents".to_string()])
+        Some(&vec![
+            "Grep file contents".to_string(),
+            "Return only the matching portion".to_string(),
+        ])
     );
 }
 
