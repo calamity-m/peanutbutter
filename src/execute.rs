@@ -551,8 +551,11 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
             .direction(Direction::Vertical)
             .constraints([Constraint::Min(10), Constraint::Length(1)])
             .split(area);
-        let markdown = self.index.get(snippet_id).map(snippet_preview_markdown);
-        self.render_snippet_preview(frame, chunks[0], markdown.as_deref());
+        let (markdown, body) = match self.index.get(snippet_id) {
+            Some(s) => (Some(snippet_preview_markdown(s)), Some(s.body().to_string())),
+            None => (None, None),
+        };
+        self.render_snippet_preview(frame, chunks[0], markdown.as_deref(), body.as_deref());
         frame.render_widget(
             chrome_line(
                 "j/k scroll  enter accept  backspace/esc return",
@@ -696,10 +699,15 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
         frame: &mut Frame<'_>,
         area: ratatui::layout::Rect,
         markdown: Option<&str>,
+        body: Option<&str>,
     ) {
-        let text = match markdown {
-            Some(md) => render_markdown_text(md, area.width as usize),
-            None => Text::from("No snippet selected"),
+        let text = match (markdown, body) {
+            (Some(md), Some(body)) => {
+                let mut text = render_markdown_text(md, area.width as usize);
+                text.extend(highlight_shell(body));
+                text
+            }
+            _ => Text::from("No snippet selected"),
         };
 
         let total_lines = text.height() as u16;
@@ -713,8 +721,31 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
     }
 }
 
+fn preview_skin() -> termimad::MadSkin {
+    let mut skin = termimad::MadSkin::default();
+
+    // Left-align all headings; the default centers h1.
+    for h in &mut skin.headers {
+        h.align = termimad::Alignment::Left;
+    }
+
+    // Code blocks: indent by 2 for visual breathing room, no background.
+    skin.code_block.left_margin = 2;
+    skin.code_block.right_margin = 2;
+    skin.code_block
+        .compound_style
+        .set_fg(termimad::gray(18));
+    skin.code_block.compound_style.object_style.background_color = None;
+
+    // Inline code: just a lighter fg, no block background.
+    skin.inline_code.set_fg(termimad::gray(18));
+    skin.inline_code.object_style.background_color = None;
+
+    skin
+}
+
 fn render_markdown_text(markdown: &str, width: usize) -> Text<'static> {
-    let skin = termimad::MadSkin::default();
+    let skin = preview_skin();
     let fmt = termimad::FmtText::from(&skin, markdown, Some(width.max(3)));
     let ansi = fmt.to_string();
     ansi.into_text()
@@ -745,16 +776,12 @@ fn snippet_preview_markdown(snippet: &IndexedSnippet) -> String {
 
     let description = snippet.description().trim();
     if !description.is_empty() {
+        md.push_str("---\n\n");
         md.push_str(description);
         md.push_str("\n\n");
     }
 
-    md.push_str("```bash\n");
-    md.push_str(snippet.body());
-    if !snippet.body().ends_with('\n') {
-        md.push('\n');
-    }
-    md.push_str("```\n");
+    md.push_str("---\n");
     md
 }
 
