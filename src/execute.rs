@@ -13,6 +13,7 @@ use ratatui::layout::Position;
 use ratatui::layout::{Constraint, Direction, Layout};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
+use ansi_to_tui::IntoText;
 use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Wrap};
 use ratatui::{Frame, Terminal, TerminalOptions, Viewport};
 use std::collections::{BTreeMap, HashMap};
@@ -164,6 +165,7 @@ pub struct ExecutionApp<P = SystemSuggestionProvider> {
     pub fuzzy: FuzzyState,
     pub browse: BrowseState,
     status: Option<String>,
+    preview_scroll: u16,
 }
 
 pub enum AppEvent {
@@ -192,7 +194,13 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
             fuzzy: FuzzyState::new(),
             browse: BrowseState::new(),
             status: None,
+            preview_scroll: 0,
         }
+    }
+
+    fn enter_preview(&mut self, snippet_id: SnippetId) {
+        self.screen = Screen::Preview { snippet_id };
+        self.preview_scroll = 0;
     }
 
     pub fn navigation_mode(&self) -> NavigationMode {
@@ -258,7 +266,7 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
             ) {
                 PromptTransition::Stay => AppEvent::Continue,
                 PromptTransition::ToPreview(snippet_id) => {
-                    self.screen = Screen::Preview { snippet_id };
+                    self.enter_preview(snippet_id);
                     AppEvent::Continue
                 }
                 PromptTransition::Completed(outcome) => AppEvent::Completed(outcome),
@@ -312,9 +320,8 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
             }
             KeyCode::Enter => {
                 if let Some(snippet) = self.selected_fuzzy_snippet() {
-                    self.screen = Screen::Preview {
-                        snippet_id: snippet.id().clone(),
-                    };
+                    let id = snippet.id().clone();
+                    self.enter_preview(id);
                     self.status = None;
                 }
             }
@@ -343,7 +350,7 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
             }
             KeyCode::Enter => {
                 if let Some(id) = self.browse.activate(&self.tree) {
-                    self.screen = Screen::Preview { snippet_id: id };
+                    self.enter_preview(id);
                     self.status = None;
                 }
             }
@@ -362,6 +369,24 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
                 if let AppEvent::Completed(outcome) = self.start_prompt_or_complete(snippet_id) {
                     return AppEvent::Completed(outcome);
                 }
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                self.preview_scroll = self.preview_scroll.saturating_add(1);
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                self.preview_scroll = self.preview_scroll.saturating_sub(1);
+            }
+            KeyCode::PageDown => {
+                self.preview_scroll = self.preview_scroll.saturating_add(10);
+            }
+            KeyCode::PageUp => {
+                self.preview_scroll = self.preview_scroll.saturating_sub(10);
+            }
+            KeyCode::Home => {
+                self.preview_scroll = 0;
+            }
+            KeyCode::End => {
+                self.preview_scroll = u16::MAX;
             }
             _ => {}
         }
@@ -416,11 +441,15 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
             self.render_select(frame);
             return;
         }
-        match &self.screen {
-            Screen::Select => unreachable!(),
-            Screen::Preview { snippet_id } => self.render_preview(frame, snippet_id),
-            Screen::Prompt(prompt) => self.render_prompt(frame, prompt),
+        if let Screen::Preview { snippet_id } = &self.screen {
+            let snippet_id = snippet_id.clone();
+            self.render_preview(frame, &snippet_id);
+            return;
         }
+        let Screen::Prompt(prompt) = &self.screen else {
+            unreachable!()
+        };
+        self.render_prompt(frame, prompt);
     }
 
     fn render_select(&mut self, frame: &mut Frame<'_>) {
@@ -516,16 +545,19 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
         }
     }
 
-    fn render_preview(&self, frame: &mut Frame<'_>, snippet_id: &SnippetId) {
+    fn render_preview(&mut self, frame: &mut Frame<'_>, snippet_id: &SnippetId) {
         let area = frame.area();
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([Constraint::Min(10), Constraint::Length(1)])
             .split(area);
-        let snippet = self.index.get(snippet_id);
-        self.render_snippet_preview(frame, chunks[0], snippet);
+        let markdown = self.index.get(snippet_id).map(snippet_preview_markdown);
+        self.render_snippet_preview(frame, chunks[0], markdown.as_deref());
         frame.render_widget(
-            chrome_line("enter accept  backspace/esc return", Modifier::DIM),
+            chrome_line(
+                "j/k scroll  enter accept  backspace/esc return",
+                Modifier::DIM,
+            ),
             chunks[1],
         );
     }
@@ -660,53 +692,70 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
     }
 
     fn render_snippet_preview(
-        &self,
+        &mut self,
         frame: &mut Frame<'_>,
         area: ratatui::layout::Rect,
-        snippet: Option<&IndexedSnippet>,
+        markdown: Option<&str>,
     ) {
-        let text = if let Some(snippet) = snippet {
-            let mut lines = Vec::new();
-            lines.push(Line::from(snippet.name().to_string()));
-            lines.push(Line::from(format!(
-                "path: {}",
-                snippet.relative_path_display()
-            )));
-            if !snippet.frontmatter.tags.is_empty() {
-                lines.push(Line::from(format!(
-                    "tags: {}",
-                    snippet.frontmatter.tags.join(", ")
-                )));
-            }
-            if !snippet.description().trim().is_empty() {
-                lines.push(Line::from(String::new()));
-                lines.extend(
-                    snippet
-                        .description()
-                        .lines()
-                        .map(|line| Line::from(line.to_string())),
-                );
-            }
-            lines.push(Line::from(String::new()));
-            lines.push(Line::from("```"));
-            lines.extend(
-                snippet
-                    .body()
-                    .lines()
-                    .map(|line| Line::from(line.to_string())),
-            );
-            lines.push(Line::from("```"));
-            Text::from(lines)
-        } else {
-            Text::from("No snippet selected")
+        let text = match markdown {
+            Some(md) => render_markdown_text(md, area.width as usize),
+            None => Text::from("No snippet selected"),
         };
+
+        let total_lines = text.height() as u16;
+        let max_scroll = total_lines.saturating_sub(area.height);
+        self.preview_scroll = self.preview_scroll.min(max_scroll);
+
         frame.render_widget(
-            Paragraph::new(text)
-                .block(block("Preview"))
-                .wrap(Wrap { trim: false }),
+            Paragraph::new(text).scroll((self.preview_scroll, 0)),
             area,
         );
     }
+}
+
+fn render_markdown_text(markdown: &str, width: usize) -> Text<'static> {
+    let skin = termimad::MadSkin::default();
+    let fmt = termimad::FmtText::from(&skin, markdown, Some(width.max(3)));
+    let ansi = fmt.to_string();
+    ansi.into_text()
+        .unwrap_or_else(|_| Text::from(ansi.clone()))
+}
+
+fn snippet_preview_markdown(snippet: &IndexedSnippet) -> String {
+    let mut md = String::new();
+    md.push_str("# ");
+    md.push_str(snippet.name());
+    md.push_str("\n\n");
+
+    md.push_str("`");
+    md.push_str(&snippet.relative_path_display());
+    md.push_str("`");
+    if !snippet.frontmatter.tags.is_empty() {
+        md.push_str(" — ");
+        for (i, tag) in snippet.frontmatter.tags.iter().enumerate() {
+            if i > 0 {
+                md.push_str(", ");
+            }
+            md.push_str("`");
+            md.push_str(tag);
+            md.push_str("`");
+        }
+    }
+    md.push_str("\n\n");
+
+    let description = snippet.description().trim();
+    if !description.is_empty() {
+        md.push_str(description);
+        md.push_str("\n\n");
+    }
+
+    md.push_str("```bash\n");
+    md.push_str(snippet.body());
+    if !snippet.body().ends_with('\n') {
+        md.push('\n');
+    }
+    md.push_str("```\n");
+    md
 }
 
 enum PromptTransition {
@@ -1124,10 +1173,6 @@ fn cleanup_terminal(restore_cursor: Option<Position>) -> io::Result<()> {
     }
     stdout.flush()?;
     Ok(())
-}
-
-fn block(title: &str) -> Block<'_> {
-    Block::default().borders(Borders::ALL).title(title)
 }
 
 fn highlight_shell(body: &str) -> Text<'static> {

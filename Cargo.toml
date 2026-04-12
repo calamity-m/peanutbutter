@@ -9,7 +9,9 @@ name = "pb"
 path = "src/main.rs"
 
 [dependencies]
+ansi-to-tui = "8.0"
 crossterm = "0.28"
 libc = "0.2"
 nucleo-matcher = "0.3"
-ratatui = "0.29"
+ratatui = "0.30"
+termimad = "0.34"
