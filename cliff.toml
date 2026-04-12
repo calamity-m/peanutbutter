@@ -28,12 +28,10 @@ commit_parsers = [
   { message = "^feat", group = "Features" },
   { message = "^fix", group = "Fixes" },
   { message = "^perf", group = "Performance" },
-  { message = "^refactor", group = "Refactors" },
-  { message = "^docs", group = "Documentation" },
-  { message = "^test", group = "Tests" },
   { message = "^chore\\(release\\):", skip = true },
   { message = "^release\\(", skip = true },
-  { message = "^chore", group = "Maintenance" },
+  { message = "^refactor|^chore|^ci", group = "Maintenance" },
+  { message = "^docs|^test", skip = true },
 ]
 filter_commits = true
 tag_pattern = "v[0-9]*"
