@@ -195,8 +195,8 @@ pub(crate) fn load_prompt_state<P: SuggestionProvider>(
         .values
         .get(&variable.name)
         .cloned()
-        .or_else(|| provider.default_input(&variable))
         .or_else(|| default_input(&variable))
+        .or_else(|| provider.default_input(&variable))
         .unwrap_or_default();
     prompt.error = None;
     prompt.suggestions = match provider.suggestions(&variable, cwd) {

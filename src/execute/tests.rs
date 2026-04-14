@@ -355,6 +355,43 @@ fn variable_flow_uses_config_defined_inputs() {
 }
 
 #[test]
+fn inline_default_overrides_config_default() {
+    let variables = vec![Variable {
+        name: "namespace".to_string(),
+        source: VariableSource::Default("inline-default".to_string()),
+    }];
+    let mut configured = BTreeMap::new();
+    configured.insert(
+        "namespace".to_string(),
+        crate::config::VariableInputConfig {
+            default: Some("config-default".to_string()),
+            suggestions: vec![],
+            command: None,
+        },
+    );
+    let mut app = ExecutionApp::new(
+        SnippetIndex::from_files([snippet_file(
+            "x.md",
+            "Demo",
+            "kubectl get pods -n <@namespace:?inline-default>",
+            variables,
+        )]),
+        FrecencyStore::new(),
+        PathBuf::from("."),
+        0,
+        crate::config::SearchConfig::default(),
+        crate::config::Theme::default(),
+        SystemSuggestionProvider::new(configured),
+    );
+
+    let _ = app.handle_key(press(KeyCode::Enter));
+    let Screen::Prompt(prompt) = &app.screen else {
+        panic!("expected prompt");
+    };
+    assert_eq!(prompt.input, "inline-default");
+}
+
+#[test]
 fn prompt_tab_cycles_forward_between_variables() {
     let variables = vec![
         Variable {
