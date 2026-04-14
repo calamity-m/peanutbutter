@@ -32,8 +32,8 @@ impl BrowseTree {
     pub fn from_index(index: &SnippetIndex) -> Self {
         let mut root = DirNode::default();
         for entry in index.iter() {
-            let dir_components = file_dir_components(&entry.relative_path);
-            let dir_node = ensure_dir(&mut root, &dir_components);
+            let components = file_path_components(&entry.relative_path);
+            let dir_node = ensure_dir(&mut root, &components);
             dir_node.snippets.push(BrowseSnippet {
                 name: entry.name().to_string(),
                 id: entry.id().clone(),
@@ -56,16 +56,13 @@ impl BrowseTree {
     }
 }
 
-fn file_dir_components(rel: &Path) -> Vec<String> {
-    let mut components: Vec<String> = rel
-        .components()
+fn file_path_components(rel: &Path) -> Vec<String> {
+    rel.components()
         .filter_map(|c| match c {
             Component::Normal(s) => Some(s.to_string_lossy().into_owned()),
             _ => None,
         })
-        .collect();
-    components.pop();
-    components
+        .collect()
 }
 
 fn ensure_dir<'a>(root: &'a mut DirNode, path: &[String]) -> &'a mut DirNode {
@@ -292,7 +289,7 @@ mod tests {
     }
 
     #[test]
-    fn nested_docker_has_compose_and_images_subdirs() {
+    fn nested_docker_has_compose_images_and_file_subdirs() {
         let tree = example_tree();
         let docker = tree
             .get(&["nested".into(), "docker".into()])
@@ -300,9 +297,26 @@ mod tests {
         let subdirs: Vec<&String> = docker.children.keys().collect();
         assert!(subdirs.iter().any(|s| s.as_str() == "compose"));
         assert!(subdirs.iter().any(|s| s.as_str() == "images"));
+        assert!(subdirs.iter().any(|s| s.as_str() == "docker.md"));
         assert!(
-            !docker.snippets.is_empty(),
-            "docker.md snippet should attach to nested/docker"
+            docker.snippets.is_empty(),
+            "snippets now live under the docker.md file node, not the directory"
+        );
+    }
+
+    #[test]
+    fn file_node_carries_its_snippets() {
+        let tree = example_tree();
+        let file = tree
+            .get(&["nested".into(), "docker".into(), "docker.md".into()])
+            .expect("docker.md file node");
+        assert!(
+            file.children.is_empty(),
+            "a file node has no nested children"
+        );
+        assert!(
+            !file.snippets.is_empty(),
+            "docker.md's snippets attach to its file node"
         );
     }
 

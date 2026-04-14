@@ -228,7 +228,7 @@ fn prompt_esc_in_browse_mode_preserves_browse_position() {
         TestProvider::default(),
     );
     app.nav_mode = NavigationMode::Browse;
-    app.browse.path = vec!["git".to_string()];
+    app.browse.path = vec!["git".to_string(), "commits.md".to_string()];
     app.browse.input = String::new();
     app.browse.list.select(Some(0));
 
@@ -237,7 +237,10 @@ fn prompt_esc_in_browse_mode_preserves_browse_position() {
 
     let _ = app.handle_key(press(KeyCode::Esc));
     assert!(matches!(app.screen, Screen::Select));
-    assert_eq!(app.browse.path, vec!["git".to_string()]);
+    assert_eq!(
+        app.browse.path,
+        vec!["git".to_string(), "commits.md".to_string()]
+    );
     assert_eq!(app.browse.input, "");
     assert_eq!(app.browse.list.selected(), Some(0));
 }
