@@ -1,3 +1,4 @@
+use crate::config::FrecencyConfig;
 use crate::domain::SnippetId;
 use std::fs;
 use std::io::{self, Write};
@@ -102,7 +103,7 @@ impl FrecencyStore {
     /// constant in `time_decay`, change the `(1 + affinity)` multiplier, or
     /// lift the frequency boost to make the ranking favour a different
     /// blend of signals.
-    pub fn score(&self, id: &SnippetId, cwd: &Path, now: u64) -> f64 {
+    pub fn score(&self, id: &SnippetId, cwd: &Path, now: u64, config: &FrecencyConfig) -> f64 {
         let mut total = 0.0f64;
         let mut count: u32 = 0;
         for event in &self.events {
@@ -111,22 +112,22 @@ impl FrecencyStore {
             }
             count += 1;
             let age = now.saturating_sub(event.timestamp);
-            let recency = time_decay(age);
+            let recency = time_decay(age, config.half_life_days);
             let location = path_affinity(&event.cwd, cwd);
-            total += recency * (1.0 + location);
+            total += recency * (1.0 + location * config.location_weight);
         }
         if count == 0 {
             return 0.0;
         }
-        let frequency_boost = (count as f64).ln_1p();
+        let frequency_boost = (count as f64).ln_1p() * config.frequency_weight;
         total + frequency_boost
     }
 }
 
 /// Exponential decay with a 14-day half-life.
-pub fn time_decay(age_seconds: u64) -> f64 {
-    const HALF_LIFE: f64 = 14.0 * 86400.0;
-    (0.5f64).powf(age_seconds as f64 / HALF_LIFE)
+pub fn time_decay(age_seconds: u64, half_life_days: f64) -> f64 {
+    let half_life = half_life_days.max(0.001) * 86400.0;
+    (0.5f64).powf(age_seconds as f64 / half_life)
 }
 
 /// A 0.0..=1.0 affinity between two directories, based on shared leading
@@ -180,9 +181,9 @@ mod tests {
 
     #[test]
     fn time_decay_is_monotonic() {
-        let now = time_decay(0);
-        let day = time_decay(86_400);
-        let month = time_decay(30 * 86_400);
+        let now = time_decay(0, 14.0);
+        let day = time_decay(86_400, 14.0);
+        let month = time_decay(30 * 86_400, 14.0);
         assert!(now > day);
         assert!(day > month);
         assert!(month > 0.0);
@@ -194,8 +195,13 @@ mod tests {
         let now = 1_000_000u64;
         let target = id("echo");
         store.record(target.clone(), PathBuf::from("/home/me/repo"), now);
-        let same_cwd = store.score(&target, Path::new("/home/me/repo"), now);
-        let foreign = store.score(&target, Path::new("/tmp"), now);
+        let same_cwd = store.score(
+            &target,
+            Path::new("/home/me/repo"),
+            now,
+            &FrecencyConfig::default(),
+        );
+        let foreign = store.score(&target, Path::new("/tmp"), now, &FrecencyConfig::default());
         assert!(
             same_cwd > foreign,
             "same cwd {same_cwd} should beat foreign {foreign}"
@@ -210,8 +216,8 @@ mod tests {
         let stale = id("b");
         store.record(recent.clone(), PathBuf::from("/same"), now);
         store.record(stale.clone(), PathBuf::from("/same"), now - 60 * 86_400);
-        let sr = store.score(&recent, Path::new("/same"), now);
-        let ss = store.score(&stale, Path::new("/same"), now);
+        let sr = store.score(&recent, Path::new("/same"), now, &FrecencyConfig::default());
+        let ss = store.score(&stale, Path::new("/same"), now, &FrecencyConfig::default());
         assert!(sr > ss, "recent {sr} should beat stale {ss}");
     }
 
@@ -234,8 +240,8 @@ mod tests {
         store.record(local.clone(), PathBuf::from("/home/me/repo"), now);
 
         let here = Path::new("/home/me/repo");
-        let popular_score = store.score(&popular, here, now);
-        let local_score = store.score(&local, here, now);
+        let popular_score = store.score(&popular, here, now, &FrecencyConfig::default());
+        let local_score = store.score(&local, here, now, &FrecencyConfig::default());
         assert!(
             popular_score > local_score,
             "frequency {popular_score} should override location {local_score}"

@@ -1,7 +1,8 @@
-use crate::domain::{Variable, VariableSource};
+use crate::config::Theme;
+use crate::domain::Variable;
 use crate::index::SnippetIndex;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use ratatui::style::{Modifier, Style};
+use ratatui::style::Style;
 use ratatui::text::{Line, Span, Text};
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
@@ -194,7 +195,9 @@ pub(crate) fn load_prompt_state<P: SuggestionProvider>(
         .values
         .get(&variable.name)
         .cloned()
-        .unwrap_or_else(|| default_input(&variable));
+        .or_else(|| provider.default_input(&variable))
+        .or_else(|| default_input(&variable))
+        .unwrap_or_default();
     prompt.error = None;
     prompt.suggestions = match provider.suggestions(&variable, cwd) {
         Ok(values) => values,
@@ -243,6 +246,7 @@ pub(crate) fn render_command_text(
     template: &str,
     values: &BTreeMap<String, String>,
     active_variable: Option<&str>,
+    theme: &Theme,
 ) -> Text<'static> {
     let mut chunks = Vec::new();
     let bytes = template.as_bytes();
@@ -256,7 +260,7 @@ pub(crate) fn render_command_text(
                 if let Some(name) = placeholder_name(&template[start..end]) {
                     if let Some(value) = values.get(name) {
                         let style = if Some(name) == active_variable {
-                            active_prompt_style()
+                            active_prompt_style(theme)
                         } else {
                             Style::default()
                         };
@@ -266,9 +270,9 @@ pub(crate) fn render_command_text(
                     }
 
                     let style = if Some(name) == active_variable {
-                        active_prompt_style()
+                        active_prompt_style(theme)
                     } else {
-                        placeholder_prompt_style()
+                        placeholder_prompt_style(theme)
                     };
                     chunks.push(StyledChunk::new(placeholder.to_string(), style));
                     i = end + 1;
@@ -327,12 +331,22 @@ fn styled_text(chunks: Vec<StyledChunk>) -> Text<'static> {
     Text::from(lines)
 }
 
-pub(crate) fn active_prompt_style() -> Style {
-    Style::default().add_modifier(Modifier::BOLD | Modifier::REVERSED)
+pub(crate) fn active_prompt_style(theme: &Theme) -> Style {
+    theme.active_prompt
 }
 
-pub(crate) fn placeholder_prompt_style() -> Style {
-    Style::default().add_modifier(Modifier::DIM)
+pub(crate) fn placeholder_prompt_style(theme: &Theme) -> Style {
+    theme.placeholder
+}
+
+fn default_input(variable: &Variable) -> Option<String> {
+    match variable {
+        Variable {
+            source: crate::domain::VariableSource::Default(value),
+            ..
+        } => Some(value.clone()),
+        _ => None,
+    }
 }
 
 pub(crate) fn cursor_in_template(
@@ -399,13 +413,6 @@ pub(crate) fn unique_variables(variables: &[Variable]) -> Vec<Variable> {
         }
     }
     out
-}
-
-fn default_input(variable: &Variable) -> String {
-    match &variable.source {
-        VariableSource::Default(value) => value.clone(),
-        _ => String::new(),
-    }
 }
 
 fn placeholder_name(inner: &str) -> Option<&str> {

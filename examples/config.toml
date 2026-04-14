@@ -1,0 +1,146 @@
+# Example peanutbutter config.
+#
+# Copy this to:
+#   ~/.config/peanutbutter/config.toml
+#
+# Or point peanutbutter at it directly:
+#   PB_CONFIG_FILE=/path/to/config.toml pb execute
+
+[paths]
+# Additional snippet roots.
+# These are added alongside:
+# - the XDG default: ~/.config/peanutbutter/snippets/
+# - anything in PEANUTBUTTER_PATH
+snippets = [
+  "/home/me/work-snippets",
+  "/home/me/personal-snippets",
+]
+
+# Optional override for the frecency state file.
+state_file = "/home/me/.local/state/peanutbutter/state.tsv"
+
+[ui]
+# Maximum inline TUI height.
+# The terminal may still clamp this lower depending on available rows.
+height = 18
+
+[search]
+# How much frecency influences the final ranking relative to fuzzy score.
+# Higher values make your usage history matter more.
+# Lower values make text matching dominate.
+frecency_weight = 250.0
+
+[search.frecency]
+# Recency decay half-life in days.
+# Lower values make recent usage fade faster.
+# Higher values preserve older usage for longer.
+half_life_days = 14.0
+
+# Multiplier for cwd/path affinity.
+# Higher values make "used in this repo/directory before" matter more.
+location_weight = 1.0
+
+# Multiplier for repeated-use bonus.
+# Higher values make heavily-used snippets bubble up more aggressively,
+# even if they are not especially local to the current cwd.
+frequency_weight = 1.0
+
+[search.fuzzy]
+# Field weights for fuzzy matching.
+# These let you tune what kind of snippet metadata should dominate search.
+
+# Snippet heading text (the `## My Snippet` title).
+name = 30
+
+# Frontmatter tags.
+tag = 20
+
+# Frontmatter `name`.
+frontmatter_name = 15
+
+# Snippet description/frontmatter description text.
+description = 10
+
+# Relative file path.
+path = 10
+
+# Snippet body/command content.
+body = 8
+
+[theme]
+# Colors accept common names like:
+#   red, blue, white, dark_gray
+# Or #RRGGBB hex values.
+
+# Accent used for the selected marker.
+accent = "red"
+
+# Muted chrome/help text color.
+muted = "dark_gray"
+
+# Selected row background.
+selected_bg = "#30343f"
+
+# Selected row foreground.
+selected_fg = "white"
+
+# Active variable text in the prompt preview.
+prompt_active_fg = "black"
+prompt_active_bg = "#f4d35e"
+
+# Error foreground.
+error_fg = "red"
+
+# Reusable predefined variable inputs.
+#
+# These apply to free-form placeholders like:
+#   <@http_method>
+#   <@kube_context>
+#
+# They do not override placeholders with explicit inline sources like:
+#   <@method:echo GET>
+#   <@target:?world>
+
+[variables.http_method]
+# Optional default value pre-filled into the prompt.
+default = "GET"
+
+# Static suggestion list shown to the user.
+suggestions = ["GET", "POST", "PUT", "PATCH", "DELETE"]
+
+[variables.file]
+# Current working directory files.
+command = "find . -maxdepth 1 -type f | sed 's#^./##' | sort"
+
+[variables.files]
+# Alias for `file` if you prefer plural naming in snippets.
+command = "find . -maxdepth 1 -type f | sed 's#^./##' | sort"
+
+[variables.directory]
+# Current working directory directories.
+command = "find . -maxdepth 1 -type d ! -path . | sed 's#^./##' | sort"
+
+[variables.directories]
+# Alias for `directory` if you prefer plural naming in snippets.
+command = "find . -maxdepth 1 -type d ! -path . | sed 's#^./##' | sort"
+
+[variables.git_branch]
+command = "git branch --format='%(refname:short)'"
+
+[variables.git_remote]
+command = "git remote"
+
+[variables.container]
+command = "docker ps --format '{{.Names}}'"
+
+[variables.image]
+command = "docker images --format '{{.Repository}}:{{.Tag}}'"
+
+[variables.kube_context]
+# Dynamic suggestions from a shell command.
+# The command runs in the user's current working directory.
+command = "kubectl config get-contexts -o name"
+
+[variables.namespace]
+default = "default"
+suggestions = ["default", "kube-system", "staging", "prod"]

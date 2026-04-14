@@ -1,14 +1,8 @@
+use crate::config::FuzzyWeights;
 use crate::index::IndexedSnippet;
 use nucleo_matcher::pattern::{CaseMatching, Normalization, Pattern};
 use nucleo_matcher::{Config, Matcher, Utf32Str};
 use ratatui::widgets::ListState;
-
-const W_NAME: u32 = 30;
-const W_TAG: u32 = 20;
-const W_FM_NAME: u32 = 15;
-const W_DESC: u32 = 10;
-const W_PATH: u32 = 10;
-const W_BODY: u32 = 8;
 
 pub struct FuzzyScorer {
     matcher: Matcher,
@@ -45,6 +39,7 @@ pub fn score_snippet(
     pattern: &Pattern,
     query_is_empty: bool,
     entry: &IndexedSnippet,
+    weights: &FuzzyWeights,
 ) -> Option<u32> {
     if query_is_empty {
         return Some(0);
@@ -62,33 +57,33 @@ pub fn score_snippet(
 
     bump(
         scorer.score(pattern, entry.name()),
-        W_NAME,
+        weights.name,
         &mut total,
         &mut matched,
     );
     bump(
         scorer.score(pattern, entry.body()),
-        W_BODY,
+        weights.body,
         &mut total,
         &mut matched,
     );
     bump(
         scorer.score(pattern, entry.description()),
-        W_DESC,
+        weights.description,
         &mut total,
         &mut matched,
     );
     let path = entry.relative_path_display();
     bump(
         scorer.score(pattern, &path),
-        W_PATH,
+        weights.path,
         &mut total,
         &mut matched,
     );
     if let Some(name) = entry.frontmatter.name.as_deref() {
         bump(
             scorer.score(pattern, name),
-            W_FM_NAME,
+            weights.frontmatter_name,
             &mut total,
             &mut matched,
         );
@@ -96,13 +91,18 @@ pub fn score_snippet(
     if let Some(desc) = entry.frontmatter.description.as_deref() {
         bump(
             scorer.score(pattern, desc),
-            W_DESC,
+            weights.description,
             &mut total,
             &mut matched,
         );
     }
     for tag in entry.tags() {
-        bump(scorer.score(pattern, tag), W_TAG, &mut total, &mut matched);
+        bump(
+            scorer.score(pattern, tag),
+            weights.tag,
+            &mut total,
+            &mut matched,
+        );
     }
 
     if matched { Some(total) } else { None }
@@ -227,7 +227,10 @@ mod tests {
         let mut scorer = FuzzyScorer::new();
         let pattern = build_pattern("");
         let e = entry("git log", "git log --oneline", &["git"], "git/log.md");
-        assert_eq!(score_snippet(&mut scorer, &pattern, true, &e), Some(0));
+        assert_eq!(
+            score_snippet(&mut scorer, &pattern, true, &e, &FuzzyWeights::default()),
+            Some(0)
+        );
     }
 
     #[test]
@@ -236,8 +239,22 @@ mod tests {
         let pattern = build_pattern("git");
         let name_match = entry("git log", "echo foo", &[], "a.md");
         let body_match = entry("zzz", "git log --oneline", &[], "b.md");
-        let ns = score_snippet(&mut scorer, &pattern, false, &name_match).unwrap();
-        let bs = score_snippet(&mut scorer, &pattern, false, &body_match).unwrap();
+        let ns = score_snippet(
+            &mut scorer,
+            &pattern,
+            false,
+            &name_match,
+            &FuzzyWeights::default(),
+        )
+        .unwrap();
+        let bs = score_snippet(
+            &mut scorer,
+            &pattern,
+            false,
+            &body_match,
+            &FuzzyWeights::default(),
+        )
+        .unwrap();
         assert!(ns > bs, "name score {ns} should beat body score {bs}");
     }
 
@@ -246,7 +263,9 @@ mod tests {
         let mut scorer = FuzzyScorer::new();
         let pattern = build_pattern("xyzq");
         let e = entry("git log", "git log --oneline", &[], "a.md");
-        assert!(score_snippet(&mut scorer, &pattern, false, &e).is_none());
+        assert!(
+            score_snippet(&mut scorer, &pattern, false, &e, &FuzzyWeights::default()).is_none()
+        );
     }
 
     #[test]
@@ -254,7 +273,9 @@ mod tests {
         let mut scorer = FuzzyScorer::new();
         let pattern = build_pattern("docker");
         let e = entry("run it", "echo", &["docker", "compose"], "r.md");
-        assert!(score_snippet(&mut scorer, &pattern, false, &e).is_some());
+        assert!(
+            score_snippet(&mut scorer, &pattern, false, &e, &FuzzyWeights::default()).is_some()
+        );
     }
 
     #[test]

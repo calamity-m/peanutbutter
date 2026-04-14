@@ -18,10 +18,17 @@ use super::app::{AppEvent, ExecutionApp, SuggestionProvider, SystemSuggestionPro
 use super::{ExecuteOptions, ExecutionOutcome};
 
 pub fn execute_default() -> io::Result<Option<ExecutionOutcome>> {
-    let paths = config::default_paths();
-    let index = crate::index::load_from_roots(&paths.snippet_roots)?;
-    let frecency = FrecencyStore::load(&paths.state_file)?;
-    let options = ExecuteOptions::default();
+    let app_config = config::load()?;
+    let index = crate::index::load_from_roots(&app_config.paths.snippet_roots)?;
+    let frecency = FrecencyStore::load(&app_config.paths.state_file)?;
+    let options = ExecuteOptions {
+        cwd: std::env::current_dir().unwrap_or_else(|_| ".".into()),
+        viewport_height: app_config.ui.height,
+        search: app_config.search.clone(),
+        theme: app_config.theme.clone(),
+        variables: app_config.variables.clone(),
+        ..ExecuteOptions::default()
+    };
     run_execute(index, frecency, options)
 }
 
@@ -30,7 +37,7 @@ pub fn run_execute(
     frecency: FrecencyStore,
     options: ExecuteOptions,
 ) -> io::Result<Option<ExecutionOutcome>> {
-    let provider = SystemSuggestionProvider;
+    let provider = SystemSuggestionProvider::new(options.variables.clone());
     run_execute_with_provider(index, frecency, options, provider)
 }
 
@@ -40,7 +47,15 @@ pub fn run_execute_with_provider<P: SuggestionProvider>(
     options: ExecuteOptions,
     provider: P,
 ) -> io::Result<Option<ExecutionOutcome>> {
-    let mut app = ExecutionApp::new(index, frecency, options.cwd, options.now, provider);
+    let mut app = ExecutionApp::new(
+        index,
+        frecency,
+        options.cwd,
+        options.now,
+        options.search,
+        options.theme,
+        provider,
+    );
     let _stdout_guard = StdoutTtyGuard::enter()?;
     let _raw_mode = RawModeGuard::enter()?;
     let restore_cursor = current_cursor_position();

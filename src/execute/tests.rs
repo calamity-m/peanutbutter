@@ -35,6 +35,10 @@ impl SuggestionProvider for TestProvider {
             .cloned()
             .unwrap_or_default())
     }
+
+    fn default_input(&self, _variable: &Variable) -> Option<String> {
+        None
+    }
 }
 
 fn snippet_file(rel: &str, name: &str, body: &str, variables: Vec<Variable>) -> SnippetFile {
@@ -59,7 +63,15 @@ fn app_with_body(
 ) -> ExecutionApp<TestProvider> {
     let index = SnippetIndex::from_files([snippet_file("x.md", "Demo", body, variables)]);
     let frecency = FrecencyStore::new();
-    ExecutionApp::new(index, frecency, PathBuf::from("."), 0, provider)
+    ExecutionApp::new(
+        index,
+        frecency,
+        PathBuf::from("."),
+        0,
+        crate::config::SearchConfig::default(),
+        crate::config::Theme::default(),
+        provider,
+    )
 }
 
 fn press(code: KeyCode) -> KeyEvent {
@@ -105,18 +117,37 @@ fn render_command_keeps_unresolved_placeholders() {
 fn render_command_text_highlights_active_value() {
     let mut values = BTreeMap::new();
     values.insert("file".to_string(), "Cargo.toml".to_string());
-    let rendered = render_command_text("cat <@file>", &values, Some("file"));
+    let rendered = render_command_text(
+        "cat <@file>",
+        &values,
+        Some("file"),
+        &crate::config::Theme::default(),
+    );
     assert_eq!(line_text(&rendered.lines[0]), "cat Cargo.toml");
-    assert_eq!(rendered.lines[0].spans[4].style, active_prompt_style());
+    assert_eq!(
+        rendered.lines[0].spans[4].style,
+        active_prompt_style(&crate::config::Theme::default())
+    );
 }
 
 #[test]
 fn render_command_text_highlights_active_placeholder_and_dims_others() {
     let values = BTreeMap::new();
-    let rendered = render_command_text("echo <@missing> <@later>", &values, Some("missing"));
+    let rendered = render_command_text(
+        "echo <@missing> <@later>",
+        &values,
+        Some("missing"),
+        &crate::config::Theme::default(),
+    );
     assert_eq!(line_text(&rendered.lines[0]), "echo <@missing> <@later>");
-    assert_eq!(rendered.lines[0].spans[5].style, active_prompt_style());
-    assert_eq!(rendered.lines[0].spans[7].style, placeholder_prompt_style());
+    assert_eq!(
+        rendered.lines[0].spans[5].style,
+        active_prompt_style(&crate::config::Theme::default())
+    );
+    assert_eq!(
+        rendered.lines[0].spans[7].style,
+        placeholder_prompt_style(&crate::config::Theme::default())
+    );
 }
 
 #[test]
@@ -225,6 +256,8 @@ fn prompt_esc_in_browse_mode_preserves_browse_position() {
         frecency,
         PathBuf::from("."),
         0,
+        crate::config::SearchConfig::default(),
+        crate::config::Theme::default(),
         TestProvider::default(),
     );
     app.nav_mode = NavigationMode::Browse;
@@ -281,6 +314,44 @@ fn variable_flow_accepts_default_suggestion() {
     let _ = app.handle_key(press(KeyCode::Enter));
     let outcome = completed(app.handle_key(press(KeyCode::Enter)));
     assert_eq!(outcome.command, "curl -X GET");
+}
+
+#[test]
+fn variable_flow_uses_config_defined_inputs() {
+    let variables = vec![Variable {
+        name: "http_method".to_string(),
+        source: VariableSource::Free,
+    }];
+    let mut configured = BTreeMap::new();
+    configured.insert(
+        "http_method".to_string(),
+        crate::config::VariableInputConfig {
+            default: Some("POST".to_string()),
+            suggestions: vec!["POST".to_string(), "PUT".to_string()],
+            command: None,
+        },
+    );
+    let mut app = ExecutionApp::new(
+        SnippetIndex::from_files([snippet_file(
+            "x.md",
+            "Demo",
+            "curl -X <@http_method>",
+            variables,
+        )]),
+        FrecencyStore::new(),
+        PathBuf::from("."),
+        0,
+        crate::config::SearchConfig::default(),
+        crate::config::Theme::default(),
+        SystemSuggestionProvider::new(configured),
+    );
+
+    let _ = app.handle_key(press(KeyCode::Enter));
+    let Screen::Prompt(prompt) = &app.screen else {
+        panic!("expected prompt");
+    };
+    assert_eq!(prompt.input, "POST");
+    assert_eq!(prompt.suggestions, vec!["POST", "PUT"]);
 }
 
 #[test]
@@ -464,6 +535,8 @@ fn browse_tab_resets_preview_scroll() {
         frecency,
         PathBuf::from("."),
         0,
+        crate::config::SearchConfig::default(),
+        crate::config::Theme::default(),
         TestProvider::default(),
     );
     app.nav_mode = NavigationMode::Browse;
@@ -502,6 +575,8 @@ fn browse_entering_directory_resets_preview_scroll() {
         frecency,
         PathBuf::from("."),
         0,
+        crate::config::SearchConfig::default(),
+        crate::config::Theme::default(),
         TestProvider::default(),
     );
     app.nav_mode = NavigationMode::Browse;

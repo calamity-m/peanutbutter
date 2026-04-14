@@ -1,6 +1,6 @@
 [package]
 name = "peanutbutter"
-version = "0.1.2"
+version = "0.1.3"
 edition = "2024"
 default-run = "pb"
 
@@ -14,4 +14,6 @@ crossterm = "0.28"
 libc = "0.2"
 nucleo-matcher = "0.3"
 ratatui = "0.30"
+serde = { version = "1", features = ["derive"] }
 termimad = "0.34"
+toml = "0.8"

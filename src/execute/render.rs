@@ -2,7 +2,6 @@ use ansi_to_tui::IntoText;
 use ratatui::Frame;
 use ratatui::layout::Position;
 use ratatui::layout::{Constraint, Direction, Layout};
-use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Wrap};
 
@@ -55,7 +54,14 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
             ),
         };
         frame.render_widget(
-            select_header(&prompt, &stats, mode, chunks[1].width, main[1].x),
+            select_header(
+                &self.theme,
+                &prompt,
+                &stats,
+                mode,
+                chunks[1].width,
+                main[1].x,
+            ),
             chunks[1],
         );
 
@@ -72,7 +78,13 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
                         hit.snippet.name(),
                         hit.snippet.relative_path_display()
                     );
-                    ListItem::new(snippet_list_line(idx, total, selected, &content))
+                    ListItem::new(snippet_list_line(
+                        &self.theme,
+                        idx,
+                        total,
+                        selected,
+                        &content,
+                    ))
                 }));
                 let visual = padding + total.saturating_sub(1).saturating_sub(selected);
                 let mut list_state =
@@ -90,7 +102,7 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
                         BrowseEntry::Directory(name) => format!("{name}/"),
                         BrowseEntry::Snippet(snippet) => snippet.name.clone(),
                     };
-                    ListItem::new(snippet_list_line(idx, total, selected, &label))
+                    ListItem::new(snippet_list_line(&self.theme, idx, total, selected, &label))
                 }));
                 let visual = padding + total.saturating_sub(1).saturating_sub(selected);
                 let mut list_state =
@@ -103,7 +115,12 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
             NavigationMode::Fuzzy => extract_preview(self.selected_fuzzy_snippet()),
             NavigationMode::Browse => self.browse_preview(&browse_visible),
         };
-        frame.render_widget(Block::default().borders(Borders::LEFT), main[1]);
+        frame.render_widget(
+            Block::default()
+                .borders(Borders::LEFT)
+                .border_style(self.theme.divider),
+            main[1],
+        );
         let inner = ratatui::layout::Rect {
             x: main[1].x + 1,
             width: main[1].width.saturating_sub(1),
@@ -132,7 +149,7 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
                 }
             }
         };
-        frame.render_widget(chrome_line(help, Modifier::DIM), chunks[2]);
+        frame.render_widget(chrome_line(&self.theme, help), chunks[2]);
 
         if matches!(self.nav_mode, NavigationMode::Fuzzy) {
             let x = chunks[1].x + 2 + self.fuzzy.cursor_col() as u16;
@@ -180,6 +197,7 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
         let label = prompt.error.as_deref().unwrap_or(variable.name.as_str());
         frame.render_widget(
             Paragraph::new(Line::from(prompt_status_line(
+                &self.theme,
                 prompt.index + 1,
                 prompt.variables.len(),
                 label,
@@ -196,7 +214,13 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
                 .into_iter()
                 .enumerate()
                 .map(|(idx, value)| {
-                    ListItem::new(snippet_list_line(idx, total, selected, value.as_str()))
+                    ListItem::new(snippet_list_line(
+                        &self.theme,
+                        idx,
+                        total,
+                        selected,
+                        value.as_str(),
+                    ))
                 })
                 .collect();
             let mut list_state = prompt.list;
@@ -219,8 +243,8 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
 
         frame.render_widget(
             chrome_line(
+                &self.theme,
                 "tab next  shift+tab prev  enter accept  esc return",
-                Modifier::DIM,
             ),
             help_area,
         );
@@ -241,6 +265,7 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
             snippet.body(),
             &values,
             Some(prompt.current_variable().name.as_str()),
+            &self.theme,
         )
     }
 
@@ -394,13 +419,14 @@ fn snippet_preview_markdown(snippet: &IndexedSnippet) -> String {
     md
 }
 
-fn chrome_line<'a, T: Into<Text<'a>>>(text: T, modifier: Modifier) -> Paragraph<'a> {
+fn chrome_line<'a, T: Into<Text<'a>>>(theme: &crate::config::Theme, text: T) -> Paragraph<'a> {
     Paragraph::new(text)
-        .style(Style::default().add_modifier(modifier))
+        .style(theme.chrome)
         .wrap(Wrap { trim: true })
 }
 
 fn select_header(
+    theme: &crate::config::Theme,
     prompt: &str,
     stats: &str,
     mode: &str,
@@ -409,10 +435,7 @@ fn select_header(
 ) -> Paragraph<'static> {
     let prompt_line = Line::from(vec![
         Span::raw("> "),
-        Span::styled(
-            prompt.to_string(),
-            Style::default().add_modifier(Modifier::BOLD),
-        ),
+        Span::styled(prompt.to_string(), theme.emphasis),
     ]);
     let prefix = format!("[{stats}] ─ ");
     let mode_label = format!("[ {mode} ]");
@@ -432,48 +455,47 @@ fn select_header(
 
     let status_line = Line::from(vec![
         Span::raw(prefix),
-        Span::styled(mode_label, Style::default().add_modifier(Modifier::BOLD)),
+        Span::styled(mode_label, theme.emphasis),
         Span::raw(right_span),
     ]);
     Paragraph::new(Text::from(vec![status_line, prompt_line]))
 }
 
-fn prompt_status_line(idx: usize, total: usize, label: &str, width: u16) -> Vec<Span<'static>> {
+fn prompt_status_line(
+    theme: &crate::config::Theme,
+    idx: usize,
+    total: usize,
+    label: &str,
+    width: u16,
+) -> Vec<Span<'static>> {
     let prefix = format!("[{idx}/{total}] ─ ");
     let mode = format!("[ {label} ]");
     let used = prefix.chars().count() + mode.chars().count() + 1;
     let right = "─".repeat((width as usize).saturating_sub(used));
     vec![
         Span::raw(prefix),
-        Span::styled(mode, Style::default().add_modifier(Modifier::BOLD)),
+        Span::styled(mode, theme.emphasis),
         Span::raw(format!(" {right}")),
     ]
 }
 
-fn snippet_list_line<'a>(idx: usize, total: usize, selected: usize, content: &str) -> Line<'a> {
+fn snippet_list_line<'a>(
+    theme: &crate::config::Theme,
+    idx: usize,
+    total: usize,
+    selected: usize,
+    content: &str,
+) -> Line<'a> {
     let w = digits(total);
     if idx == selected {
         Line::from(vec![
-            Span::styled(
-                "▌ ",
-                Style::default()
-                    .fg(ratatui::style::Color::Red)
-                    .bg(ratatui::style::Color::DarkGray),
-            ),
-            Span::styled(
-                format!("{:>w$}  {content}", idx + 1),
-                Style::default()
-                    .bg(ratatui::style::Color::DarkGray)
-                    .add_modifier(Modifier::BOLD),
-            ),
+            Span::styled("▌ ", theme.selected_marker),
+            Span::styled(format!("{:>w$}  {content}", idx + 1), theme.selected_item),
         ])
     } else {
         Line::from(vec![
             Span::raw("  "),
-            Span::styled(
-                format!("{:>w$}  ", idx + 1),
-                Style::default().add_modifier(Modifier::DIM),
-            ),
+            Span::styled(format!("{:>w$}  ", idx + 1), theme.chrome),
             Span::raw(content.to_string()),
         ])
     }

@@ -91,6 +91,71 @@ export PEANUTBUTTER_PATH="$PWD/examples"
 
 The XDG default (`~/.config/peanutbutter/snippets/`) is always included and doesn't need to be listed explicitly.
 
+### Config File
+
+Peanutbutter reads config from `~/.config/peanutbutter/config.toml` by default. You can override that path with `PB_CONFIG_FILE=/path/to/config.toml`.
+
+This file is optional. If it doesn't exist, peanutbutter uses built-in defaults.
+
+A fully commented example config lives at [examples/config.toml](/home/calam/code/peanutbutter/examples/config.toml).
+
+Example:
+
+```toml
+[paths]
+snippets = [
+  "/home/me/work-snippets",
+  "/home/me/personal-snippets",
+]
+state_file = "/home/me/.local/state/peanutbutter/state.tsv"
+
+[ui]
+height = 18
+
+[search]
+frecency_weight = 250.0
+
+[search.frecency]
+half_life_days = 14.0
+location_weight = 1.0
+frequency_weight = 1.0
+
+[search.fuzzy]
+name = 30
+tag = 20
+frontmatter_name = 15
+description = 10
+path = 10
+body = 8
+
+[theme]
+accent = "red"
+muted = "dark_gray"
+selected_bg = "#30343f"
+selected_fg = "white"
+prompt_active_fg = "black"
+prompt_active_bg = "#f4d35e"
+error_fg = "red"
+
+[variables.http_method]
+default = "GET"
+suggestions = ["GET", "POST", "PUT", "PATCH", "DELETE"]
+
+[variables.kube_context]
+command = "kubectl config get-contexts -o name"
+```
+
+Notes:
+
+- `paths.snippets` adds extra snippet roots, alongside `PEANUTBUTTER_PATH` and the default XDG snippets directory
+- `ui.height` controls the maximum inline TUI height
+- `search.frecency_weight` controls how much frecency influences the combined search ordering
+- `search.frecency.*` tunes the time/location/frequency balance for ranking
+- `search.fuzzy.*` tunes how much each snippet field contributes to fuzzy matching
+- `theme.*` currently controls the main selection and prompt colors; colors accept common names like `red`, `dark_gray`, `white`, or `#RRGGBB`
+- `variables.<name>` defines reusable inputs for free-form placeholders like `<@http_method>` or `<@kube_context>`
+- A configured variable can provide either `suggestions = [...]` or `command = "..."`, and may also provide `default = "..."`
+
 ## Peanutbutter CLI
 
 1. `pb --bash C+b` <-- create bash for ctrl+b hotkey, so I can put into my bashrc eval "$(...)"

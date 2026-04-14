@@ -1,4 +1,5 @@
 use crate::browse::{BrowseEntry, BrowseState, BrowseTree};
+use crate::config::{SearchConfig, Theme, VariableInputConfig};
 use crate::domain::{SnippetId, Variable, VariableSource};
 use crate::frecency::FrecencyStore;
 use crate::fuzzy::FuzzyState;
@@ -21,17 +22,47 @@ pub enum NavigationMode {
 
 pub trait SuggestionProvider {
     fn suggestions(&self, variable: &Variable, cwd: &Path) -> io::Result<Vec<String>>;
+    fn default_input(&self, variable: &Variable) -> Option<String>;
 }
 
-#[derive(Debug, Default, Clone, Copy)]
-pub struct SystemSuggestionProvider;
+#[derive(Debug, Default, Clone)]
+pub struct SystemSuggestionProvider {
+    variable_inputs: std::collections::BTreeMap<String, VariableInputConfig>,
+}
+
+impl SystemSuggestionProvider {
+    pub fn new(variable_inputs: std::collections::BTreeMap<String, VariableInputConfig>) -> Self {
+        Self { variable_inputs }
+    }
+}
 
 impl SuggestionProvider for SystemSuggestionProvider {
     fn suggestions(&self, variable: &Variable, cwd: &Path) -> io::Result<Vec<String>> {
         match &variable.source {
             VariableSource::Command(cmd) => super::prompt::command_suggestions(cmd, cwd),
             VariableSource::Default(_) => Ok(Vec::new()),
-            VariableSource::Free => super::prompt::builtin_suggestions(&variable.name, cwd),
+            VariableSource::Free => {
+                if let Some(config) = self.variable_inputs.get(&variable.name) {
+                    if !config.suggestions.is_empty() {
+                        return Ok(config.suggestions.clone());
+                    }
+                    if let Some(command) = &config.command {
+                        return super::prompt::command_suggestions(command, cwd);
+                    }
+                }
+                super::prompt::builtin_suggestions(&variable.name, cwd)
+            }
+        }
+    }
+
+    fn default_input(&self, variable: &Variable) -> Option<String> {
+        match &variable.source {
+            VariableSource::Default(value) => Some(value.clone()),
+            VariableSource::Command(_) => None,
+            VariableSource::Free => self
+                .variable_inputs
+                .get(&variable.name)
+                .and_then(|config| config.default.clone()),
         }
     }
 }
@@ -55,6 +86,8 @@ pub struct ExecutionApp<P = SystemSuggestionProvider> {
     pub browse: BrowseState,
     pub(crate) status: Option<String>,
     pub(crate) preview_scroll: u16,
+    pub(crate) search_config: SearchConfig,
+    pub(crate) theme: Theme,
 }
 
 pub enum AppEvent {
@@ -69,6 +102,8 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
         frecency: FrecencyStore,
         cwd: PathBuf,
         now: u64,
+        search_config: SearchConfig,
+        theme: Theme,
         provider: P,
     ) -> Self {
         Self {
@@ -84,6 +119,8 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
             browse: BrowseState::new(),
             status: None,
             preview_scroll: 0,
+            search_config,
+            theme,
         }
     }
 
@@ -279,6 +316,7 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
             &self.frecency,
             &self.cwd,
             self.now,
+            &self.search_config,
         )
     }
 

@@ -3,7 +3,14 @@ use peanutbutter::config;
 use std::io::{self, Write};
 
 fn main() {
-    let paths = config::default_paths();
+    let app_config = match config::load() {
+        Ok(config) => config,
+        Err(err) => {
+            eprintln!("pb: {err}");
+            std::process::exit(1);
+        }
+    };
+    let paths = app_config.paths.clone();
     let args = std::env::args_os().skip(1);
     let command = match cli::parse_args(args) {
         Ok(command) => command,

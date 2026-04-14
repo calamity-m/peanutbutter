@@ -1,3 +1,4 @@
+use crate::config::SearchConfig;
 use crate::frecency::FrecencyStore;
 use crate::fuzzy::{FuzzyScorer, build_pattern, score_snippet};
 use crate::index::{IndexedSnippet, SnippetIndex};
@@ -13,18 +14,13 @@ pub struct SearchHit<'a> {
     pub combined: f64,
 }
 
-/// How much to weight frecency relative to fuzzy score in the combined
-/// ranking. Fuzzy scores from nucleo are on the order of hundreds to
-/// thousands; frecency is roughly 0..=5, so we scale it up to make it a
-/// meaningful tiebreaker without drowning out a strong text match.
-const FRECENCY_WEIGHT: f64 = 250.0;
-
 pub fn rank<'a>(
     index: &'a SnippetIndex,
     query: &str,
     frecency: &FrecencyStore,
     cwd: &Path,
     now: u64,
+    config: &SearchConfig,
 ) -> Vec<SearchHit<'a>> {
     let mut scorer = FuzzyScorer::new();
     let pattern = build_pattern(query);
@@ -33,9 +29,9 @@ pub fn rank<'a>(
     let mut hits: Vec<SearchHit<'a>> = index
         .iter()
         .filter_map(|entry| {
-            let fuzzy = score_snippet(&mut scorer, &pattern, empty, entry)?;
-            let frec = frecency.score(entry.id(), cwd, now);
-            let combined = fuzzy as f64 + frec * FRECENCY_WEIGHT;
+            let fuzzy = score_snippet(&mut scorer, &pattern, empty, entry, &config.fuzzy)?;
+            let frec = frecency.score(entry.id(), cwd, now, &config.frecency);
+            let combined = fuzzy as f64 + frec * config.frecency_weight;
             Some(SearchHit {
                 snippet: entry,
                 fuzzy: if empty { None } else { Some(fuzzy) },
@@ -57,6 +53,7 @@ pub fn rank<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::SearchConfig;
     use crate::domain::{Frontmatter, Snippet, SnippetFile, SnippetId};
     use crate::index::SnippetIndex;
     use std::path::PathBuf;
@@ -88,7 +85,14 @@ mod tests {
     fn empty_query_returns_every_snippet() {
         let index = tiny_index();
         let store = FrecencyStore::new();
-        let hits = rank(&index, "", &store, Path::new("/tmp"), 0);
+        let hits = rank(
+            &index,
+            "",
+            &store,
+            Path::new("/tmp"),
+            0,
+            &SearchConfig::default(),
+        );
         assert_eq!(hits.len(), 3);
         for hit in &hits {
             assert!(hit.fuzzy.is_none());
@@ -99,7 +103,14 @@ mod tests {
     fn query_ranks_name_match_above_body_match() {
         let index = tiny_index();
         let store = FrecencyStore::new();
-        let hits = rank(&index, "git", &store, Path::new("/tmp"), 0);
+        let hits = rank(
+            &index,
+            "git",
+            &store,
+            Path::new("/tmp"),
+            0,
+            &SearchConfig::default(),
+        );
         assert!(!hits.is_empty());
         assert!(hits[0].snippet.name().contains("git"));
     }
@@ -115,7 +126,14 @@ mod tests {
             PathBuf::from("/repo"),
             1000,
         );
-        let hits = rank(&index, "", &store, Path::new("/repo"), 1000);
+        let hits = rank(
+            &index,
+            "",
+            &store,
+            Path::new("/repo"),
+            1000,
+            &SearchConfig::default(),
+        );
         assert_eq!(hits[0].snippet.id().as_str(), "docker/run.md#b");
     }
 }

@@ -100,6 +100,7 @@ pub fn help_text(paths: &Paths) -> String {
     for root in &paths.snippet_roots {
         out.push_str(&format!("  {}\n", root.display()));
     }
+    out.push_str(&format!("config file: {}\n", paths.config_file.display()));
     out.push_str(&format!("state file: {}\n", paths.state_file.display()));
     out
 }
@@ -153,8 +154,13 @@ where
     let index = crate::index::load_from_roots(&paths.snippet_roots)?;
     let mut store = FrecencyStore::load(&paths.state_file)?;
     let cwd = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let app_config = crate::config::load()?;
     let options = ExecuteOptions {
         cwd: cwd.clone(),
+        viewport_height: app_config.ui.height,
+        search: app_config.search.clone(),
+        theme: app_config.theme.clone(),
+        variables: app_config.variables.clone(),
         ..ExecuteOptions::default()
     };
     let outcome = runner(index, store.clone(), options)?;
@@ -396,6 +402,7 @@ mod tests {
         Paths {
             snippet_roots: vec![root.to_path_buf()],
             state_file: root.join("state.tsv"),
+            config_file: root.join("config.toml"),
         }
     }
 

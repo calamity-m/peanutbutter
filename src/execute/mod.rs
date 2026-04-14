@@ -1,4 +1,5 @@
 use crate::domain::SnippetId;
+use crate::{config, config::VariableInputConfig};
 use std::path::PathBuf;
 
 mod app;
@@ -24,6 +25,9 @@ pub struct ExecuteOptions {
     pub cwd: PathBuf,
     pub now: u64,
     pub viewport_height: u16,
+    pub search: config::SearchConfig,
+    pub theme: config::Theme,
+    pub variables: std::collections::BTreeMap<String, VariableInputConfig>,
 }
 
 impl Default for ExecuteOptions {
@@ -32,6 +36,9 @@ impl Default for ExecuteOptions {
             cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             now: terminal::unix_now(),
             viewport_height: 20,
+            search: config::SearchConfig::default(),
+            theme: config::Theme::default(),
+            variables: std::collections::BTreeMap::new(),
         }
     }
 }
