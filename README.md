@@ -5,6 +5,7 @@ A command-line snippet tool that tries to mould to your own use-cases.
 ## Quick-Start
 
 ```bash
+export PEANUTBUTTER_PATH="$PWD/examples"
 # pb --bash C+b
 # pb --bash C+f
 # etc.
