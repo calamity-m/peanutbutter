@@ -6,7 +6,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Wrap};
 
-use crate::browse::BrowseEntry;
+use crate::browse::{BrowseEntry, DirNode};
 use crate::index::IndexedSnippet;
 
 use super::app::{ExecutionApp, NavigationMode, Screen, SuggestionProvider};
@@ -101,7 +101,7 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
 
         let (picker_md, picker_body) = match self.nav_mode {
             NavigationMode::Fuzzy => extract_preview(self.selected_fuzzy_snippet()),
-            NavigationMode::Browse => extract_preview(self.selected_browse_snippet()),
+            NavigationMode::Browse => self.browse_preview(&browse_visible),
         };
         frame.render_widget(Block::default().borders(Borders::LEFT), main[1]);
         let inner = ratatui::layout::Rect {
@@ -244,6 +244,23 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
         )
     }
 
+    fn browse_preview(&self, visible: &[BrowseEntry]) -> (Option<String>, Option<String>) {
+        let Some(entry) = visible.get(self.browse.list.selected().unwrap_or(0)) else {
+            return (None, None);
+        };
+        match entry {
+            BrowseEntry::Snippet(s) => extract_preview(self.index.get(&s.id)),
+            BrowseEntry::Directory(name) => {
+                let mut path = self.browse.path.clone();
+                path.push(name.clone());
+                let Some(node) = self.tree.get(&path) else {
+                    return (None, None);
+                };
+                (Some(container_preview_markdown(name, &path, node)), None)
+            }
+        }
+    }
+
     fn render_snippet_preview(
         &mut self,
         frame: &mut Frame<'_>,
@@ -257,7 +274,8 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
                 text.extend(highlight_shell(body));
                 text
             }
-            _ => Text::from("No snippet selected"),
+            (Some(md), None) => render_markdown_text(md, area.width as usize),
+            _ => Text::from("No selection"),
         };
 
         let total_lines = text.height() as u16;
@@ -298,6 +316,33 @@ fn extract_preview(snippet: Option<&IndexedSnippet>) -> (Option<String>, Option<
         ),
         None => (None, None),
     }
+}
+
+fn container_preview_markdown(name: &str, path: &[String], node: &DirNode) -> String {
+    let mut md = String::new();
+    md.push_str("# ");
+    md.push_str(name);
+    md.push_str("/\n\n");
+    md.push_str("**path** `/");
+    md.push_str(&path.join("/"));
+    md.push_str("/`\n\n---\n\n");
+
+    if node.children.is_empty() && node.snippets.is_empty() {
+        md.push_str("_(empty)_\n");
+        return md;
+    }
+
+    for child_name in node.children.keys() {
+        md.push_str("- `");
+        md.push_str(child_name);
+        md.push_str("/`\n");
+    }
+    for snippet in &node.snippets {
+        md.push_str("- ");
+        md.push_str(&snippet.name);
+        md.push('\n');
+    }
+    md
 }
 
 fn snippet_preview_markdown(snippet: &IndexedSnippet) -> String {
