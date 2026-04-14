@@ -74,7 +74,6 @@ impl SuggestionProvider for SystemSuggestionProvider {
 
 enum Screen {
     Select,
-    Preview { snippet_id: SnippetId },
     Prompt(PromptState),
 }
 
@@ -198,11 +197,6 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
         }
     }
 
-    fn enter_preview(&mut self, snippet_id: SnippetId) {
-        self.screen = Screen::Preview { snippet_id };
-        self.preview_scroll = 0;
-    }
-
     pub fn navigation_mode(&self) -> NavigationMode {
         self.nav_mode
     }
@@ -217,7 +211,6 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
                 NavigationMode::Fuzzy => self.selected_fuzzy_snippet(),
                 NavigationMode::Browse => self.selected_browse_snippet(),
             },
-            Screen::Preview { snippet_id } => self.index.get(snippet_id),
             Screen::Prompt(prompt) => self.index.get(&prompt.snippet_id),
         }
     }
@@ -252,10 +245,6 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
 
         match &mut self.screen {
             Screen::Select => self.handle_select_key(key),
-            Screen::Preview { snippet_id } => {
-                let snippet_id = snippet_id.clone();
-                self.handle_preview_key(key, snippet_id)
-            }
             Screen::Prompt(prompt) => match handle_prompt_key(
                 key,
                 prompt,
@@ -265,8 +254,8 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
                 &mut self.status,
             ) {
                 PromptTransition::Stay => AppEvent::Continue,
-                PromptTransition::ToPreview(snippet_id) => {
-                    self.enter_preview(snippet_id);
+                PromptTransition::ToSelect => {
+                    self.screen = Screen::Select;
                     AppEvent::Continue
                 }
                 PromptTransition::Completed(outcome) => AppEvent::Completed(outcome),
@@ -287,7 +276,20 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
                 NavigationMode::Fuzzy => NavigationMode::Browse,
                 NavigationMode::Browse => NavigationMode::Fuzzy,
             };
+            self.preview_scroll = 0;
             self.status = None;
+            return AppEvent::Continue;
+        }
+
+        // Preview scroll — intercepted before mode dispatch so Ctrl+Up/Down do not
+        // also move the result-list cursor.
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        if ctrl && matches!(key.code, KeyCode::Char('j') | KeyCode::Down) {
+            self.preview_scroll = self.preview_scroll.saturating_add(3);
+            return AppEvent::Continue;
+        }
+        if ctrl && matches!(key.code, KeyCode::Char('k') | KeyCode::Up) {
+            self.preview_scroll = self.preview_scroll.saturating_sub(3);
             return AppEvent::Continue;
         }
 
@@ -302,9 +304,11 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
         match key.code {
             KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.fuzzy.type_char(c);
+                self.preview_scroll = 0;
             }
             KeyCode::Backspace => {
                 self.fuzzy.backspace();
+                self.preview_scroll = 0;
             }
             KeyCode::Left => {
                 self.fuzzy.cursor_left();
@@ -314,15 +318,17 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
             }
             KeyCode::Up => {
                 self.fuzzy.move_cursor(1, hits.len());
+                self.preview_scroll = 0;
             }
             KeyCode::Down => {
                 self.fuzzy.move_cursor(-1, hits.len());
+                self.preview_scroll = 0;
             }
             KeyCode::Enter => {
                 if let Some(snippet) = self.selected_fuzzy_snippet() {
                     let id = snippet.id().clone();
-                    self.enter_preview(id);
                     self.status = None;
+                    return self.start_prompt_or_complete(id);
                 }
             }
             _ => {}
@@ -335,58 +341,30 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
         match key.code {
             KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.browse.type_char(c);
+                self.preview_scroll = 0;
             }
             KeyCode::Backspace => {
                 self.browse.backspace();
+                self.preview_scroll = 0;
             }
             KeyCode::Tab => {
                 self.browse.tab_complete(&self.tree);
+                self.preview_scroll = 0;
             }
             KeyCode::Up => {
                 self.browse.move_cursor(1, visible.len());
+                self.preview_scroll = 0;
             }
             KeyCode::Down => {
                 self.browse.move_cursor(-1, visible.len());
+                self.preview_scroll = 0;
             }
             KeyCode::Enter => {
                 if let Some(id) = self.browse.activate(&self.tree) {
-                    self.enter_preview(id);
                     self.status = None;
+                    return self.start_prompt_or_complete(id);
                 }
-            }
-            _ => {}
-        }
-        AppEvent::Continue
-    }
-
-    fn handle_preview_key(&mut self, key: KeyEvent, snippet_id: SnippetId) -> AppEvent {
-        match key.code {
-            KeyCode::Esc | KeyCode::Backspace => {
-                self.screen = Screen::Select;
-                self.status = None;
-            }
-            KeyCode::Enter => {
-                if let AppEvent::Completed(outcome) = self.start_prompt_or_complete(snippet_id) {
-                    return AppEvent::Completed(outcome);
-                }
-            }
-            KeyCode::Down | KeyCode::Char('j') => {
-                self.preview_scroll = self.preview_scroll.saturating_add(1);
-            }
-            KeyCode::Up | KeyCode::Char('k') => {
-                self.preview_scroll = self.preview_scroll.saturating_sub(1);
-            }
-            KeyCode::PageDown => {
-                self.preview_scroll = self.preview_scroll.saturating_add(10);
-            }
-            KeyCode::PageUp => {
-                self.preview_scroll = self.preview_scroll.saturating_sub(10);
-            }
-            KeyCode::Home => {
                 self.preview_scroll = 0;
-            }
-            KeyCode::End => {
-                self.preview_scroll = u16::MAX;
             }
             _ => {}
         }
@@ -439,11 +417,6 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
     pub fn render(&mut self, frame: &mut Frame<'_>) {
         if matches!(self.screen, Screen::Select) {
             self.render_select(frame);
-            return;
-        }
-        if let Screen::Preview { snippet_id } = &self.screen {
-            let snippet_id = snippet_id.clone();
-            self.render_preview(frame, &snippet_id);
             return;
         }
         let Screen::Prompt(prompt) = &self.screen else {
@@ -526,15 +499,37 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
             }
         }
 
-        self.render_snippet_code(frame, main[1], self.selected_snippet());
+        // Extract preview data before the mutable borrow required by render_snippet_preview.
+        let (picker_md, picker_body) = match self.nav_mode {
+            NavigationMode::Fuzzy => extract_preview(self.selected_fuzzy_snippet()),
+            NavigationMode::Browse => extract_preview(self.selected_browse_snippet()),
+        };
+        frame.render_widget(Block::default().borders(Borders::LEFT), main[1]);
+        let inner = ratatui::layout::Rect {
+            x: main[1].x + 1,
+            width: main[1].width.saturating_sub(1),
+            ..main[1]
+        };
+        self.render_snippet_preview(frame, inner, picker_md.as_deref(), picker_body.as_deref());
 
         let help = if let Some(status) = &self.status {
             status.clone()
         } else {
             match self.nav_mode {
-                NavigationMode::Fuzzy => "enter preview  ctrl+t browse  esc cancel".to_string(),
+                NavigationMode::Fuzzy => {
+                    "enter accept  ctrl+j/k/↑↓ scroll preview  ctrl+t browse  esc cancel"
+                        .to_string()
+                }
                 NavigationMode::Browse => {
-                    "tab complete  enter preview  ctrl+t search  esc cancel".to_string()
+                    let selected_is_dir = browse_visible
+                        .get(self.browse.list.selected().unwrap_or(0))
+                        .map(|e| matches!(e, BrowseEntry::Directory(_)))
+                        .unwrap_or(false);
+                    if selected_is_dir {
+                        "tab complete  enter open  ctrl+j/k/↑↓ scroll preview  ctrl+t search  esc cancel".to_string()
+                    } else {
+                        "tab complete  enter accept  ctrl+j/k/↑↓ scroll preview  ctrl+t search  esc cancel".to_string()
+                    }
                 }
             }
         };
@@ -548,29 +543,6 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
                 y: chunks[1].y + 1,
             });
         }
-    }
-
-    fn render_preview(&mut self, frame: &mut Frame<'_>, snippet_id: &SnippetId) {
-        let area = frame.area();
-        let chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Min(1), Constraint::Length(1)])
-            .split(area);
-        let (markdown, body) = match self.index.get(snippet_id) {
-            Some(s) => (
-                Some(snippet_preview_markdown(s)),
-                Some(s.body().to_string()),
-            ),
-            None => (None, None),
-        };
-        self.render_snippet_preview(frame, chunks[0], markdown.as_deref(), body.as_deref());
-        frame.render_widget(
-            chrome_line(
-                "j/k scroll  enter accept  backspace/esc return",
-                Modifier::DIM,
-            ),
-            chunks[1],
-        );
     }
 
     fn render_prompt(&self, frame: &mut Frame<'_>, prompt: &PromptState) {
@@ -680,40 +652,6 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
         )
     }
 
-    fn render_snippet_code(
-        &self,
-        frame: &mut Frame<'_>,
-        area: ratatui::layout::Rect,
-        snippet: Option<&IndexedSnippet>,
-    ) {
-        let text = if let Some(snippet) = snippet {
-            highlight_shell(snippet.body())
-        } else {
-            Text::from("No snippet selected")
-        };
-        // Full-height left border.
-        frame.render_widget(Block::default().borders(Borders::LEFT), area);
-
-        // Bottom-anchor the text inside the border.
-        let inner = ratatui::layout::Rect {
-            x: area.x + 1,
-            y: area.y,
-            width: area.width.saturating_sub(1),
-            height: area.height,
-        };
-        let content_height = (text.height() as u16).min(inner.height);
-        let content_area = ratatui::layout::Rect {
-            x: inner.x,
-            y: inner.y + inner.height.saturating_sub(content_height),
-            width: inner.width,
-            height: content_height,
-        };
-        frame.render_widget(
-            Paragraph::new(text).wrap(Wrap { trim: false }),
-            content_area,
-        );
-    }
-
     fn render_snippet_preview(
         &mut self,
         frame: &mut Frame<'_>,
@@ -765,6 +703,16 @@ fn render_markdown_text(markdown: &str, width: usize) -> Text<'static> {
     let ansi = fmt.to_string();
     ansi.into_text()
         .unwrap_or_else(|_| Text::from(ansi.clone()))
+}
+
+fn extract_preview(snippet: Option<&IndexedSnippet>) -> (Option<String>, Option<String>) {
+    match snippet {
+        Some(s) => (
+            Some(snippet_preview_markdown(s)),
+            Some(s.body().to_string()),
+        ),
+        None => (None, None),
+    }
 }
 
 fn snippet_preview_markdown(snippet: &IndexedSnippet) -> String {
@@ -822,7 +770,7 @@ fn snippet_preview_markdown(snippet: &IndexedSnippet) -> String {
 
 enum PromptTransition {
     Stay,
-    ToPreview(SnippetId),
+    ToSelect,
     Completed(ExecutionOutcome),
 }
 
@@ -837,7 +785,7 @@ fn handle_prompt_key<P: SuggestionProvider>(
     match key.code {
         KeyCode::Esc => {
             *status = None;
-            PromptTransition::ToPreview(prompt.snippet_id.clone())
+            PromptTransition::ToSelect
         }
         KeyCode::Backspace => {
             if prompt.input.pop().is_some() {
@@ -848,7 +796,7 @@ fn handle_prompt_key<P: SuggestionProvider>(
                 load_prompt_state(prompt, provider, cwd, status);
                 PromptTransition::Stay
             } else {
-                PromptTransition::ToPreview(prompt.snippet_id.clone())
+                PromptTransition::ToSelect
             }
         }
         KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -1133,7 +1081,7 @@ fn inline_viewport_height(max_height: u16) -> io::Result<u16> {
 }
 
 fn compact_viewport_height(rows: u16, max_height: u16) -> u16 {
-    let compact = (rows / 3).max(6);
+    let compact = (rows / 3).max(20);
     compact.min(max_height.max(1))
 }
 
@@ -1729,11 +1677,22 @@ mod tests {
     }
 
     #[test]
-    fn compact_viewport_height_stays_small_but_respects_limits() {
+    fn compact_viewport_height_respects_user_cap() {
+        // user-configured cap wins when it is below the 20-row floor
         assert_eq!(compact_viewport_height(60, 12), 12);
-        assert_eq!(compact_viewport_height(24, 12), 8);
-        assert_eq!(compact_viewport_height(9, 12), 6);
+        assert_eq!(compact_viewport_height(24, 12), 12);
+        assert_eq!(compact_viewport_height(9, 12), 12);
         assert_eq!(compact_viewport_height(60, 4), 4);
+    }
+
+    #[test]
+    fn compact_viewport_height_enforces_20_row_minimum() {
+        // floor is 20 regardless of terminal height when max_height allows it
+        assert_eq!(compact_viewport_height(60, 20), 20);
+        assert_eq!(compact_viewport_height(24, 20), 20);
+        assert_eq!(compact_viewport_height(9, 20), 20);
+        // larger terminals can exceed 20 when rows/3 > 20
+        assert_eq!(compact_viewport_height(90, 40), 30);
     }
 
     #[test]
@@ -1780,15 +1739,69 @@ mod tests {
     }
 
     #[test]
-    fn search_selection_survives_preview_round_trip() {
-        let variables = vec![];
-        let mut app = app_with_body("echo hi", variables, TestProvider::default());
+    fn enter_from_picker_completes_snippet_with_no_variables() {
+        let mut app = app_with_body("echo hi", vec![], TestProvider::default());
+        let outcome = completed(app.handle_key(press(KeyCode::Enter)));
+        assert_eq!(outcome.command, "echo hi");
+    }
+
+    #[test]
+    fn prompt_esc_returns_to_select_preserving_query() {
+        let variables = vec![Variable {
+            name: "x".to_string(),
+            source: VariableSource::Free,
+        }];
+        let mut app = app_with_body("echo <@x>", variables, TestProvider::default());
         app.fuzzy.set_query("Demo");
         let _ = app.handle_key(press(KeyCode::Enter));
-        assert!(matches!(app.screen, Screen::Preview { .. }));
-        let _ = app.handle_key(press(KeyCode::Backspace));
+        assert!(matches!(app.screen, Screen::Prompt(_)));
+        let _ = app.handle_key(press(KeyCode::Esc));
         assert!(matches!(app.screen, Screen::Select));
         assert_eq!(app.fuzzy.query, "Demo");
+    }
+
+    #[test]
+    fn prompt_esc_in_browse_mode_preserves_browse_position() {
+        let variables = vec![Variable {
+            name: "x".to_string(),
+            source: VariableSource::Free,
+        }];
+        // Place the snippet under a subdirectory so browse has a non-trivial path.
+        let file = SnippetFile {
+            path: PathBuf::from("git/commits.md"),
+            relative_path: PathBuf::from("git/commits.md"),
+            frontmatter: crate::domain::Frontmatter::default(),
+            snippets: vec![crate::domain::Snippet {
+                id: SnippetId::new("git/commits.md", "slug"),
+                name: "Log".to_string(),
+                description: "desc".to_string(),
+                body: "git log <@x>".to_string(),
+                variables,
+            }],
+        };
+        let index = SnippetIndex::from_files([file]);
+        let frecency = FrecencyStore::new();
+        let mut app = ExecutionApp::new(
+            index,
+            frecency,
+            PathBuf::from("."),
+            0,
+            TestProvider::default(),
+        );
+        app.nav_mode = NavigationMode::Browse;
+        // Descend into git/ and select the snippet.
+        app.browse.path = vec!["git".to_string()];
+        app.browse.input = String::new();
+        app.browse.list.select(Some(0));
+
+        let _ = app.handle_key(press(KeyCode::Enter));
+        assert!(matches!(app.screen, Screen::Prompt(_)));
+
+        let _ = app.handle_key(press(KeyCode::Esc));
+        assert!(matches!(app.screen, Screen::Select));
+        assert_eq!(app.browse.path, vec!["git".to_string()]);
+        assert_eq!(app.browse.input, "");
+        assert_eq!(app.browse.list.selected(), Some(0));
     }
 
     #[test]
@@ -1812,7 +1825,6 @@ mod tests {
             TestProvider::default(),
         );
         let _ = app.handle_key(press(KeyCode::Enter));
-        let _ = app.handle_key(press(KeyCode::Enter));
         let outcome = completed(app.handle_key(press(KeyCode::Enter)));
         assert_eq!(outcome.command, "echo hello world");
     }
@@ -1825,7 +1837,6 @@ mod tests {
         }];
         let provider = TestProvider::default().with("method", &["GET", "POST"]);
         let mut app = app_with_body("curl -X <@method:ignored>", variables, provider);
-        let _ = app.handle_key(press(KeyCode::Enter));
         let _ = app.handle_key(press(KeyCode::Enter));
         let outcome = completed(app.handle_key(press(KeyCode::Enter)));
         assert_eq!(outcome.command, "curl -X GET");
@@ -1844,7 +1855,6 @@ mod tests {
             },
         ];
         let mut app = app_with_body("echo <@one> <@two>", variables, TestProvider::default());
-        let _ = app.handle_key(press(KeyCode::Enter));
         let _ = app.handle_key(press(KeyCode::Enter));
         let _ = app.handle_key(press(KeyCode::Char('a')));
         let _ = app.handle_key(press(KeyCode::Tab));
@@ -1877,7 +1887,6 @@ mod tests {
         ];
         let mut app = app_with_body("echo <@one> <@two>", variables, TestProvider::default());
         let _ = app.handle_key(press(KeyCode::Enter));
-        let _ = app.handle_key(press(KeyCode::Enter));
         let _ = app.handle_key(press(KeyCode::BackTab));
 
         let Screen::Prompt(prompt) = &app.screen else {
@@ -1900,7 +1909,6 @@ mod tests {
         ];
         let mut app = app_with_body("echo <@one> <@two>", variables, TestProvider::default());
         let _ = app.handle_key(press(KeyCode::Enter));
-        let _ = app.handle_key(press(KeyCode::Enter));
         let _ = app.handle_key(press(KeyCode::Char('a')));
         let _ = app.handle_key(press(KeyCode::Enter));
         let _ = app.handle_key(press(KeyCode::Backspace));
@@ -1909,5 +1917,156 @@ mod tests {
         };
         assert_eq!(prompt.current_variable().name, "one");
         assert_eq!(prompt.input, "a");
+    }
+
+    #[test]
+    fn ctrl_j_scrolls_preview_down() {
+        let mut app = app_with_body("echo hi", vec![], TestProvider::default());
+        let _ = app.handle_key(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::CONTROL));
+        assert_eq!(app.preview_scroll, 3);
+    }
+
+    #[test]
+    fn ctrl_down_scrolls_preview_down() {
+        let mut app = app_with_body("echo hi", vec![], TestProvider::default());
+        let _ = app.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::CONTROL));
+        assert_eq!(app.preview_scroll, 3);
+    }
+
+    #[test]
+    fn ctrl_k_scrolls_preview_up() {
+        let mut app = app_with_body("echo hi", vec![], TestProvider::default());
+        app.preview_scroll = 6;
+        let _ = app.handle_key(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::CONTROL));
+        assert_eq!(app.preview_scroll, 3);
+    }
+
+    #[test]
+    fn ctrl_k_does_not_underflow() {
+        let mut app = app_with_body("echo hi", vec![], TestProvider::default());
+        let _ = app.handle_key(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::CONTROL));
+        assert_eq!(app.preview_scroll, 0);
+    }
+
+    #[test]
+    fn navigation_resets_preview_scroll() {
+        let mut app = app_with_body("echo hi", vec![], TestProvider::default());
+        app.preview_scroll = 9;
+        let _ = app.handle_key(press(KeyCode::Up));
+        assert_eq!(app.preview_scroll, 0);
+    }
+
+    #[test]
+    fn scroll_bindings_work_in_browse_mode() {
+        let mut app = app_with_body("echo hi", vec![], TestProvider::default());
+        app.nav_mode = NavigationMode::Browse;
+        let _ = app.handle_key(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::CONTROL));
+        assert_eq!(app.preview_scroll, 3);
+        let _ = app.handle_key(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::CONTROL));
+        assert_eq!(app.preview_scroll, 0);
+    }
+
+    #[test]
+    fn fuzzy_typing_resets_preview_scroll() {
+        let mut app = app_with_body("echo hi", vec![], TestProvider::default());
+        app.preview_scroll = 9;
+        let _ = app.handle_key(press(KeyCode::Char('h')));
+        assert_eq!(app.preview_scroll, 0);
+    }
+
+    #[test]
+    fn fuzzy_backspace_resets_preview_scroll() {
+        let mut app = app_with_body("echo hi", vec![], TestProvider::default());
+        app.fuzzy.set_query("h");
+        app.preview_scroll = 9;
+        let _ = app.handle_key(press(KeyCode::Backspace));
+        assert_eq!(app.preview_scroll, 0);
+    }
+
+    #[test]
+    fn browse_typing_resets_preview_scroll() {
+        let mut app = app_with_body("echo hi", vec![], TestProvider::default());
+        app.nav_mode = NavigationMode::Browse;
+        app.preview_scroll = 9;
+        let _ = app.handle_key(press(KeyCode::Char('x')));
+        assert_eq!(app.preview_scroll, 0);
+    }
+
+    #[test]
+    fn browse_backspace_resets_preview_scroll() {
+        let mut app = app_with_body("echo hi", vec![], TestProvider::default());
+        app.nav_mode = NavigationMode::Browse;
+        app.browse.input = "x".to_string();
+        app.preview_scroll = 9;
+        let _ = app.handle_key(press(KeyCode::Backspace));
+        assert_eq!(app.preview_scroll, 0);
+    }
+
+    #[test]
+    fn browse_tab_resets_preview_scroll() {
+        let file = SnippetFile {
+            path: PathBuf::from("git/commits.md"),
+            relative_path: PathBuf::from("git/commits.md"),
+            frontmatter: crate::domain::Frontmatter::default(),
+            snippets: vec![crate::domain::Snippet {
+                id: SnippetId::new("git/commits.md", "slug"),
+                name: "Log".to_string(),
+                description: "desc".to_string(),
+                body: "git log".to_string(),
+                variables: vec![],
+            }],
+        };
+        let index = SnippetIndex::from_files([file]);
+        let frecency = FrecencyStore::new();
+        let mut app = ExecutionApp::new(
+            index,
+            frecency,
+            PathBuf::from("."),
+            0,
+            TestProvider::default(),
+        );
+        app.nav_mode = NavigationMode::Browse;
+        app.browse.input = "g".to_string();
+        app.preview_scroll = 9;
+        let _ = app.handle_key(press(KeyCode::Tab));
+        assert_eq!(app.preview_scroll, 0);
+    }
+
+    #[test]
+    fn mode_toggle_resets_preview_scroll() {
+        let mut app = app_with_body("echo hi", vec![], TestProvider::default());
+        app.preview_scroll = 9;
+        let _ = app.handle_key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::CONTROL));
+        assert_eq!(app.preview_scroll, 0);
+    }
+
+    #[test]
+    fn browse_entering_directory_resets_preview_scroll() {
+        let file = SnippetFile {
+            path: PathBuf::from("git/commits.md"),
+            relative_path: PathBuf::from("git/commits.md"),
+            frontmatter: crate::domain::Frontmatter::default(),
+            snippets: vec![crate::domain::Snippet {
+                id: SnippetId::new("git/commits.md", "slug"),
+                name: "Log".to_string(),
+                description: "desc".to_string(),
+                body: "git log".to_string(),
+                variables: vec![],
+            }],
+        };
+        let index = SnippetIndex::from_files([file]);
+        let frecency = FrecencyStore::new();
+        let mut app = ExecutionApp::new(
+            index,
+            frecency,
+            PathBuf::from("."),
+            0,
+            TestProvider::default(),
+        );
+        app.nav_mode = NavigationMode::Browse;
+        app.preview_scroll = 9;
+        let _ = app.handle_key(press(KeyCode::Enter));
+        assert_eq!(app.browse.path, vec!["git".to_string()]);
+        assert_eq!(app.preview_scroll, 0);
     }
 }
