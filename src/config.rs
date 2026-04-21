@@ -101,6 +101,7 @@ pub struct VariableInputConfig {
 pub struct Theme {
     pub chrome: Style,
     pub emphasis: Style,
+    pub fuzzy_highlight: Style,
     pub selected_marker: Style,
     pub selected_item: Style,
     pub placeholder: Style,
@@ -118,6 +119,7 @@ impl Default for Theme {
         Self {
             chrome: Style::default().fg(muted).add_modifier(Modifier::DIM),
             emphasis: Style::default().add_modifier(Modifier::BOLD),
+            fuzzy_highlight: Style::default().fg(accent).add_modifier(Modifier::BOLD),
             selected_marker: Style::default().fg(accent).bg(selected_bg),
             selected_item: Style::default()
                 .bg(selected_bg)
@@ -145,7 +147,9 @@ impl Theme {
         }
 
         if let Some(color) = raw.accent {
-            theme.selected_marker = theme.selected_marker.fg(parse_color(&color)?);
+            let color = parse_color(&color)?;
+            theme.fuzzy_highlight = theme.fuzzy_highlight.fg(color);
+            theme.selected_marker = theme.selected_marker.fg(color);
         }
 
         if let Some(color) = raw.selected_bg {

@@ -7,6 +7,7 @@ use ratatui::widgets::ListState;
 pub struct FuzzyScorer {
     matcher: Matcher,
     buf: Vec<char>,
+    indices_buf: Vec<u32>,
 }
 
 impl FuzzyScorer {
@@ -14,6 +15,7 @@ impl FuzzyScorer {
         Self {
             matcher: Matcher::new(Config::DEFAULT),
             buf: Vec::new(),
+            indices_buf: Vec::new(),
         }
     }
 
@@ -21,6 +23,16 @@ impl FuzzyScorer {
         self.buf.clear();
         let hay = Utf32Str::new(haystack, &mut self.buf);
         pattern.score(hay, &mut self.matcher)
+    }
+
+    pub fn indices(&mut self, pattern: &Pattern, haystack: &str) -> Option<Vec<usize>> {
+        self.buf.clear();
+        self.indices_buf.clear();
+        let hay = Utf32Str::new(haystack, &mut self.buf);
+        pattern.indices(hay, &mut self.matcher, &mut self.indices_buf)?;
+        self.indices_buf.sort_unstable();
+        self.indices_buf.dedup();
+        Some(self.indices_buf.iter().map(|idx| *idx as usize).collect())
     }
 }
 
