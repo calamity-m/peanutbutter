@@ -4,7 +4,13 @@ use std::path::PathBuf;
 pub struct SnippetId(String);
 
 impl SnippetId {
+    /// Constructs an id of the form `"relative/path.md#heading-slug"`.
+    /// The `#` separator is the only `#` in the string; `frecency.rs`
+    /// relies on `split_once('#')` to round-trip it. Neither `relative_path`
+    /// nor `heading_slug` may contain a literal `#`.
     pub fn new(relative_path: &str, heading_slug: &str) -> Self {
+        debug_assert!(!relative_path.contains('#'), "path must not contain '#'");
+        debug_assert!(!heading_slug.contains('#'), "slug must not contain '#'");
         Self(format!("{relative_path}#{heading_slug}"))
     }
 

@@ -120,7 +120,7 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
             }
             NavigationMode::Browse => {
                 let total = browse_visible.len();
-                let selected = self.browse.list.selected().unwrap_or(0);
+                let selected = self.browse.selection.unwrap_or(0);
                 let padding = (main[0].height as usize).saturating_sub(total);
                 let mut items: Vec<ListItem<'_>> =
                     (0..padding).map(|_| ListItem::new("")).collect();
@@ -191,7 +191,7 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
                 }
                 NavigationMode::Browse => {
                     let selected_is_dir = browse_visible
-                        .get(self.browse.list.selected().unwrap_or(0))
+                        .get(self.browse.selection.unwrap_or(0))
                         .map(|e| matches!(e, BrowseEntry::Directory(_)))
                         .unwrap_or(false);
                     if selected_is_dir {
@@ -267,7 +267,7 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
         if let Some(area) = sugg_area {
             let visible = prompt.visible_suggestions();
             let total = visible.len();
-            let selected = prompt.list.selected().unwrap_or(0);
+            let selected = prompt.selection.unwrap_or(0);
             let items: Vec<ListItem<'_>> = visible
                 .into_iter()
                 .enumerate()
@@ -281,7 +281,8 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
                     ))
                 })
                 .collect();
-            let mut list_state = prompt.list;
+            let mut list_state =
+                ratatui::widgets::ListState::default().with_selected(prompt.selection);
             frame.render_stateful_widget(List::new(items), area, &mut list_state);
         }
 
@@ -328,7 +329,7 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
     }
 
     fn browse_preview<'a>(&'a self, visible: &[BrowseEntry]) -> PickerPreview<'a> {
-        let Some(entry) = visible.get(self.browse.list.selected().unwrap_or(0)) else {
+        let Some(entry) = visible.get(self.browse.selection.unwrap_or(0)) else {
             return PickerPreview::Empty;
         };
         match entry {

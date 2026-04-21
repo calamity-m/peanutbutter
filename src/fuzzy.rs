@@ -2,7 +2,6 @@ use crate::config::FuzzyWeights;
 use crate::index::IndexedSnippet;
 use nucleo_matcher::pattern::{CaseMatching, Normalization, Pattern};
 use nucleo_matcher::{Config, Matcher, Utf32Str};
-use ratatui::widgets::ListState;
 
 pub struct FuzzyScorer {
     matcher: Matcher,
@@ -120,39 +119,35 @@ pub fn score_snippet(
     if matched { Some(total) } else { None }
 }
 
-/// Fuzzy search state. Holds the raw query string and a ratatui `ListState`
-/// so Part 03 can render with `List::new(...).highlight_style(...)` and drive
-/// selection directly. The query survives entering and leaving a snippet
-/// detail view, so "backspace out of a snippet" returns the user to their
-/// prior search exactly where they were.
+/// Fuzzy search state. Holds the raw query string and the currently selected
+/// result index. The query survives entering and leaving a snippet detail view,
+/// so "backspace out of a snippet" returns the user to their prior search.
 #[derive(Debug, Default)]
 pub struct FuzzyState {
     pub query: String,
     pub cursor: usize, // byte offset into query
-    pub list: ListState,
+    pub selection: Option<usize>,
 }
 
 impl FuzzyState {
     pub fn new() -> Self {
-        let mut list = ListState::default();
-        list.select(Some(0));
         Self {
             query: String::new(),
             cursor: 0,
-            list,
+            selection: Some(0),
         }
     }
 
     pub fn set_query<S: Into<String>>(&mut self, query: S) {
         self.query = query.into();
         self.cursor = self.query.len();
-        self.list.select(Some(0));
+        self.selection = Some(0);
     }
 
     pub fn type_char(&mut self, c: char) {
         self.query.insert(self.cursor, c);
         self.cursor += c.len_utf8();
-        self.list.select(Some(0));
+        self.selection = Some(0);
     }
 
     pub fn backspace(&mut self) -> bool {
@@ -166,7 +161,7 @@ impl FuzzyState {
             .unwrap_or(0);
         self.query.remove(prev);
         self.cursor = prev;
-        self.list.select(Some(0));
+        self.selection = Some(0);
         true
     }
 
@@ -191,16 +186,16 @@ impl FuzzyState {
 
     pub fn move_cursor(&mut self, delta: i32, result_len: usize) {
         if result_len == 0 {
-            self.list.select(None);
+            self.selection = None;
             return;
         }
-        let current = self.list.selected().unwrap_or(0) as i32;
+        let current = self.selection.unwrap_or(0) as i32;
         let next = (current + delta).clamp(0, result_len as i32 - 1);
-        self.list.select(Some(next as usize));
+        self.selection = Some(next as usize);
     }
 
     pub fn selected(&self) -> Option<usize> {
-        self.list.selected()
+        self.selection
     }
 
     /// Display-column offset of the cursor within the query (for rendering).
@@ -293,7 +288,7 @@ mod tests {
     #[test]
     fn typing_resets_selection_to_top() {
         let mut state = FuzzyState::new();
-        state.list.select(Some(5));
+        state.selection = Some(5);
         state.type_char('a');
         assert_eq!(state.selected(), Some(0));
     }
@@ -307,7 +302,6 @@ mod tests {
     #[test]
     fn move_cursor_clamps_to_result_range() {
         let mut state = FuzzyState::new();
-        state.list.select(Some(0));
         state.move_cursor(10, 3);
         assert_eq!(state.selected(), Some(2));
         state.move_cursor(-100, 3);

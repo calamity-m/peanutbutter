@@ -409,7 +409,7 @@ fn xdg_state_home() -> PathBuf {
 fn home_dir() -> PathBuf {
     env::var_os("HOME")
         .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("/"))
+        .unwrap_or_else(|| env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
 }
 
 #[cfg(test)]

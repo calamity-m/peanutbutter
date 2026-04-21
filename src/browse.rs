@@ -1,6 +1,5 @@
 use crate::domain::SnippetId;
 use crate::index::SnippetIndex;
-use ratatui::widgets::ListState;
 use std::collections::BTreeMap;
 use std::path::{Component, Path};
 
@@ -98,25 +97,23 @@ impl BrowseEntry {
 }
 
 /// Browse mode state: the path from the root to the current directory, the
-/// typed input used for filtering and tab-completion, and a ratatui
-/// `ListState` for the cursor. `path` is analogous to `cwd`: typing narrows
-/// visible children, `tab` descends into a unique matching directory, and
-/// `backspace` walks back out.
+/// typed input used for filtering and tab-completion, and the selected list
+/// index. `path` is analogous to `cwd`: typing narrows visible children,
+/// `tab` descends into a unique matching directory, and `backspace` walks back
+/// out.
 #[derive(Debug, Default)]
 pub struct BrowseState {
     pub path: Vec<String>,
     pub input: String,
-    pub list: ListState,
+    pub selection: Option<usize>,
 }
 
 impl BrowseState {
     pub fn new() -> Self {
-        let mut list = ListState::default();
-        list.select(Some(0));
         Self {
             path: Vec::new(),
             input: String::new(),
-            list,
+            selection: Some(0),
         }
     }
 
@@ -130,7 +127,7 @@ impl BrowseState {
 
     pub fn type_char(&mut self, c: char) {
         self.input.push(c);
-        self.list.select(Some(0));
+        self.selection = Some(0);
     }
 
     /// Backspace behaviour: first delete the typed input character by
@@ -139,11 +136,11 @@ impl BrowseState {
     /// single predictable motion.
     pub fn backspace(&mut self) -> bool {
         if self.input.pop().is_some() {
-            self.list.select(Some(0));
+            self.selection = Some(0);
             return true;
         }
         if self.path.pop().is_some() {
-            self.list.select(Some(0));
+            self.selection = Some(0);
             return true;
         }
         false
@@ -152,7 +149,7 @@ impl BrowseState {
     pub fn reset(&mut self) {
         self.path.clear();
         self.input.clear();
-        self.list.select(Some(0));
+        self.selection = Some(0);
     }
 
     /// Entries visible at the current cursor, filtered by `input`. Directory
@@ -199,14 +196,14 @@ impl BrowseState {
                 let only = matches[0].clone();
                 self.path.push(only);
                 self.input.clear();
-                self.list.select(Some(0));
+                self.selection = Some(0);
                 true
             }
             _ => {
                 let lcp = longest_common_prefix(matches.iter().map(|s| s.as_str()));
                 if lcp.len() > self.input.len() {
                     self.input = lcp;
-                    self.list.select(Some(0));
+                    self.selection = Some(0);
                     true
                 } else {
                     false
@@ -219,13 +216,13 @@ impl BrowseState {
     /// into, snippets return their id for the caller to handle.
     pub fn activate(&mut self, tree: &BrowseTree) -> Option<SnippetId> {
         let entries = self.visible(tree);
-        let selected = self.list.selected().unwrap_or(0);
+        let selected = self.selection.unwrap_or(0);
         let entry = entries.get(selected)?;
         match entry {
             BrowseEntry::Directory(name) => {
                 self.path.push(name.clone());
                 self.input.clear();
-                self.list.select(Some(0));
+                self.selection = Some(0);
                 None
             }
             BrowseEntry::Snippet(s) => Some(s.id.clone()),
@@ -234,12 +231,12 @@ impl BrowseState {
 
     pub fn move_cursor(&mut self, delta: i32, visible_len: usize) {
         if visible_len == 0 {
-            self.list.select(None);
+            self.selection = None;
             return;
         }
-        let current = self.list.selected().unwrap_or(0) as i32;
+        let current = self.selection.unwrap_or(0) as i32;
         let next = (current + delta).clamp(0, visible_len as i32 - 1);
-        self.list.select(Some(next as usize));
+        self.selection = Some(next as usize);
     }
 }
 
@@ -385,7 +382,7 @@ mod tests {
         let tree = example_tree();
         let mut state = BrowseState::new();
         // First child at root should be a directory entry given example corpus.
-        state.list.select(Some(0));
+        state.selection = Some(0);
         let id = state.activate(&tree);
         assert!(id.is_none(), "activating a directory returns no snippet id");
         assert_eq!(state.path.len(), 1);

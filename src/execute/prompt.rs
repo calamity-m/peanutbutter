@@ -22,7 +22,7 @@ pub(crate) struct PromptState {
     pub(crate) input: String,
     pub(crate) suggestions: Vec<String>,
     pub(crate) error: Option<String>,
-    pub(crate) list: ratatui::widgets::ListState,
+    pub(crate) selection: Option<usize>,
 }
 
 impl PromptState {
@@ -39,7 +39,7 @@ impl PromptState {
             input: String::new(),
             suggestions: Vec::new(),
             error: None,
-            list: ratatui::widgets::ListState::default(),
+            selection: None,
         }
     }
 
@@ -76,27 +76,27 @@ impl PromptState {
 
     fn selected_visible_suggestion(&self) -> Option<&String> {
         let visible = self.visible_suggestions();
-        let idx = self.list.selected().unwrap_or(0);
+        let idx = self.selection.unwrap_or(0);
         visible.get(idx).copied()
     }
 
     pub(crate) fn reset_selection(&mut self) {
         if self.visible_suggestions().is_empty() {
-            self.list.select(None);
+            self.selection = None;
         } else {
-            self.list.select(Some(0));
+            self.selection = Some(0);
         }
     }
 
     pub(crate) fn move_cursor(&mut self, delta: i32) {
         let visible_len = self.visible_suggestions().len();
         if visible_len == 0 {
-            self.list.select(None);
+            self.selection = None;
             return;
         }
-        let current = self.list.selected().unwrap_or(0) as i32;
+        let current = self.selection.unwrap_or(0) as i32;
         let next = (current + delta).clamp(0, visible_len as i32 - 1);
-        self.list.select(Some(next as usize));
+        self.selection = Some(next as usize);
     }
 }
 
@@ -125,7 +125,8 @@ pub(crate) fn handle_prompt_key<P: SuggestionProvider>(
                 PromptTransition::Stay
             } else if prompt.index > 0 {
                 prompt.index -= 1;
-                load_prompt_state(prompt, provider, cwd, status);
+                load_prompt_state(prompt, provider, cwd);
+                *status = prompt.error.clone();
                 PromptTransition::Stay
             } else {
                 PromptTransition::ToSelect
@@ -156,7 +157,8 @@ pub(crate) fn handle_prompt_key<P: SuggestionProvider>(
             store_current_value(prompt);
             if prompt.index + 1 < prompt.variables.len() {
                 prompt.index += 1;
-                load_prompt_state(prompt, provider, cwd, status);
+                load_prompt_state(prompt, provider, cwd);
+                *status = prompt.error.clone();
                 PromptTransition::Stay
             } else if let Some(snippet) = index.get(&prompt.snippet_id) {
                 PromptTransition::Completed(ExecutionOutcome {
@@ -192,14 +194,14 @@ fn cycle_prompt_variable<P: SuggestionProvider>(
 
     let len = prompt.variables.len() as isize;
     prompt.index = (prompt.index as isize + delta).rem_euclid(len) as usize;
-    load_prompt_state(prompt, provider, cwd, status);
+    load_prompt_state(prompt, provider, cwd);
+    *status = prompt.error.clone();
 }
 
 pub(crate) fn load_prompt_state<P: SuggestionProvider>(
     prompt: &mut PromptState,
     provider: &P,
     cwd: &Path,
-    status: &mut Option<String>,
 ) {
     let variable = prompt.current_variable().clone();
     prompt.input = prompt
@@ -217,11 +219,6 @@ pub(crate) fn load_prompt_state<P: SuggestionProvider>(
             Vec::new()
         }
     };
-    if prompt.error.is_some() {
-        *status = prompt.error.clone();
-    } else {
-        *status = None;
-    }
     prompt.reset_selection();
 }
 

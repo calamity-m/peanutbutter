@@ -34,6 +34,7 @@ impl FrecencyStore {
         }
         let raw = fs::read_to_string(path)?;
         let mut events = Vec::new();
+        let mut skipped = 0u32;
         for line in raw.lines() {
             if line.trim().is_empty() {
                 continue;
@@ -42,12 +43,15 @@ impl FrecencyStore {
             let (Some(ts), Some(id_str), Some(cwd_str)) =
                 (parts.next(), parts.next(), parts.next())
             else {
+                skipped += 1;
                 continue;
             };
             let Ok(timestamp) = ts.parse::<u64>() else {
+                skipped += 1;
                 continue;
             };
             let Some((rel, slug)) = id_str.split_once('#') else {
+                skipped += 1;
                 continue;
             };
             events.push(UsageEvent {
@@ -55,6 +59,12 @@ impl FrecencyStore {
                 cwd: PathBuf::from(cwd_str),
                 timestamp,
             });
+        }
+        if skipped > 0 {
+            eprintln!(
+                "pb: warning: skipped {skipped} malformed line(s) in state file {}",
+                path.display()
+            );
         }
         Ok(Self { events })
     }

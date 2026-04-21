@@ -304,7 +304,8 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
             });
         }
         let mut prompt = PromptState::new(snippet_id, variables);
-        load_prompt_state(&mut prompt, &self.provider, &self.cwd, &mut self.status);
+        load_prompt_state(&mut prompt, &self.provider, &self.cwd);
+        self.status = prompt.error.clone();
         self.screen = Screen::Prompt(prompt);
         AppEvent::Continue
     }
@@ -328,7 +329,7 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
 
     pub(crate) fn selected_browse_snippet(&self) -> Option<&IndexedSnippet> {
         let visible = self.browse.visible(&self.tree);
-        let idx = self.browse.list.selected().unwrap_or(0);
+        let idx = self.browse.selection.unwrap_or(0);
         let entry = visible.get(idx)?;
         match entry {
             BrowseEntry::Snippet(snippet) => self.index.get(&snippet.id),
