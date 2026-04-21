@@ -7,6 +7,7 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  BINARY_NAME: peanutbutter
 
 jobs:
   ci:
@@ -53,8 +54,8 @@ jobs:
       - name: Package release artifact
         run: |
           mkdir -p dist
-          tar -czf "dist/pb-${{ matrix.target }}.tar.gz" \
-            -C "target/${{ matrix.target }}/release" pb
+          tar -czf "dist/${{ env.BINARY_NAME }}-${{ matrix.target }}.tar.gz" \
+            -C "target/${{ matrix.target }}/release" "${{ env.BINARY_NAME }}"
       - name: Update unstable release
         uses: softprops/action-gh-release@v2
         with:
@@ -62,7 +63,7 @@ jobs:
           name: "Unstable (main)"
           prerelease: true
           make_latest: false
-          files: dist/pb-${{ matrix.target }}.tar.gz
+          files: dist/${{ env.BINARY_NAME }}-${{ matrix.target }}.tar.gz
           body: |
             Automated build from `main` at ${{ github.sha }}.
 
