@@ -106,6 +106,7 @@ pub struct Theme {
     pub placeholder: Style,
     pub active_prompt: Style,
     pub divider: Style,
+    pub border: Style,
     pub error: Style,
 }
 
@@ -126,7 +127,8 @@ impl Default for Theme {
                 .fg(Color::Black)
                 .bg(Color::White)
                 .add_modifier(Modifier::BOLD),
-            divider: Style::default().fg(muted),
+            divider: Style::default().fg(Color::DarkGray),
+            border: Style::default().fg(Color::DarkGray),
             error: Style::default().fg(accent).bg(selected_bg),
         }
     }
@@ -140,7 +142,6 @@ impl Theme {
             let color = parse_color(&color)?;
             theme.chrome = theme.chrome.fg(color);
             theme.placeholder = theme.placeholder.fg(color);
-            theme.divider = theme.divider.fg(color);
         }
 
         if let Some(color) = raw.accent {

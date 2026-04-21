@@ -25,7 +25,12 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
     }
 
     fn render_select(&mut self, frame: &mut Frame<'_>) {
-        let area = frame.area();
+        let outer = frame.area();
+        let border = Block::default()
+            .borders(Borders::ALL)
+            .border_style(self.theme.border);
+        frame.render_widget(border, outer);
+        let area = Block::default().borders(Borders::ALL).inner(outer);
         let fuzzy_hits = self.search_hits();
         let browse_visible = self.browse.visible(&self.tree);
         let chunks = Layout::default()
@@ -40,6 +45,12 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
             .direction(Direction::Horizontal)
             .constraints([Constraint::Percentage(42), Constraint::Percentage(58)])
             .split(chunks[0]);
+        if let Some(cell) = frame.buffer_mut().cell_mut(Position {
+            x: main[1].x,
+            y: outer.y,
+        }) {
+            cell.set_char('┬').set_style(self.theme.border);
+        }
 
         let (prompt, stats, mode) = match self.nav_mode {
             NavigationMode::Fuzzy => (
@@ -60,7 +71,7 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
                 &stats,
                 mode,
                 chunks[1].width,
-                main[1].x,
+                main[1].x.saturating_sub(chunks[1].x),
             ),
             chunks[1],
         );
@@ -161,7 +172,12 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
     }
 
     fn render_prompt(&self, frame: &mut Frame<'_>, prompt: &PromptState) {
-        let area = frame.area();
+        let outer = frame.area();
+        let border = Block::default()
+            .borders(Borders::ALL)
+            .border_style(self.theme.border);
+        frame.render_widget(border, outer);
+        let area = Block::default().borders(Borders::ALL).inner(outer);
         let preview = self.prompt_preview_text(prompt);
         let cmd_height = (preview.lines.len() as u16).max(1);
 
@@ -454,9 +470,9 @@ fn select_header(
     };
 
     let status_line = Line::from(vec![
-        Span::raw(prefix),
+        Span::styled(prefix, theme.divider),
         Span::styled(mode_label, theme.emphasis),
-        Span::raw(right_span),
+        Span::styled(right_span, theme.divider),
     ]);
     Paragraph::new(Text::from(vec![status_line, prompt_line]))
 }
