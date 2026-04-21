@@ -27,6 +27,10 @@ pub(crate) struct PromptState {
 
 impl PromptState {
     pub(crate) fn new(snippet_id: crate::domain::SnippetId, variables: Vec<Variable>) -> Self {
+        debug_assert!(
+            !variables.is_empty(),
+            "PromptState requires at least one variable; callers must complete the snippet directly when variables.is_empty()"
+        );
         Self {
             snippet_id,
             variables,
@@ -40,7 +44,14 @@ impl PromptState {
     }
 
     pub(crate) fn current_variable(&self) -> &Variable {
-        &self.variables[self.index]
+        debug_assert!(
+            self.index < self.variables.len(),
+            "PromptState index {} out of bounds (variables.len() = {})",
+            self.index,
+            self.variables.len()
+        );
+        let safe_idx = self.index.min(self.variables.len().saturating_sub(1));
+        &self.variables[safe_idx]
     }
 
     pub(crate) fn current_value(&self) -> String {
@@ -214,20 +225,35 @@ pub(crate) fn load_prompt_state<P: SuggestionProvider>(
     prompt.reset_selection();
 }
 
-pub fn render_command(template: &str, values: &BTreeMap<String, String>) -> String {
-    let mut out = String::with_capacity(template.len());
+/// One piece of a parsed snippet template.
+enum Segment<'a> {
+    Literal(&'a str),
+    Placeholder { name: &'a str, raw: &'a str },
+}
+
+/// Tokenize a template into literal runs and `<@name[:source]>` placeholders.
+/// Malformed `<@...>` (rejected by [`placeholder_name`]) stays inside the
+/// surrounding literal — callers reproduce it verbatim that way.
+fn template_segments(template: &str) -> Vec<Segment<'_>> {
+    let mut out = Vec::new();
     let bytes = template.as_bytes();
+    let mut literal_start = 0;
     let mut i = 0;
     while i < bytes.len() {
         if i + 1 < bytes.len() && bytes[i] == b'<' && bytes[i + 1] == b'@' {
-            let start = i + 2;
-            if let Some(end_offset) = template[start..].find('>') {
-                let end = start + end_offset;
-                if let Some(name) = placeholder_name(&template[start..end])
-                    && let Some(value) = values.get(name)
-                {
-                    out.push_str(value);
-                    i = end + 1;
+            let inner_start = i + 2;
+            if let Some(end_offset) = template[inner_start..].find('>') {
+                let inner_end = inner_start + end_offset;
+                if let Some(name) = placeholder_name(&template[inner_start..inner_end]) {
+                    if literal_start < i {
+                        out.push(Segment::Literal(&template[literal_start..i]));
+                    }
+                    out.push(Segment::Placeholder {
+                        name,
+                        raw: &template[i..=inner_end],
+                    });
+                    i = inner_end + 1;
+                    literal_start = i;
                     continue;
                 }
             }
@@ -235,9 +261,25 @@ pub fn render_command(template: &str, values: &BTreeMap<String, String>) -> Stri
         let ch = template[i..]
             .chars()
             .next()
-            .expect("slice at valid char boundary");
-        out.push(ch);
+            .expect("byte index sits on a char boundary");
         i += ch.len_utf8();
+    }
+    if literal_start < i {
+        out.push(Segment::Literal(&template[literal_start..i]));
+    }
+    out
+}
+
+pub fn render_command(template: &str, values: &BTreeMap<String, String>) -> String {
+    let mut out = String::with_capacity(template.len());
+    for segment in template_segments(template) {
+        match segment {
+            Segment::Literal(text) => out.push_str(text),
+            Segment::Placeholder { name, raw } => match values.get(name) {
+                Some(value) => out.push_str(value),
+                None => out.push_str(raw),
+            },
+        }
     }
     out
 }
@@ -249,46 +291,32 @@ pub(crate) fn render_command_text(
     theme: &Theme,
 ) -> Text<'static> {
     let mut chunks = Vec::new();
-    let bytes = template.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() {
-        if i + 1 < bytes.len() && bytes[i] == b'<' && bytes[i + 1] == b'@' {
-            let start = i + 2;
-            if let Some(end_offset) = template[start..].find('>') {
-                let end = start + end_offset;
-                let placeholder = &template[i..=end];
-                if let Some(name) = placeholder_name(&template[start..end]) {
-                    if let Some(value) = values.get(name) {
-                        let style = if Some(name) == active_variable {
+    for segment in template_segments(template) {
+        match segment {
+            Segment::Literal(text) => chunks.push(StyledChunk::plain(text.to_string())),
+            Segment::Placeholder { name, raw } => {
+                let is_active = Some(name) == active_variable;
+                match values.get(name) {
+                    Some(value) => {
+                        let style = if is_active {
                             active_prompt_style(theme)
                         } else {
                             Style::default()
                         };
                         chunks.push(StyledChunk::new(value.clone(), style));
-                        i = end + 1;
-                        continue;
                     }
-
-                    let style = if Some(name) == active_variable {
-                        active_prompt_style(theme)
-                    } else {
-                        placeholder_prompt_style(theme)
-                    };
-                    chunks.push(StyledChunk::new(placeholder.to_string(), style));
-                    i = end + 1;
-                    continue;
+                    None => {
+                        let style = if is_active {
+                            active_prompt_style(theme)
+                        } else {
+                            placeholder_prompt_style(theme)
+                        };
+                        chunks.push(StyledChunk::new(raw.to_string(), style));
+                    }
                 }
             }
         }
-
-        let ch = template[i..]
-            .chars()
-            .next()
-            .expect("slice at valid char boundary");
-        chunks.push(StyledChunk::plain(ch.to_string()));
-        i += ch.len_utf8();
     }
-
     styled_text(chunks)
 }
 
@@ -356,39 +384,20 @@ pub(crate) fn cursor_in_template(
 ) -> (u16, u16) {
     let mut col: u16 = 0;
     let mut row: u16 = 0;
-    let mut i = 0;
-    let bytes = template.as_bytes();
-
-    while i < bytes.len() {
-        if i + 1 < bytes.len() && bytes[i] == b'<' && bytes[i + 1] == b'@' {
-            let start = i + 2;
-            if let Some(end_offset) = template[start..].find('>') {
-                let end = start + end_offset;
-                if let Some(name) = placeholder_name(&template[start..end]) {
-                    if name == active_variable {
-                        if let Some(val) = values.get(name) {
-                            advance_cursor(&mut col, &mut row, val);
-                        }
-                        return (col, row);
+    for segment in template_segments(template) {
+        match segment {
+            Segment::Literal(text) => advance_cursor(&mut col, &mut row, text),
+            Segment::Placeholder { name, raw } => {
+                if name == active_variable {
+                    if let Some(val) = values.get(name) {
+                        advance_cursor(&mut col, &mut row, val);
                     }
-                    let rendered = values
-                        .get(name)
-                        .cloned()
-                        .unwrap_or_else(|| template[i..=end].to_string());
-                    advance_cursor(&mut col, &mut row, &rendered);
-                    i = end + 1;
-                    continue;
+                    return (col, row);
                 }
+                let rendered = values.get(name).map(String::as_str).unwrap_or(raw);
+                advance_cursor(&mut col, &mut row, rendered);
             }
         }
-        let ch = template[i..].chars().next().unwrap();
-        if ch == '\n' {
-            row += 1;
-            col = 0;
-        } else {
-            col += 1;
-        }
-        i += ch.len_utf8();
     }
     (col, row)
 }

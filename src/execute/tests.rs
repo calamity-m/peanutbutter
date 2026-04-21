@@ -113,40 +113,41 @@ fn render_command_keeps_unresolved_placeholders() {
     assert_eq!(rendered, "echo <@missing>");
 }
 
+fn span_style_for(line: &Line<'_>, content: &str) -> ratatui::style::Style {
+    line.spans
+        .iter()
+        .find(|span| span.content.as_ref() == content)
+        .unwrap_or_else(|| panic!("expected a span with content {content:?}"))
+        .style
+}
+
 #[test]
 fn render_command_text_highlights_active_value() {
     let mut values = BTreeMap::new();
     values.insert("file".to_string(), "Cargo.toml".to_string());
-    let rendered = render_command_text(
-        "cat <@file>",
-        &values,
-        Some("file"),
-        &crate::config::Theme::default(),
-    );
+    let theme = crate::config::Theme::default();
+    let rendered = render_command_text("cat <@file>", &values, Some("file"), &theme);
     assert_eq!(line_text(&rendered.lines[0]), "cat Cargo.toml");
     assert_eq!(
-        rendered.lines[0].spans[4].style,
-        active_prompt_style(&crate::config::Theme::default())
+        span_style_for(&rendered.lines[0], "Cargo.toml"),
+        active_prompt_style(&theme)
     );
 }
 
 #[test]
 fn render_command_text_highlights_active_placeholder_and_dims_others() {
     let values = BTreeMap::new();
-    let rendered = render_command_text(
-        "echo <@missing> <@later>",
-        &values,
-        Some("missing"),
-        &crate::config::Theme::default(),
-    );
+    let theme = crate::config::Theme::default();
+    let rendered =
+        render_command_text("echo <@missing> <@later>", &values, Some("missing"), &theme);
     assert_eq!(line_text(&rendered.lines[0]), "echo <@missing> <@later>");
     assert_eq!(
-        rendered.lines[0].spans[5].style,
-        active_prompt_style(&crate::config::Theme::default())
+        span_style_for(&rendered.lines[0], "<@missing>"),
+        active_prompt_style(&theme)
     );
     assert_eq!(
-        rendered.lines[0].spans[7].style,
-        placeholder_prompt_style(&crate::config::Theme::default())
+        span_style_for(&rendered.lines[0], "<@later>"),
+        placeholder_prompt_style(&theme)
     );
 }
 

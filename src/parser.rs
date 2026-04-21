@@ -1,6 +1,9 @@
 use crate::domain::{Frontmatter, Snippet, SnippetFile, SnippetId, Variable, VariableSource};
 use std::path::Path;
 
+/// Half-open line range `[start_line, end_line)` over `content.lines()`,
+/// identifying where a single snippet (heading + fenced code block) sits in
+/// its source file. Indices are 0-based; `end_line == lines.len()` is valid.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SnippetLineRange {
     pub id: SnippetId,

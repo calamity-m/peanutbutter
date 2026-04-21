@@ -3,7 +3,7 @@ use crate::domain::SnippetId;
 use crate::execute::{self, ExecuteOptions, ExecutionOutcome};
 use crate::frecency::FrecencyStore;
 use crate::index::{IndexedSnippet, SnippetIndex};
-use crate::parser::snippet_line_ranges;
+use crate::parser::{SnippetLineRange, snippet_line_ranges};
 use std::env;
 use std::ffi::OsString;
 use std::fs;
@@ -288,15 +288,37 @@ fn remove_snippet_from_content(
         .iter()
         .find(|range| &range.id == snippet_id)
         .ok_or_else(|| io::Error::other(format!("snippet not found in file: {snippet_id}")))?;
+    remove_lines_in_range(content, target)
+}
 
+fn remove_lines_in_range(content: &str, target: &SnippetLineRange) -> io::Result<String> {
     let lines: Vec<&str> = content.lines().collect();
+    if target.start_line > lines.len()
+        || target.end_line > lines.len()
+        || target.start_line > target.end_line
+    {
+        return Err(io::Error::other(format!(
+            "snippet line range out of bounds for {}: {}..{} (file has {} lines)",
+            target.id,
+            target.start_line,
+            target.end_line,
+            lines.len()
+        )));
+    }
+
     let had_trailing_newline = content.ends_with('\n');
     let mut prefix: Vec<&str> = lines[..target.start_line].to_vec();
     let mut suffix: Vec<&str> = lines[target.end_line..].to_vec();
-    while prefix.last().is_some_and(|line| line.trim().is_empty()) {
+    while prefix
+        .last()
+        .is_some_and(|line: &&str| line.trim().is_empty())
+    {
         prefix.pop();
     }
-    while suffix.first().is_some_and(|line| line.trim().is_empty()) {
+    while suffix
+        .first()
+        .is_some_and(|line: &&str| line.trim().is_empty())
+    {
         suffix.remove(0);
     }
 
@@ -580,6 +602,33 @@ echo two\n\
         assert!(rewritten.contains("## One"));
         assert!(!rewritten.contains("## Two"));
         assert!(rewritten.contains("# Title"));
+    }
+
+    #[test]
+    fn remove_lines_in_range_errors_when_out_of_bounds() {
+        let content = "one\ntwo\nthree\n";
+        let bogus = SnippetLineRange {
+            id: SnippetId::new("snippets.md", "ghost"),
+            start_line: 10,
+            end_line: 20,
+        };
+        let err = remove_lines_in_range(content, &bogus).unwrap_err();
+        assert!(
+            err.to_string().contains("out of bounds"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn remove_lines_in_range_errors_when_start_after_end() {
+        let content = "one\ntwo\nthree\n";
+        let bogus = SnippetLineRange {
+            id: SnippetId::new("snippets.md", "ghost"),
+            start_line: 2,
+            end_line: 1,
+        };
+        let err = remove_lines_in_range(content, &bogus).unwrap_err();
+        assert!(err.to_string().contains("out of bounds"));
     }
 
     #[test]
