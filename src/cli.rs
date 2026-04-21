@@ -4,6 +4,7 @@ use crate::execute::{self, ExecuteOptions, ExecutionOutcome};
 use crate::frecency::FrecencyStore;
 use crate::index::{IndexedSnippet, SnippetIndex};
 use crate::parser::{SnippetLineRange, snippet_line_ranges};
+use crate::{BASH_ALIAS_NAME, BINARY_NAME};
 use std::env;
 use std::ffi::OsString;
 use std::fs;
@@ -88,14 +89,17 @@ where
 
 pub fn help_text(paths: &Paths) -> String {
     let mut out = String::new();
-    out.push_str("pb: peanutbutter snippet manager\n");
+    out.push_str(&format!("{BINARY_NAME}: snippet manager\n"));
     out.push_str("usage:\n");
-    out.push_str("  pb\n");
-    out.push_str("  pb execute\n");
-    out.push_str("  pb --bash [C+b]\n");
-    out.push_str("  pb add [path]\n");
-    out.push_str("  pb del <name-or-id>\n");
+    out.push_str(&format!("  {BINARY_NAME}\n"));
+    out.push_str(&format!("  {BINARY_NAME} execute\n"));
+    out.push_str(&format!("  {BINARY_NAME} --bash [C+b]\n"));
+    out.push_str(&format!("  {BINARY_NAME} add [path]\n"));
+    out.push_str(&format!("  {BINARY_NAME} del <name-or-id>\n"));
     out.push('\n');
+    out.push_str(&format!(
+        "bash shorthand: `{BINARY_NAME} --bash` also defines `{BASH_ALIAS_NAME}`\n\n"
+    ));
     out.push_str("snippet roots:\n");
     for root in &paths.snippet_roots {
         out.push_str(&format!("  {}\n", root.display()));
@@ -115,7 +119,9 @@ pub fn bash_integration_script(binding: &str, executable: &Path) -> io::Result<S
         .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err))?;
     let executable = shell_quote(&executable.to_string_lossy());
     Ok(format!(
-        r#"__pb_insert_command() {{
+        r#"\builtin unalias {BASH_ALIAS_NAME} &>/dev/null || \builtin true
+\builtin alias {BASH_ALIAS_NAME}='{BINARY_NAME}'
+__pb_insert_command() {{
   local __pb_cmd
   __pb_cmd=$({executable} execute)
   local __pb_status=$?
@@ -356,7 +362,11 @@ fn open_in_editor(target: &Path, editor_override: Option<&str>) -> io::Result<()
                 .ok()
                 .filter(|value| !value.trim().is_empty())
         })
-        .ok_or_else(|| io::Error::other("set $VISUAL or $EDITOR before using pb add"))?;
+        .ok_or_else(|| {
+            io::Error::other(format!(
+                "set $VISUAL or $EDITOR before using {BINARY_NAME} add"
+            ))
+        })?;
 
     let status = Command::new("bash")
         .arg("-lc")
@@ -462,11 +472,34 @@ mod tests {
 
     #[test]
     fn bash_script_uses_readline_bind_and_executable_path() {
-        let script = bash_integration_script("C+b", Path::new("/tmp/pb")).unwrap();
+        let script = bash_integration_script("C+b", Path::new("/tmp/peanutbutter")).unwrap();
+        assert!(script.contains("\\builtin unalias pb &>/dev/null || \\builtin true"));
+        assert!(script.contains("\\builtin alias pb='peanutbutter'"));
         assert!(script.contains("bind -x '\"\\C-b\":__pb_insert_command'"));
-        assert!(script.contains("'/tmp/pb' execute"));
+        assert!(script.contains("'/tmp/peanutbutter' execute"));
         assert!(script.contains("READLINE_LINE=\"${READLINE_LINE}\""));
         assert!(script.contains("READLINE_POINT=${READLINE_POINT}"));
+    }
+
+    #[test]
+    fn help_text_prefers_peanutbutter_and_mentions_pb_alias() {
+        let paths = test_paths(Path::new("/tmp/snippets"));
+        let help = help_text(&paths);
+        assert!(help.contains("peanutbutter: snippet manager"));
+        assert!(help.contains("  peanutbutter --bash [C+b]"));
+        assert!(help.contains("defines `pb`"));
+        assert!(!help.contains("  pb execute"));
+    }
+
+    #[test]
+    fn default_bash_binding_script_emits_pb_alias() {
+        let CliCommand::Bash { binding } = parse_args(vec![OsString::from("--bash")]).unwrap()
+        else {
+            panic!("expected bash command");
+        };
+        let script = bash_integration_script(&binding, Path::new("/tmp/peanutbutter")).unwrap();
+        assert!(script.contains("\\builtin alias pb='peanutbutter'"));
+        assert!(script.contains("bind -x '\"\\C-b\":__pb_insert_command'"));
     }
 
     #[test]

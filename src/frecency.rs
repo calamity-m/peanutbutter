@@ -1,3 +1,4 @@
+use crate::BINARY_NAME;
 use crate::config::FrecencyConfig;
 use crate::domain::SnippetId;
 use std::fs;
@@ -62,7 +63,7 @@ impl FrecencyStore {
         }
         if skipped > 0 {
             eprintln!(
-                "pb: warning: skipped {skipped} malformed line(s) in state file {}",
+                "{BINARY_NAME}: warning: skipped {skipped} malformed line(s) in state file {}",
                 path.display()
             );
         }

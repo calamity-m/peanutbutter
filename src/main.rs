@@ -1,3 +1,4 @@
+use peanutbutter::BINARY_NAME;
 use peanutbutter::cli;
 use peanutbutter::config;
 use std::io::{self, Write};
@@ -6,7 +7,7 @@ fn main() {
     let app_config = match config::load() {
         Ok(config) => config,
         Err(err) => {
-            eprintln!("pb: {err}");
+            eprintln!("{BINARY_NAME}: {err}");
             std::process::exit(1);
         }
     };
@@ -15,7 +16,7 @@ fn main() {
     let command = match cli::parse_args(args) {
         Ok(command) => command,
         Err(err) => {
-            eprintln!("pb: {err}");
+            eprintln!("{BINARY_NAME}: {err}");
             eprintln!();
             eprint!("{}", cli::help_text(&paths));
             std::process::exit(2);
@@ -35,7 +36,7 @@ fn main() {
             match result {
                 Ok(result) => {
                     if let Some(warning) = result.persist_warning {
-                        eprintln!("pb: warning: could not save frecency: {warning}");
+                        eprintln!("{BINARY_NAME}: warning: could not save frecency: {warning}");
                     }
                     Ok(())
                 }
@@ -62,9 +63,9 @@ fn main() {
     };
 
     if let Err(err) = result {
-        eprintln!("pb: {err}");
+        eprintln!("{BINARY_NAME}: {err}");
         if is_execute {
-            eprintln!("pb: execute failed");
+            eprintln!("{BINARY_NAME}: execute failed");
         }
         std::process::exit(1);
     }

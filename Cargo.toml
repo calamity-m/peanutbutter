@@ -1,11 +1,11 @@
 [package]
 name = "peanutbutter"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
-default-run = "pb"
+default-run = "peanutbutter"
 
 [[bin]]
-name = "pb"
+name = "peanutbutter"
 path = "src/main.rs"
 
 [dependencies]

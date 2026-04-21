@@ -6,10 +6,11 @@ A command-line snippet tool that tries to mould to your own use-cases.
 
 ```bash
 export PEANUTBUTTER_PATH="$PWD/examples"
-# pb --bash C+b
-# pb --bash C+f
+# peanutbutter --bash C+b
+# peanutbutter --bash C+f
 # etc.
-eval "$(pb --bash)"
+eval "$(peanutbutter --bash)"
+# also installs `pb` as a bash alias for `peanutbutter`
 ```
 
 ## Why
@@ -158,7 +159,9 @@ Notes:
 
 ## Peanutbutter CLI
 
-1. `pb --bash C+b` <-- create bash for ctrl+b hotkey, so I can put into my bashrc eval "$(...)"
-2. `pb add ...` <-- add a snippet, opening the relevant snippet file in their $EDITOR/$VISUAL
-3. `pb del ...` <-- delete a snippet
-4. `pb execute` <-- run the inline tui for people who want to be explicit, and just execute the snippet they complete. doesn't have to go into bash buffer, but could be piped, e.g. pb execute | grep -i "a"
+1. `peanutbutter --bash C+b` <-- create bash for ctrl+b hotkey, so I can put into my bashrc eval "$(...)"
+2. `peanutbutter add ...` <-- add a snippet, opening the relevant snippet file in their $EDITOR/$VISUAL
+3. `peanutbutter del ...` <-- delete a snippet
+4. `peanutbutter execute` <-- run the inline tui for people who want to be explicit, and just execute the snippet they complete. doesn't have to go into bash buffer, but could be piped, e.g. peanutbutter execute | grep -i "a"
+
+After `eval "$(peanutbutter --bash)"`, bash also gets a `pb` alias that points at `peanutbutter`.

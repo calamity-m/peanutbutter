@@ -4,7 +4,7 @@
 #   ~/.config/peanutbutter/config.toml
 #
 # Or point peanutbutter at it directly:
-#   PB_CONFIG_FILE=/path/to/config.toml pb execute
+#   PB_CONFIG_FILE=/path/to/config.toml peanutbutter execute
 
 [paths]
 # Additional snippet roots.
