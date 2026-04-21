@@ -5,7 +5,6 @@ use crossterm::cursor;
 use crossterm::event::{self, Event};
 use crossterm::terminal::{self, ClearType, disable_raw_mode, enable_raw_mode};
 use ratatui::backend::CrosstermBackend;
-use ratatui::layout::Position;
 use ratatui::{Terminal, TerminalOptions, Viewport};
 use std::fs;
 use std::io;
@@ -58,10 +57,13 @@ pub fn run_execute_with_provider<P: SuggestionProvider>(
     );
     let _stdout_guard = StdoutTtyGuard::enter()?;
     let _raw_mode = RawModeGuard::enter()?;
-    let restore_cursor = current_cursor_position();
     let mut terminal = build_terminal(options.viewport_height)?;
+    let mut viewport_top: Option<u16> = None;
     let outcome = loop {
-        terminal.draw(|frame| app.render(frame))?;
+        terminal.draw(|frame| {
+            viewport_top = viewport_top.or(Some(frame.area().y));
+            app.render(frame);
+        })?;
         if !event::poll(Duration::from_millis(250))? {
             continue;
         }
@@ -74,7 +76,12 @@ pub fn run_execute_with_provider<P: SuggestionProvider>(
             AppEvent::Completed(outcome) => break Some(outcome),
         }
     };
-    cleanup_terminal(restore_cursor)?;
+    // Drain any buffered events (e.g. key-release events from the kitty keyboard
+    // protocol) so they don't leak into the shell's readline after we exit.
+    while event::poll(Duration::ZERO).unwrap_or(false) {
+        let _ = event::read();
+    }
+    cleanup_terminal(viewport_top)?;
     Ok(outcome)
 }
 
@@ -182,16 +189,12 @@ impl Drop for StdoutTtyGuard {
     }
 }
 
-fn current_cursor_position() -> Option<Position> {
-    cursor::position().ok().map(|(x, y)| Position { x, y })
-}
-
-fn cleanup_terminal(restore_cursor: Option<Position>) -> io::Result<()> {
+fn cleanup_terminal(viewport_top: Option<u16>) -> io::Result<()> {
     let mut stdout = io::stdout();
-    if let Some(position) = restore_cursor {
+    if let Some(y) = viewport_top {
         crossterm::execute!(
             stdout,
-            cursor::MoveTo(position.x, position.y),
+            cursor::MoveTo(0, y),
             terminal::Clear(ClearType::FromCursorDown),
             cursor::Show
         )?;
