@@ -543,7 +543,7 @@ fn render_snippet_preview_text(
 ) -> Text<'static> {
     let mut text = Text::default();
 
-    let mut title = vec![Span::styled("# ".to_string(), theme.chrome)];
+    let mut title = vec![Span::styled("▍ ".to_string(), theme.fuzzy_highlight)];
     title.extend(highlighted_spans(
         snippet.name(),
         &match_positions(scorer, pattern, snippet.name()),
@@ -843,7 +843,8 @@ mod tests {
         );
         let chars = text_to_styled_chars(&preview);
         let rendered: String = chars.iter().map(|styled| styled.ch).collect();
-        let idx = rendered.find("docker").expect("description in preview");
+        let byte_idx = rendered.find("docker").expect("description in preview");
+        let idx = rendered[..byte_idx].chars().count();
         let docker: Vec<_> = chars[idx..idx + "docker".chars().count()].iter().collect();
         assert!(
             docker
@@ -866,7 +867,8 @@ mod tests {
         );
         let chars = text_to_styled_chars(&preview);
         let rendered: String = chars.iter().map(|styled| styled.ch).collect();
-        let idx = rendered.find("$HOME").expect("shell body in preview") + 1;
+        let byte_idx = rendered.find("$HOME").expect("shell body in preview");
+        let idx = rendered[..byte_idx].chars().count() + 1;
         let home: Vec<_> = chars[idx..idx + "HOME".chars().count()].iter().collect();
         let expected = Style::default()
             .fg(ratatui::style::Color::Cyan)
