@@ -250,6 +250,18 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
                 self.fuzzy.move_cursor(-1, hits.len());
                 self.preview_scroll = 0;
             }
+            KeyCode::PageUp => {
+                if !hits.is_empty() {
+                    self.fuzzy.selection = Some(hits.len() - 1);
+                }
+                self.preview_scroll = 0;
+            }
+            KeyCode::PageDown => {
+                if !hits.is_empty() {
+                    self.fuzzy.selection = Some(0);
+                }
+                self.preview_scroll = 0;
+            }
             KeyCode::Enter => {
                 if let Some(snippet) = self.selected_fuzzy_snippet() {
                     let id = snippet.id().clone();
@@ -283,6 +295,18 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
             }
             KeyCode::Down => {
                 self.browse.move_cursor(-1, visible.len());
+                self.preview_scroll = 0;
+            }
+            KeyCode::PageUp => {
+                if !visible.is_empty() {
+                    self.browse.selection = Some(visible.len() - 1);
+                }
+                self.preview_scroll = 0;
+            }
+            KeyCode::PageDown => {
+                if !visible.is_empty() {
+                    self.browse.selection = Some(0);
+                }
                 self.preview_scroll = 0;
             }
             KeyCode::Enter => {
