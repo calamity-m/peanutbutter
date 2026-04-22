@@ -9,6 +9,7 @@ use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Wrap};
 use crate::browse::{BrowseEntry, DirNode};
 use crate::fuzzy::{FuzzyScorer, build_pattern};
 use crate::index::IndexedSnippet;
+use crate::search;
 use nucleo_matcher::pattern::Pattern;
 
 use super::app::{ExecutionApp, NavigationMode, Screen, SuggestionProvider};
@@ -40,7 +41,14 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
             .border_style(self.theme.border);
         frame.render_widget(border, outer);
         let area = Block::default().borders(Borders::ALL).inner(outer);
-        let fuzzy_hits = self.search_hits();
+        let fuzzy_hits = search::rank(
+            &self.index,
+            &self.fuzzy.query,
+            &self.frecency,
+            &self.cwd,
+            self.now,
+            &self.search_config,
+        );
         let highlight_pattern = matches!(self.nav_mode, NavigationMode::Fuzzy)
             .then(|| self.fuzzy.query.trim())
             .filter(|query| !query.is_empty())
@@ -114,9 +122,10 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
                     )));
                 }
                 let visual = padding + total.saturating_sub(1).saturating_sub(selected);
-                let mut list_state =
-                    ratatui::widgets::ListState::default().with_selected(Some(visual));
-                frame.render_stateful_widget(List::new(items), main[0], &mut list_state);
+                let items_len = items.len();
+                clamp_list_offset(&mut self.fuzzy_list, items_len, main[0].height as usize);
+                self.fuzzy_list.select(Some(visual));
+                frame.render_stateful_widget(List::new(items), main[0], &mut self.fuzzy_list);
             }
             NavigationMode::Browse => {
                 let total = browse_visible.len();
@@ -138,9 +147,10 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
                     ))
                 }));
                 let visual = padding + total.saturating_sub(1).saturating_sub(selected);
-                let mut list_state =
-                    ratatui::widgets::ListState::default().with_selected(Some(visual));
-                frame.render_stateful_widget(List::new(items), main[0], &mut list_state);
+                let items_len = items.len();
+                clamp_list_offset(&mut self.browse_list, items_len, main[0].height as usize);
+                self.browse_list.select(Some(visual));
+                frame.render_stateful_widget(List::new(items), main[0], &mut self.browse_list);
             }
         }
 
@@ -502,6 +512,13 @@ fn snippet_list_line<'a>(
 
 fn digits(n: usize) -> usize {
     if n == 0 { 1 } else { n.ilog10() as usize + 1 }
+}
+
+fn clamp_list_offset(state: &mut ratatui::widgets::ListState, items_len: usize, height: usize) {
+    let max_offset = items_len.saturating_sub(height);
+    if *state.offset_mut() > max_offset {
+        *state.offset_mut() = max_offset;
+    }
 }
 
 fn fuzzy_snippet_row_spans(

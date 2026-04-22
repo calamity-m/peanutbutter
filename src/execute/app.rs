@@ -6,6 +6,7 @@ use crate::fuzzy::FuzzyState;
 use crate::index::{IndexedSnippet, SnippetIndex};
 use crate::search;
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use ratatui::widgets::ListState;
 use std::io;
 use std::path::{Path, PathBuf};
 
@@ -86,6 +87,8 @@ pub struct ExecutionApp<P = SystemSuggestionProvider> {
     pub browse: BrowseState,
     pub(crate) status: Option<String>,
     pub(crate) preview_scroll: u16,
+    pub(crate) fuzzy_list: ListState,
+    pub(crate) browse_list: ListState,
     pub(crate) search_config: SearchConfig,
     pub(crate) theme: Theme,
 }
@@ -119,6 +122,8 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
             browse: BrowseState::new(),
             status: None,
             preview_scroll: 0,
+            fuzzy_list: ListState::default(),
+            browse_list: ListState::default(),
             search_config,
             theme,
         }
