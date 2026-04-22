@@ -91,6 +91,7 @@ impl Default for FrecencyConfig {
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
 pub struct VariableInputConfig {
     pub default: Option<String>,
     pub suggestions: Vec<String>,
@@ -451,5 +452,30 @@ suggestions = ["GET", "POST"]
         let variable = parsed.variables.get("http_method").unwrap();
         assert_eq!(variable.default.as_deref(), Some("GET"));
         assert_eq!(variable.suggestions, vec!["GET", "POST"]);
+    }
+
+    #[test]
+    fn variable_input_command_only_deserializes() {
+        let raw = r#"
+[variables.file]
+command = "find . -type f"
+"#;
+        let parsed: FileConfig = toml::from_str(raw).unwrap();
+        let variable = parsed.variables.get("file").unwrap();
+        assert_eq!(variable.default, None);
+        assert!(variable.suggestions.is_empty());
+        assert_eq!(variable.command.as_deref(), Some("find . -type f"));
+    }
+
+    #[test]
+    fn example_config_deserializes() {
+        let raw = include_str!("../examples/config.toml");
+        let parsed: FileConfig = toml::from_str(raw).unwrap();
+        let variable = parsed.variables.get("file").unwrap();
+        assert!(variable.suggestions.is_empty());
+        assert_eq!(
+            variable.command.as_deref(),
+            Some("find . -maxdepth 1 -type f | sed 's#^./##' | sort")
+        );
     }
 }

@@ -912,7 +912,7 @@ dependencies = [
 
 [[package]]
 name = "peanutbutter"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "ansi-to-tui",
  "crossterm 0.28.1",

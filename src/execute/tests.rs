@@ -152,19 +152,15 @@ fn render_command_text_highlights_active_placeholder_and_dims_others() {
 }
 
 #[test]
-fn compact_viewport_height_respects_user_cap() {
-    assert_eq!(compact_viewport_height(60, 12), 12);
-    assert_eq!(compact_viewport_height(24, 12), 12);
-    assert_eq!(compact_viewport_height(9, 12), 12);
-    assert_eq!(compact_viewport_height(60, 4), 4);
+fn compact_viewport_height_uses_configured_height() {
+    assert_eq!(compact_viewport_height(12), 12);
+    assert_eq!(compact_viewport_height(4), 4);
+    assert_eq!(compact_viewport_height(20), 20);
 }
 
 #[test]
-fn compact_viewport_height_enforces_20_row_minimum() {
-    assert_eq!(compact_viewport_height(60, 20), 20);
-    assert_eq!(compact_viewport_height(24, 20), 20);
-    assert_eq!(compact_viewport_height(9, 20), 20);
-    assert_eq!(compact_viewport_height(90, 40), 30);
+fn compact_viewport_height_enforces_minimum_of_one() {
+    assert_eq!(compact_viewport_height(0), 1);
 }
 
 #[test]

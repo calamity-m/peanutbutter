@@ -100,13 +100,12 @@ fn build_terminal(viewport_height: u16) -> io::Result<Terminal<CrosstermBackend<
 }
 
 fn inline_viewport_height(max_height: u16) -> io::Result<u16> {
-    let (_, rows) = terminal::size()?;
-    Ok(compact_viewport_height(rows, max_height))
+    let _ = terminal::size()?;
+    Ok(compact_viewport_height(max_height))
 }
 
-pub(crate) fn compact_viewport_height(rows: u16, max_height: u16) -> u16 {
-    let compact = (rows / 3).max(20);
-    compact.min(max_height.max(1))
+pub(crate) fn compact_viewport_height(max_height: u16) -> u16 {
+    max_height.max(1)
 }
 
 struct RawModeGuard;
