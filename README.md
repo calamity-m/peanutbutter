@@ -156,6 +156,7 @@ Notes:
 - `theme.*` currently controls the main selection and prompt colors; colors accept common names like `red`, `dark_gray`, `white`, or `#RRGGBB`
 - `variables.<name>` defines reusable inputs for free-form placeholders like `<@http_method>` or `<@kube_context>`
 - A configured variable can provide either `suggestions = [...]` or `command = "..."`, and may also provide `default = "..."`
+- Suggestion commands (both inline `<@name:cmd>` and `[variables.name] command = "..."`) run under non-login, non-interactive `bash -c`. They inherit `$PATH` from peanutbutter's parent process but do **not** source `~/.bash_profile` or `~/.bashrc`, so they can't use shell aliases or functions defined there. This is deliberate: a login shell's startup output (e.g. `Agent pid NNNN` from ssh-agent) would otherwise leak into the suggestion list, and any interactive prompt it triggers (e.g. an ssh-add passphrase) would hang the TUI.
 
 ## Peanutbutter CLI
 

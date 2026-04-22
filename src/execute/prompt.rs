@@ -146,6 +146,13 @@ pub(crate) fn handle_prompt_key<P: SuggestionProvider>(
             PromptTransition::Stay
         }
         KeyCode::Tab => {
+            if let Some(selected) = prompt.selected_visible_suggestion().cloned()
+                && prompt.input != selected
+            {
+                prompt.input = selected;
+                prompt.reset_selection();
+                return PromptTransition::Stay;
+            }
             cycle_prompt_variable(prompt, 1, provider, cwd, status);
             PromptTransition::Stay
         }
@@ -464,8 +471,12 @@ fn read_dir_entries(cwd: &Path, want_files: bool) -> io::Result<Vec<String>> {
 }
 
 pub(crate) fn command_suggestions(command: &str, cwd: &Path) -> io::Result<Vec<String>> {
+    // `-c` (not `-lc`): a login shell would source the user's profile/bashrc,
+    // whose startup output (e.g. `Agent pid NNNN` from ssh-agent) leaks into
+    // stdout as fake suggestions and whose prompts (e.g. ssh-add passphrase)
+    // block on captured stdin.
     let output = Command::new("bash")
-        .arg("-lc")
+        .arg("-c")
         .arg(command)
         .current_dir(cwd)
         .output()?;

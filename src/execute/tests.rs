@@ -424,6 +424,39 @@ fn prompt_tab_cycles_forward_between_variables() {
 }
 
 #[test]
+fn prompt_tab_fills_highlighted_suggestion_before_cycling() {
+    let variables = vec![
+        Variable {
+            name: "method".to_string(),
+            source: VariableSource::Command("ignored".to_string()),
+        },
+        Variable {
+            name: "path".to_string(),
+            source: VariableSource::Free,
+        },
+    ];
+    let provider = TestProvider::default().with("method", &["GET", "POST"]);
+    let mut app = app_with_body("curl -X <@method> <@path>", variables, provider);
+    let _ = app.handle_key(press(KeyCode::Enter));
+
+    // First Tab: fills the input from the highlighted suggestion without cycling.
+    let _ = app.handle_key(press(KeyCode::Tab));
+    let Screen::Prompt(prompt) = &app.screen else {
+        panic!("expected prompt");
+    };
+    assert_eq!(prompt.current_variable().name, "method");
+    assert_eq!(prompt.input, "GET");
+
+    // Second Tab: input already matches the selection, so it cycles forward.
+    let _ = app.handle_key(press(KeyCode::Tab));
+    let Screen::Prompt(prompt) = &app.screen else {
+        panic!("expected prompt");
+    };
+    assert_eq!(prompt.current_variable().name, "path");
+    assert_eq!(prompt.values.get("method").map(String::as_str), Some("GET"));
+}
+
+#[test]
 fn prompt_shift_tab_cycles_backward_between_variables() {
     let variables = vec![
         Variable {

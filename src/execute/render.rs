@@ -303,7 +303,7 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
         frame.render_widget(
             chrome_line(
                 &self.theme,
-                "tab next  shift+tab prev  enter accept  esc return",
+                "tab complete/next  shift+tab prev  enter accept  esc return",
             ),
             help_area,
         );
