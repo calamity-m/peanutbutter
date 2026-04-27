@@ -79,11 +79,13 @@ fn sort_snippets(node: &mut DirNode) {
     }
 }
 
-/// What we render inside a directory: sub-dirs first (alphabetical), then
-/// the snippets that live directly under that directory.
+/// A single row in the browse list. Sub-directories are listed first
+/// (alphabetical), followed by snippets in the current node.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BrowseEntry {
+    /// A child directory that can be descended into.
     Directory(String),
+    /// A snippet that can be selected.
     Snippet(BrowseSnippet),
 }
 

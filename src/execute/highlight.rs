@@ -1,6 +1,16 @@
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 
+/// Apply syntax highlighting to a shell snippet body and return a ratatui
+/// [`Text`] with styled spans.
+///
+/// Recognised token types and their colours:
+/// - `<@variable>` placeholders — yellow + bold
+/// - `# comments` — dark gray
+/// - `"double"` / `'single'` quoted strings — green
+/// - `$VAR` / `${VAR}` expansions — cyan
+/// - `-flags` / `--flags` — blue
+/// - Shell keywords (`if`, `for`, `while`, etc.) — magenta
 pub(crate) fn highlight_shell(body: &str) -> Text<'static> {
     Text::from(body.lines().map(highlight_shell_line).collect::<Vec<_>>())
 }

@@ -16,6 +16,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use super::app::{AppEvent, ExecutionApp, SuggestionProvider, SystemSuggestionProvider};
 use super::{ExecuteOptions, ExecutionOutcome};
 
+/// Load config, index, and frecency from disk, then run the execute TUI.
+/// Convenience entry point used by the `execute` CLI command.
 pub fn execute_default() -> io::Result<Option<ExecutionOutcome>> {
     let app_config = config::load()?;
     let index = crate::index::load_from_roots(&app_config.paths.snippet_roots)?;
@@ -31,6 +33,10 @@ pub fn execute_default() -> io::Result<Option<ExecutionOutcome>> {
     run_execute(index, frecency, options)
 }
 
+/// Run the execute TUI with the default [`SystemSuggestionProvider`].
+///
+/// Thin wrapper around [`run_execute_with_provider`] for callers that don't
+/// need to inject a custom provider.
 pub fn run_execute(
     index: SnippetIndex,
     frecency: FrecencyStore,
@@ -40,6 +46,18 @@ pub fn run_execute(
     run_execute_with_provider(index, frecency, options, provider)
 }
 
+/// Core TUI runner — sets up the terminal, runs the event loop, tears down.
+///
+/// Steps:
+/// 1. Redirect stdout to the TTY if it was piped (needed so the shell can
+///    capture the emitted command while we still draw to the terminal).
+/// 2. Enter raw mode via [`RawModeGuard`].
+/// 3. Build a ratatui inline viewport and enter the draw/poll loop.
+/// 4. On exit, drain any buffered key-release events (kitty keyboard protocol)
+///    so they don't leak into the shell's readline.
+/// 5. Erase the viewport lines and restore the cursor.
+///
+/// Returns `None` if the user cancelled, or `Some(outcome)` on completion.
 pub fn run_execute_with_provider<P: SuggestionProvider>(
     index: SnippetIndex,
     frecency: FrecencyStore,
@@ -108,6 +126,8 @@ pub(crate) fn compact_viewport_height(max_height: u16) -> u16 {
     max_height.max(1)
 }
 
+/// RAII guard that enables terminal raw mode on construction and disables it
+/// on drop, even if the TUI exits via `?`.
 struct RawModeGuard;
 
 impl RawModeGuard {
@@ -123,6 +143,13 @@ impl Drop for RawModeGuard {
     }
 }
 
+/// RAII guard that redirects stdout to the TTY when stdout is not a terminal.
+///
+/// When peanutbutter is invoked via the shell hotkey (`pb`), bash captures
+/// stdout to write the selected command into the readline buffer. That means
+/// fd 1 is a pipe, not a terminal — we can't draw the TUI there. This guard
+/// saves fd 1, points it at stderr (if that's a terminal) or `/dev/tty`, and
+/// restores the original fd on drop so the caller can still print the command.
 struct StdoutTtyGuard {
     saved_stdout: Option<OwnedFd>,
 }

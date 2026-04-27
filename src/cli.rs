@@ -16,27 +16,42 @@ use std::time::{SystemTime, UNIX_EPOCH};
 const DEFAULT_ADD_PATH: &str = "snippets.md";
 const DEFAULT_BASH_BINDING: &str = "C+b";
 
+/// A parsed CLI invocation, ready to dispatch.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CliCommand {
+    /// Print usage and exit (no args, `-h`, `--help`, or `help`).
     Help,
+    /// Run the interactive TUI and emit the selected command to stdout.
     Execute,
+    /// Open `$EDITOR` on the given snippet file (or the default file).
     Add(Option<PathBuf>),
+    /// Delete the named or id-matched snippet from its source file.
     Del(String),
+    /// Emit shell integration code for the given readline binding.
     Bash { binding: String },
 }
 
+/// Result returned by [`run_execute_command`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExecuteCommandResult {
+    /// `true` if a command was written to the output writer.
     pub emitted: bool,
+    /// Non-fatal warning shown when the frecency state could not be saved.
     pub persist_warning: Option<String>,
 }
 
+/// Identifies the snippet that was removed by [`run_del_command`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeletedSnippet {
+    /// Id of the removed snippet.
     pub id: SnippetId,
+    /// Path of the file that was modified (it may now be empty).
     pub path: PathBuf,
 }
 
+/// Parse `args` (everything after the binary name) into a [`CliCommand`].
+/// Returns `Err` with a human-readable message on unknown commands or
+/// incorrect argument counts.
 pub fn parse_args<I>(args: I) -> Result<CliCommand, String>
 where
     I: IntoIterator<Item = OsString>,
@@ -87,6 +102,9 @@ where
     }
 }
 
+/// Produce the human-readable help/usage string shown on `--help` or bare
+/// invocation. Includes resolved snippet roots and config/state paths so the
+/// user can immediately see where the tool is looking for files.
 pub fn help_text(paths: &Paths) -> String {
     let mut out = String::new();
     out.push_str(&format!("{BINARY_NAME}: snippet manager\n"));
@@ -109,11 +127,17 @@ pub fn help_text(paths: &Paths) -> String {
     out
 }
 
+/// Emit the bash integration script using the path of the currently running
+/// executable. Intended for `peanutbutter --bash`; the caller should `eval`
+/// the output in their shell init file.
 pub fn bash_integration_for_current_exe(binding: &str) -> io::Result<String> {
     let exe = env::current_exe()?;
     bash_integration_script(binding, &exe)
 }
 
+/// Build the bash integration script for a given `executable` path and
+/// readline `binding` (e.g. `"C+b"`). Separated from
+/// [`bash_integration_for_current_exe`] so tests can supply a controlled path.
 pub fn bash_integration_script(binding: &str, executable: &Path) -> io::Result<String> {
     let binding = readline_binding(binding)
         .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err))?;
@@ -141,6 +165,9 @@ bind -x '"{binding}":__pb_insert_command'
     ))
 }
 
+/// Run the execute TUI, write the selected command to `writer`, and record a
+/// frecency event. Returns an [`ExecuteCommandResult`] indicating whether a
+/// command was emitted and whether persisting the frecency state failed.
 pub fn run_execute_command<W: Write>(
     paths: &Paths,
     writer: &mut W,
@@ -148,6 +175,8 @@ pub fn run_execute_command<W: Write>(
     run_execute_command_with(paths, writer, execute::run_execute)
 }
 
+/// Testable variant of [`run_execute_command`] that accepts a custom `runner`
+/// function instead of calling [`execute::run_execute`] directly.
 pub fn run_execute_command_with<W, F>(
     paths: &Paths,
     writer: &mut W,
@@ -192,6 +221,9 @@ where
     })
 }
 
+/// Resolve the target snippet file and open it in `$EDITOR` / `$VISUAL`.
+/// Creates the file (and any parent directories) if it doesn't exist yet.
+/// Returns the path of the file that was opened.
 pub fn run_add_command(paths: &Paths, requested: Option<&Path>) -> io::Result<PathBuf> {
     run_add_command_with_editor(paths, requested, None)
 }
@@ -212,6 +244,11 @@ fn run_add_command_with_editor(
     Ok(target)
 }
 
+/// Determine the absolute path of the file to edit for `add`.
+///
+/// - `None` → `<first-root>/snippets.md`
+/// - Relative path → anchored under the first snippet root
+/// - Absolute path → used as-is after verifying it's inside a known root
 pub fn resolve_add_target(paths: &Paths, requested: Option<&Path>) -> io::Result<PathBuf> {
     let default_root = paths
         .snippet_roots
@@ -240,6 +277,9 @@ pub fn resolve_add_target(paths: &Paths, requested: Option<&Path>) -> io::Result
     Ok(target)
 }
 
+/// Delete the snippet identified by `query` (exact name or `file#slug` id).
+/// Removes the `##` section and its code block from the source file. If the
+/// file becomes empty after removal, the file itself is deleted.
 pub fn run_del_command(paths: &Paths, query: &str) -> io::Result<DeletedSnippet> {
     let index = crate::index::load_from_roots(&paths.snippet_roots)?;
     let target = resolve_delete_target(&index, query)?;

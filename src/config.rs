@@ -6,24 +6,41 @@ use std::fs;
 use std::io;
 use std::path::PathBuf;
 
+/// Resolved file-system paths used throughout the application.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Paths {
+    /// Directories (or files) that are searched recursively for `.md` snippets.
+    /// Populated from `PEANUTBUTTER_PATH`, `[paths] snippets`, then the XDG
+    /// default (`$XDG_CONFIG_HOME/peanutbutter/snippets`), in that order.
     pub snippet_roots: Vec<PathBuf>,
+    /// TSV file where usage events are appended for frecency scoring.
+    /// Defaults to `$XDG_STATE_HOME/peanutbutter/state.tsv`.
     pub state_file: PathBuf,
+    /// TOML config file that was loaded (may not exist on first run).
+    /// Defaults to `$XDG_CONFIG_HOME/peanutbutter/config.toml`.
     pub config_file: PathBuf,
 }
 
+/// Top-level application configuration, assembled from the TOML file and
+/// environment variables.
 #[derive(Debug, Clone)]
 pub struct AppConfig {
+    /// Resolved filesystem paths.
     pub paths: Paths,
+    /// TUI layout parameters.
     pub ui: UiConfig,
+    /// Search ranking weights.
     pub search: SearchConfig,
+    /// Per-variable overrides keyed by variable name.
     pub variables: BTreeMap<String, VariableInputConfig>,
+    /// Visual theme applied to the TUI.
     pub theme: Theme,
 }
 
+/// TUI layout parameters.
 #[derive(Debug, Clone)]
 pub struct UiConfig {
+    /// Inline viewport height in terminal rows. Clamped to at least 1.
     pub height: u16,
 }
 
@@ -33,10 +50,16 @@ impl Default for UiConfig {
     }
 }
 
+/// Parameters controlling how fuzzy and frecency scores are combined.
 #[derive(Debug, Clone)]
 pub struct SearchConfig {
+    /// Multiplier applied to the raw frecency score before it is added to the
+    /// fuzzy score. Larger values make location/recency history dominate;
+    /// smaller values make the query text dominate.
     pub frecency_weight: f64,
+    /// Per-field weights for the fuzzy scorer.
     pub fuzzy: FuzzyWeights,
+    /// Parameters for the frecency decay and path-affinity algorithm.
     pub frecency: FrecencyConfig,
 }
 
@@ -50,13 +73,24 @@ impl Default for SearchConfig {
     }
 }
 
+/// Multipliers applied to each snippet field's raw fuzzy match score.
+///
+/// Higher weight → matches in that field rank higher relative to other fields.
+/// Defaults: `name`=30, `tag`=20, `frontmatter_name`=15, `description`=10,
+/// `path`=10, `body`=8.
 #[derive(Debug, Clone)]
 pub struct FuzzyWeights {
+    /// Weight for the snippet's `##` heading (display name).
     pub name: u32,
+    /// Weight for frontmatter tags.
     pub tag: u32,
+    /// Weight for the file-level frontmatter `name:` field.
     pub frontmatter_name: u32,
+    /// Weight for the snippet's prose description.
     pub description: u32,
+    /// Weight for the snippet's relative file path.
     pub path: u32,
+    /// Weight for the snippet's command body.
     pub body: u32,
 }
 
@@ -73,10 +107,19 @@ impl Default for FuzzyWeights {
     }
 }
 
+/// Tuning knobs for the frecency scoring algorithm.
+///
+/// See [`crate::frecency::FrecencyStore::score`] for the full formula.
 #[derive(Debug, Clone)]
 pub struct FrecencyConfig {
+    /// Number of days after which an event contributes half as much to the
+    /// score. Smaller → recency matters more; larger → older events survive.
     pub half_life_days: f64,
+    /// Multiplier on the path-affinity term inside each event's contribution.
+    /// Set to 0.0 to ignore cwd entirely.
     pub location_weight: f64,
+    /// Multiplier on the `ln(1 + count)` frequency bonus added after summing
+    /// per-event contributions. Set to 0.0 to ignore frequency.
     pub frequency_weight: f64,
 }
 
@@ -90,25 +133,45 @@ impl Default for FrecencyConfig {
     }
 }
 
+/// Per-variable config overrides defined in `[variables.<name>]` TOML sections.
+///
+/// These override or supplement the inline `<@name[:source]>` syntax from the
+/// snippet body. All fields are optional and independent.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
 pub struct VariableInputConfig {
+    /// Pre-populated default value shown in the prompt input box.
     pub default: Option<String>,
+    /// Fixed list of suggestions shown in the suggestion list.
     pub suggestions: Vec<String>,
+    /// Shell command whose stdout lines are used as suggestions (overrides
+    /// `suggestions` when both are set and `suggestions` is empty).
     pub command: Option<String>,
 }
 
+/// Visual theme: a set of ratatui [`Style`] values covering every distinct UI
+/// role. Build via [`Theme::default`] or [`Theme::from_raw`] (the TOML path).
 #[derive(Debug, Clone)]
 pub struct Theme {
+    /// Muted style for decorative chrome (counters, separators, help text).
     pub chrome: Style,
+    /// Bold style for important labels and headings.
     pub emphasis: Style,
+    /// Accent colour applied to characters that matched the fuzzy query.
     pub fuzzy_highlight: Style,
+    /// Accent+background for the `>` marker beside the selected list row.
     pub selected_marker: Style,
+    /// Bold+background for the text of the selected list row.
     pub selected_item: Style,
+    /// Muted style for unfilled `<@variable>` placeholders in the preview.
     pub placeholder: Style,
+    /// Inverse style for the variable placeholder currently being edited.
     pub active_prompt: Style,
+    /// Style for horizontal divider lines between UI sections.
     pub divider: Style,
+    /// Style for panel borders.
     pub border: Style,
+    /// Style for error messages (e.g. failed suggestion command).
     pub error: Style,
 }
 
@@ -180,6 +243,9 @@ impl Theme {
     }
 }
 
+/// Load [`AppConfig`] from `$XDG_CONFIG_HOME/peanutbutter/config.toml` (or
+/// `$PB_CONFIG_FILE`). Missing files are silently treated as empty; parse
+/// errors are returned as `InvalidData` errors.
 pub fn load() -> io::Result<AppConfig> {
     let config_file = resolve_config_file();
     let file = load_file_config(&config_file)?;
@@ -215,6 +281,8 @@ pub fn load() -> io::Result<AppConfig> {
     })
 }
 
+/// Return the resolved [`Paths`] from the config file, or compute defaults if
+/// loading fails. Used by commands that need paths before a full config load.
 pub fn default_paths() -> Paths {
     load().map(|config| config.paths).unwrap_or_else(|_| Paths {
         snippet_roots: resolve_snippet_roots(&FileConfig::default()),

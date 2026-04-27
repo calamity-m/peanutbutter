@@ -3,6 +3,8 @@ use crate::index::IndexedSnippet;
 use nucleo_matcher::pattern::{CaseMatching, Normalization, Pattern};
 use nucleo_matcher::{Config, Matcher, Utf32Str};
 
+/// Thin wrapper around the `nucleo` fuzzy matcher that reuses its internal
+/// buffers across calls. Construct once and pass mutably to scoring functions.
 pub struct FuzzyScorer {
     matcher: Matcher,
     buf: Vec<char>,
@@ -41,10 +43,20 @@ impl Default for FuzzyScorer {
     }
 }
 
+/// Compile a fuzzy query string into a reusable [`Pattern`].
+///
+/// Matching is case-insensitive and uses Unicode smart normalisation so that
+/// e.g. accented characters are treated as their ASCII base.
 pub fn build_pattern(query: &str) -> Pattern {
     Pattern::parse(query, CaseMatching::Ignore, Normalization::Smart)
 }
 
+/// Score a single snippet against a compiled pattern, summing weighted field
+/// scores. Returns `None` if the query is non-empty and no field matched,
+/// which lets callers filter out non-matching entries efficiently.
+///
+/// When `query_is_empty` is `true` the pattern is ignored and `Some(0)` is
+/// returned for every entry so all snippets appear unfiltered.
 pub fn score_snippet(
     scorer: &mut FuzzyScorer,
     pattern: &Pattern,

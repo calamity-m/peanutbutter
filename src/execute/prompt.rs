@@ -13,15 +13,30 @@ use std::process::Command;
 use super::ExecutionOutcome;
 use super::app::SuggestionProvider;
 
+/// Mutable state for the variable-filling screen shown after a snippet is
+/// selected.
+///
+/// The user moves through `variables` one at a time (tracked by `index`),
+/// filling each with a typed value or a picked suggestion. Completed values
+/// accumulate in `values`; Tab/Shift+Tab allow cycling between variables
+/// non-linearly. Backspace on an empty input reverts to the previous variable.
 #[derive(Debug)]
 pub(crate) struct PromptState {
+    /// Id of the snippet whose variables are being filled.
     pub(crate) snippet_id: crate::domain::SnippetId,
+    /// Deduplicated list of variables to fill, in order.
     pub(crate) variables: Vec<Variable>,
+    /// Index into `variables` of the variable currently being edited.
     pub(crate) index: usize,
+    /// Values that have been confirmed for each variable name so far.
     pub(crate) values: BTreeMap<String, String>,
+    /// Raw text the user has typed for the current variable.
     pub(crate) input: String,
+    /// Full suggestion list for the current variable (unfiltered).
     pub(crate) suggestions: Vec<String>,
+    /// Non-fatal error from the last suggestion provider call, shown in the UI.
     pub(crate) error: Option<String>,
+    /// Currently highlighted row in the visible (filtered) suggestion list.
     pub(crate) selection: Option<usize>,
 }
 
@@ -100,9 +115,13 @@ impl PromptState {
     }
 }
 
+/// What should happen after a key event is handled in the prompt screen.
 pub(crate) enum PromptTransition {
+    /// Remain on the prompt screen; re-render.
     Stay,
+    /// Esc or backspace past the first variable: return to the select screen.
     ToSelect,
+    /// All variables filled and Enter pressed on the last one.
     Completed(ExecutionOutcome),
 }
 
@@ -205,6 +224,10 @@ fn cycle_prompt_variable<P: SuggestionProvider>(
     *status = prompt.error.clone();
 }
 
+/// Refresh `prompt` for the variable at `prompt.index`: restore any
+/// previously saved value (or the variable default), then fetch suggestions
+/// from the provider. Errors from the provider are stored in `prompt.error`
+/// rather than propagated, so the user can still type freely.
 pub(crate) fn load_prompt_state<P: SuggestionProvider>(
     prompt: &mut PromptState,
     provider: &P,
@@ -274,6 +297,11 @@ fn template_segments(template: &str) -> Vec<Segment<'_>> {
     out
 }
 
+/// Substitute variable values into a snippet template string.
+///
+/// Each `<@name[:source]>` placeholder whose `name` appears in `values` is
+/// replaced by its value; unrecognised or unfilled placeholders are kept
+/// verbatim so partial renders remain valid shell.
 pub fn render_command(template: &str, values: &BTreeMap<String, String>) -> String {
     let mut out = String::with_capacity(template.len());
     for segment in template_segments(template) {
@@ -417,6 +445,10 @@ fn advance_cursor(col: &mut u16, row: &mut u16, text: &str) {
     }
 }
 
+/// Deduplicate variables by name, preserving first-occurrence order.
+///
+/// A snippet body can reference the same `<@name>` placeholder more than once
+/// (e.g. `<@file>` appears twice). The user should only be prompted once.
 pub(crate) fn unique_variables(variables: &[Variable]) -> Vec<Variable> {
     let mut seen = HashMap::new();
     let mut out = Vec::new();
@@ -444,6 +476,11 @@ fn placeholder_name(inner: &str) -> Option<&str> {
     Some(name)
 }
 
+/// Return suggestions for built-in variable names.
+///
+/// - `"file"` → sorted list of files in `cwd`
+/// - `"directory"` → sorted list of directories in `cwd`
+/// - anything else → empty list (not an error)
 pub(crate) fn builtin_suggestions(name: &str, cwd: &Path) -> io::Result<Vec<String>> {
     match name {
         "file" => read_dir_entries(cwd, true),
@@ -470,6 +507,11 @@ fn read_dir_entries(cwd: &Path, want_files: bool) -> io::Result<Vec<String>> {
     Ok(out)
 }
 
+/// Run `bash -c <command>` in `cwd` and split stdout into suggestion strings.
+///
+/// Each real newline and each literal `\n` in the output is treated as a
+/// separator, and blank items are dropped. Returns an error if the command
+/// exits non-zero, including the stderr output in the error message.
 pub(crate) fn command_suggestions(command: &str, cwd: &Path) -> io::Result<Vec<String>> {
     // `-c` (not `-lc`): a login shell would source the user's profile/bashrc,
     // whose startup output (e.g. `Agent pid NNNN` from ssh-agent) leaks into

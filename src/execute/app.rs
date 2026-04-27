@@ -15,17 +15,31 @@ use super::prompt::{
 };
 use super::{ExecutionOutcome, render_command};
 
+/// Which navigation style is currently active in the select screen.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NavigationMode {
+    /// Fuzzy search: typing filters and ranks snippets by query.
     Fuzzy,
+    /// Directory tree browser: navigate by folder hierarchy with tab-completion.
     Browse,
 }
 
+/// Pluggable backend that supplies suggestions and defaults for a variable.
+///
+/// The production implementation is [`SystemSuggestionProvider`]. Tests inject
+/// a `TestProvider` that returns hard-coded values without touching the file
+/// system or running shell commands.
 pub trait SuggestionProvider {
+    /// Return the candidate values to show in the suggestion list for `variable`
+    /// when the user is in the given `cwd`. Returns an empty vec (not an error)
+    /// when there are no suggestions.
     fn suggestions(&self, variable: &Variable, cwd: &Path) -> io::Result<Vec<String>>;
+    /// Return the value to pre-populate the input box with, if any.
     fn default_input(&self, variable: &Variable) -> Option<String>;
 }
 
+/// Production [`SuggestionProvider`] backed by config overrides and built-in
+/// sources (`file`, `directory`) and shell commands from `VariableSource`.
 #[derive(Debug, Default, Clone)]
 pub struct SystemSuggestionProvider {
     variable_inputs: std::collections::BTreeMap<String, VariableInputConfig>,
@@ -69,11 +83,18 @@ impl SuggestionProvider for SystemSuggestionProvider {
 }
 
 #[derive(Debug)]
+/// The two top-level TUI screens.
 pub(crate) enum Screen {
+    /// The snippet picker (fuzzy search or browse tree).
     Select,
+    /// Variable-filling dialog for the snippet identified by `PromptState`.
     Prompt(PromptState),
 }
 
+/// Root application state for the interactive TUI session.
+///
+/// `P` is the [`SuggestionProvider`] — production code uses
+/// [`SystemSuggestionProvider`]; tests inject a mock.
 pub struct ExecutionApp<P = SystemSuggestionProvider> {
     pub(crate) index: SnippetIndex,
     pub(crate) frecency: FrecencyStore,
@@ -93,9 +114,14 @@ pub struct ExecutionApp<P = SystemSuggestionProvider> {
     pub(crate) theme: Theme,
 }
 
+/// Outcome returned by [`ExecutionApp::handle_key`] after processing one key event.
 pub enum AppEvent {
+    /// The event was handled; keep running the event loop.
     Continue,
+    /// The user pressed Esc or Ctrl+C; the TUI should exit without a result.
     Cancelled,
+    /// The user confirmed a fully filled-in snippet; the TUI should exit with
+    /// this outcome.
     Completed(ExecutionOutcome),
 }
 
@@ -137,6 +163,8 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
         self.status.as_deref()
     }
 
+    /// Return the snippet currently highlighted in either the select or prompt
+    /// screen, so the renderer can show its preview.
     pub fn selected_snippet(&self) -> Option<&IndexedSnippet> {
         match &self.screen {
             Screen::Select => match self.nav_mode {
@@ -147,6 +175,11 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
         }
     }
 
+    /// Return the best guess at the command the user will emit, for live preview.
+    ///
+    /// During prompting, already-filled values are substituted; the current
+    /// input is included if non-empty. On the select screen, the raw snippet
+    /// body is returned verbatim (placeholders not yet filled).
     pub fn partial_command(&self) -> Option<String> {
         match &self.screen {
             Screen::Prompt(prompt) => {
@@ -164,6 +197,13 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
         }
     }
 
+    /// Dispatch a crossterm key event to the appropriate screen handler and
+    /// return the resulting [`AppEvent`].
+    ///
+    /// Key-release events are ignored (relevant for the kitty keyboard protocol).
+    /// Ctrl+C is handled globally here as an unconditional cancel; Esc is
+    /// screen-specific (it backs out of the prompt to select, or cancels from
+    /// select).
     pub fn handle_key(&mut self, key: KeyEvent) -> AppEvent {
         if key.kind == KeyEventKind::Release {
             return AppEvent::Continue;
@@ -321,6 +361,9 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
         AppEvent::Continue
     }
 
+    /// Transition to the prompt screen, or complete immediately if the snippet
+    /// has no variables. Deduplicates variables before creating the prompt so
+    /// the user isn't asked for the same variable name twice.
     fn start_prompt_or_complete(&mut self, snippet_id: SnippetId) -> AppEvent {
         let Some(snippet) = self.index.get(&snippet_id) else {
             return AppEvent::Continue;

@@ -7,11 +7,19 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
+/// A snippet enriched with the file-level context needed for search and display.
+///
+/// Combines the parsed [`Snippet`] with its absolute path, relative path, and
+/// the file's [`Frontmatter`] (tags, file-level description, etc.).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IndexedSnippet {
+    /// Absolute path to the source `.md` file.
     pub path: PathBuf,
+    /// The parsed snippet (id, name, body, variables, …).
     pub snippet: Snippet,
+    /// Path relative to the snippet root — used in search scoring and display.
     pub relative_path: PathBuf,
+    /// File-level frontmatter shared by all snippets in this file.
     pub frontmatter: Frontmatter,
 }
 
@@ -39,6 +47,10 @@ impl IndexedSnippet {
     }
 }
 
+/// In-memory collection of all parsed snippets, with O(1) lookup by id.
+///
+/// Insertion order is preserved; duplicate ids (same relative path + slug
+/// across multiple roots) are silently dropped — the first one wins.
 #[derive(Debug, Default, Clone)]
 pub struct SnippetIndex {
     entries: Vec<IndexedSnippet>,
@@ -98,6 +110,8 @@ impl SnippetIndex {
     }
 }
 
+/// Walk each root directory, parse every `.md` file found, and return a
+/// populated [`SnippetIndex`]. Missing roots are silently skipped.
 pub fn load_from_roots(roots: &[PathBuf]) -> io::Result<SnippetIndex> {
     let mut index = SnippetIndex::new();
     for root in roots {
@@ -110,6 +124,7 @@ pub fn load_from_roots(roots: &[PathBuf]) -> io::Result<SnippetIndex> {
     Ok(index)
 }
 
+/// Load a [`SnippetIndex`] from the paths resolved by [`crate::config::default_paths`].
 pub fn load_default() -> io::Result<SnippetIndex> {
     let paths: Paths = crate::config::default_paths();
     load_from_roots(&paths.snippet_roots)

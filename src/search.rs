@@ -14,6 +14,13 @@ pub struct SearchHit<'a> {
     pub combined: f64,
 }
 
+/// Rank every snippet in `index` for the given `query` and `cwd`.
+///
+/// 1. Each snippet is scored with [`score_snippet`] (fuzzy match over
+///    weighted fields). Non-matching snippets are dropped entirely.
+/// 2. A frecency score is computed via [`FrecencyStore::score`].
+/// 3. The combined score is `fuzzy + frecency * config.frecency_weight`.
+/// 4. Results are sorted descending by combined score, with name as tiebreaker.
 pub fn rank<'a>(
     index: &'a SnippetIndex,
     query: &str,

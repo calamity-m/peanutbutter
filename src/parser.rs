@@ -11,6 +11,10 @@ pub struct SnippetLineRange {
     pub end_line: usize,
 }
 
+/// Parse a Markdown file into a [`SnippetFile`].
+///
+/// `root` is used to compute the relative path stored on the returned value;
+/// if `absolute_path` is not under `root` the full path is kept as-is.
 pub fn parse_file(absolute_path: &Path, root: &Path, content: &str) -> SnippetFile {
     let relative_path = absolute_path
         .strip_prefix(root)
@@ -27,6 +31,9 @@ pub fn parse_file(absolute_path: &Path, root: &Path, content: &str) -> SnippetFi
     }
 }
 
+/// Return the source line ranges of every snippet in `content`, identified by
+/// their [`SnippetId`]. Used by `del` to locate and remove the right lines
+/// without re-parsing the full file through [`parse_file`].
 pub fn snippet_line_ranges(relative_path: &Path, content: &str) -> Vec<SnippetLineRange> {
     let lines: Vec<&str> = content.lines().collect();
     let (_, body_start) = parse_frontmatter(&lines);
@@ -370,6 +377,10 @@ fn slugify(input: &str) -> String {
     }
 }
 
+/// Extract all `<@name[:source]>` placeholders from a snippet body in order
+/// of first appearance. Malformed or unterminated placeholders are silently
+/// skipped. Duplicates are preserved here; callers that need unique variables
+/// should use [`crate::execute::prompt::unique_variables`].
 pub fn parse_variables(body: &str) -> Vec<Variable> {
     let mut out = Vec::new();
     let bytes = body.as_bytes();

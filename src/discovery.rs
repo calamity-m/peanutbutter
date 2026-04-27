@@ -3,6 +3,10 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
+/// Recursively find all `.md` / `.markdown` files under `root`, sorted
+/// alphabetically. Symlinks to directories are followed; symlink cycles are
+/// detected via canonical paths and skipped. Returns an empty vec if `root`
+/// does not exist.
 pub fn discover_markdown_files(root: &Path) -> io::Result<Vec<PathBuf>> {
     let mut out = Vec::new();
     if !root.exists() {
@@ -14,6 +18,9 @@ pub fn discover_markdown_files(root: &Path) -> io::Result<Vec<PathBuf>> {
     Ok(out)
 }
 
+/// Like [`discover_markdown_files`] but over multiple roots, deduplicating
+/// directories shared between roots (e.g. via symlinks) so each file appears
+/// at most once. Files from each root are sorted before appending.
 pub fn discover_all<I, P>(roots: I) -> io::Result<Vec<PathBuf>>
 where
     I: IntoIterator<Item = P>,
