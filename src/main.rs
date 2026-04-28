@@ -49,6 +49,17 @@ fn main() {
             Err(err) => Err(err),
         },
         cli::Command::Edit { path } => cli::run_edit_command(&paths, path.as_deref()).map(|_| ()),
+        cli::Command::CompleteEdit { current } => {
+            match cli::complete_edit(&paths, current.as_deref().unwrap_or("")) {
+                Ok(candidates) => {
+                    for candidate in candidates {
+                        println!("{candidate}");
+                    }
+                    Ok(())
+                }
+                Err(err) => Err(err),
+            }
+        }
     };
 
     if let Err(err) = result {

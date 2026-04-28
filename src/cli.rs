@@ -7,7 +7,7 @@ use clap::{Parser, Subcommand};
 use std::env;
 use std::fs;
 use std::io::{self, Write};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::process::Command as ProcessCommand;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -34,6 +34,9 @@ pub enum Command {
         #[arg(default_value = "C+b")]
         binding: String,
     },
+    /// Internal bash completion helper for `edit`.
+    #[command(hide = true)]
+    CompleteEdit { current: Option<String> },
 }
 
 /// Result returned by [`run_execute_command`].
@@ -95,6 +98,21 @@ __pb_insert_command() {{
   READLINE_POINT=$(( READLINE_POINT + ${{#__pb_cmd}} ))
 }}
 bind -x '"{binding}":__pb_insert_command'
+__pb_complete() {{
+  local cur subcommand
+  cur="${{COMP_WORDS[COMP_CWORD]}}"
+  subcommand="${{COMP_WORDS[1]}}"
+  if [[ "$subcommand" == "edit" ]]; then
+    COMPREPLY=()
+    local candidate
+    while IFS= read -r candidate; do
+      COMPREPLY+=("$candidate")
+    done < <({executable} complete-edit "$cur")
+    return 0
+  fi
+  COMPREPLY=( $(compgen -W "bash edit execute" -- "$cur") )
+}}
+complete -o nospace -F __pb_complete {BINARY_NAME} {BASH_ALIAS_NAME}
 "#
     ))
 }
@@ -189,6 +207,7 @@ pub fn resolve_edit_target(paths: &Paths, requested: Option<&Path>) -> io::Resul
         .first()
         .ok_or_else(|| io::Error::other("no snippet roots configured"))?;
 
+    let aliases = edit_root_aliases(paths);
     let target = match requested {
         None => default_root.join(DEFAULT_EDIT_PATH),
         Some(path) if path.is_absolute() => {
@@ -206,9 +225,175 @@ pub fn resolve_edit_target(paths: &Paths, requested: Option<&Path>) -> io::Resul
                 )));
             }
         }
-        Some(path) => default_root.join(normalize_edit_path(path.to_path_buf())),
+        Some(path) if starts_with_current_dir(path) => {
+            default_root.join(normalize_edit_path(strip_current_dir(path)))
+        }
+        Some(path) => {
+            if let Some((root, child)) = resolve_root_qualified_path(path, &aliases) {
+                if child.as_os_str().is_empty() {
+                    root.join(DEFAULT_EDIT_PATH)
+                } else {
+                    root.join(normalize_edit_path(child))
+                }
+            } else {
+                default_root.join(normalize_edit_path(path.to_path_buf()))
+            }
+        }
     };
     Ok(target)
+}
+
+/// Return bash completion candidates for the current `edit` argument.
+pub fn complete_edit(paths: &Paths, current: &str) -> io::Result<Vec<String>> {
+    let aliases = edit_root_aliases(paths);
+    let mut candidates = Vec::new();
+
+    if current.starts_with('/') {
+        return Ok(candidates);
+    } else if let Some((alias, rest)) = current.split_once('/') {
+        if let Some(root) = aliases
+            .iter()
+            .find(|entry| entry.alias == alias)
+            .map(|entry| entry.root.as_path())
+        {
+            candidates.extend(complete_under_root(root, rest, Some(alias))?);
+        }
+    } else {
+        if let Some(root) = paths.snippet_roots.first() {
+            candidates.extend(complete_under_root(root, current, None)?);
+        }
+        candidates.extend(
+            aliases
+                .iter()
+                .filter(|entry| entry.alias.starts_with(current))
+                .map(|entry| format!("{}/", entry.alias)),
+        );
+    }
+
+    candidates.sort();
+    candidates.dedup();
+    Ok(candidates)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct EditRootAlias {
+    alias: String,
+    root: PathBuf,
+}
+
+fn edit_root_aliases(paths: &Paths) -> Vec<EditRootAlias> {
+    let mut aliases = Vec::new();
+    let mut seen: Vec<String> = Vec::new();
+    for root in &paths.snippet_roots {
+        let base = root
+            .file_name()
+            .and_then(|name| name.to_str())
+            .filter(|name| !name.is_empty())
+            .unwrap_or("root")
+            .to_string();
+        let alias = if seen.iter().any(|seen| seen == &base) {
+            let mut next = 2;
+            loop {
+                let candidate = format!("{base}-{next}");
+                if !seen.iter().any(|seen| seen == &candidate) {
+                    break candidate;
+                }
+                next += 1;
+            }
+        } else {
+            base
+        };
+        seen.push(alias.clone());
+        aliases.push(EditRootAlias {
+            alias,
+            root: root.clone(),
+        });
+    }
+    aliases
+}
+
+fn starts_with_current_dir(path: &Path) -> bool {
+    matches!(path.components().next(), Some(Component::CurDir))
+}
+
+fn strip_current_dir(path: &Path) -> PathBuf {
+    path.components()
+        .filter(|component| !matches!(component, Component::CurDir))
+        .collect()
+}
+
+fn resolve_root_qualified_path(
+    path: &Path,
+    aliases: &[EditRootAlias],
+) -> Option<(PathBuf, PathBuf)> {
+    let mut components = path.components();
+    let Some(Component::Normal(first)) = components.next() else {
+        return None;
+    };
+    let alias = first.to_str()?;
+    let root = aliases
+        .iter()
+        .find(|entry| entry.alias == alias)
+        .map(|entry| entry.root.clone())?;
+    let child: PathBuf = components.collect();
+    Some((root, child))
+}
+
+fn complete_under_root(root: &Path, current: &str, alias: Option<&str>) -> io::Result<Vec<String>> {
+    let (dir_part, name_prefix) = split_completion_path(current);
+    let dir = root.join(&dir_part);
+    let mut out = Vec::new();
+    let entries = match fs::read_dir(&dir) {
+        Ok(entries) => entries,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(out),
+        Err(err) => return Err(err),
+    };
+
+    for entry in entries {
+        let entry = entry?;
+        let file_name = entry.file_name();
+        let Some(file_name) = file_name.to_str() else {
+            continue;
+        };
+        if !file_name.starts_with(name_prefix) {
+            continue;
+        }
+        let file_type = entry.file_type()?;
+        let candidate_path = dir_part.join(file_name);
+        if file_type.is_dir() {
+            out.push(format_completion_candidate(&candidate_path, alias, true));
+        } else if file_type.is_file() && is_markdown_path(Path::new(file_name)) {
+            out.push(format_completion_candidate(&candidate_path, alias, false));
+        }
+    }
+
+    Ok(out)
+}
+
+fn split_completion_path(current: &str) -> (PathBuf, &str) {
+    if let Some((dir, name)) = current.rsplit_once('/') {
+        (PathBuf::from(dir), name)
+    } else {
+        (PathBuf::new(), current)
+    }
+}
+
+fn format_completion_candidate(path: &Path, alias: Option<&str>, is_dir: bool) -> String {
+    let mut value = path.to_string_lossy().replace('\\', "/");
+    if let Some(alias) = alias {
+        value = format!("{alias}/{value}");
+    }
+    if is_dir {
+        value.push('/');
+    }
+    value
+}
+
+fn is_markdown_path(path: &Path) -> bool {
+    matches!(
+        path.extension().and_then(|ext| ext.to_str()),
+        Some("md") | Some("markdown")
+    )
 }
 
 fn normalize_edit_path(mut path: PathBuf) -> PathBuf {
@@ -308,6 +493,15 @@ mod tests {
         }
     }
 
+    fn test_paths_with_roots(roots: Vec<PathBuf>) -> Paths {
+        let first = roots.first().unwrap().clone();
+        Paths {
+            snippet_roots: roots,
+            state_file: first.join("state.tsv"),
+            config_file: first.join("config.toml"),
+        }
+    }
+
     #[test]
     fn clap_recognizes_expected_commands() {
         assert_eq!(
@@ -342,6 +536,14 @@ mod tests {
                 .command,
             Some(Command::Bash {
                 binding: "C+f".to_string()
+            })
+        );
+        assert_eq!(
+            Cli::try_parse_from(["peanutbutter", "complete-edit", "nested/"])
+                .unwrap()
+                .command,
+            Some(Command::CompleteEdit {
+                current: Some("nested/".to_string())
             })
         );
     }
@@ -429,6 +631,14 @@ mod tests {
     }
 
     #[test]
+    fn bash_script_registers_edit_completion_for_binary_and_alias() {
+        let script = bash_integration_script("C+b", Path::new("/tmp/peanutbutter")).unwrap();
+        assert!(script.contains("__pb_complete()"));
+        assert!(script.contains("'/tmp/peanutbutter' complete-edit \"$cur\""));
+        assert!(script.contains("complete -o nospace -F __pb_complete peanutbutter pb"));
+    }
+
+    #[test]
     fn resolve_edit_target_defaults_and_appends_markdown_extension() {
         let root = temp_dir("edit-target");
         let paths = test_paths(&root);
@@ -439,6 +649,120 @@ mod tests {
         assert_eq!(
             resolve_edit_target(&paths, Some(Path::new("docker/compose"))).unwrap(),
             root.join("docker/compose.md")
+        );
+    }
+
+    #[test]
+    fn edit_root_aliases_use_basename_and_suffix_duplicates() {
+        let workspace = temp_dir("edit-aliases");
+        let paths = test_paths_with_roots(vec![
+            workspace.join("snippets"),
+            workspace.join("work"),
+            workspace.join("other").join("work"),
+        ]);
+
+        let aliases: Vec<_> = edit_root_aliases(&paths)
+            .into_iter()
+            .map(|entry| entry.alias)
+            .collect();
+
+        assert_eq!(aliases, vec!["snippets", "work", "work-2"]);
+    }
+
+    #[test]
+    fn resolve_edit_target_supports_root_qualified_paths_and_current_dir_escape() {
+        let workspace = temp_dir("edit-qualified");
+        let first_root = workspace.join("first");
+        let work_root = workspace.join("work");
+        fs::create_dir_all(&first_root).unwrap();
+        fs::create_dir_all(&work_root).unwrap();
+        let paths = test_paths_with_roots(vec![first_root.clone(), work_root.clone()]);
+
+        assert_eq!(
+            resolve_edit_target(&paths, Some(Path::new("work/docker.md"))).unwrap(),
+            work_root.join("docker.md")
+        );
+        assert_eq!(
+            resolve_edit_target(&paths, Some(Path::new("work"))).unwrap(),
+            work_root.join("snippets.md")
+        );
+        assert_eq!(
+            resolve_edit_target(&paths, Some(Path::new("./work/docker.md"))).unwrap(),
+            first_root.join("work/docker.md")
+        );
+    }
+
+    #[test]
+    fn resolve_edit_target_keeps_absolute_paths_inside_any_root() {
+        let workspace = temp_dir("edit-absolute");
+        let first_root = workspace.join("first");
+        let work_root = workspace.join("work");
+        fs::create_dir_all(&first_root).unwrap();
+        fs::create_dir_all(&work_root).unwrap();
+        let paths = test_paths_with_roots(vec![first_root, work_root.clone()]);
+        let target = work_root.join("docker/compose");
+
+        assert_eq!(
+            resolve_edit_target(&paths, Some(&target)).unwrap(),
+            work_root.join("docker/compose.md")
+        );
+    }
+
+    #[test]
+    fn complete_edit_lists_first_root_entries_and_root_aliases() {
+        let workspace = temp_dir("edit-complete-top");
+        let first_root = workspace.join("snippets");
+        let work_root = workspace.join("work");
+        fs::create_dir_all(first_root.join("nested")).unwrap();
+        fs::create_dir_all(&work_root).unwrap();
+        fs::write(first_root.join("snippets.md"), "").unwrap();
+        fs::write(first_root.join("readme.txt"), "").unwrap();
+        fs::write(first_root.join("notes.markdown"), "").unwrap();
+        let paths = test_paths_with_roots(vec![first_root, work_root]);
+
+        let candidates = complete_edit(&paths, "").unwrap();
+
+        assert_eq!(
+            candidates,
+            vec![
+                "nested/".to_string(),
+                "notes.markdown".to_string(),
+                "snippets.md".to_string(),
+                "snippets/".to_string(),
+                "work/".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn complete_edit_lists_nested_root_qualified_entries() {
+        let workspace = temp_dir("edit-complete-root");
+        let first_root = workspace.join("snippets");
+        let work_root = workspace.join("work");
+        fs::create_dir_all(&first_root).unwrap();
+        fs::create_dir_all(work_root.join("docker/compose")).unwrap();
+        fs::write(work_root.join("docker.md"), "").unwrap();
+        fs::write(work_root.join("docker/compose/snip.md"), "").unwrap();
+        let paths = test_paths_with_roots(vec![first_root, work_root]);
+
+        assert_eq!(
+            complete_edit(&paths, "work/do").unwrap(),
+            vec!["work/docker.md".to_string(), "work/docker/".to_string()]
+        );
+        assert_eq!(
+            complete_edit(&paths, "work/docker/compose/s").unwrap(),
+            vec!["work/docker/compose/snip.md".to_string()]
+        );
+    }
+
+    #[test]
+    fn complete_edit_treats_missing_roots_as_empty() {
+        let root = temp_dir("edit-complete-missing").join("missing");
+        let paths = test_paths(&root);
+
+        assert_eq!(
+            complete_edit(&paths, "anything").unwrap(),
+            Vec::<String>::new()
         );
     }
 
