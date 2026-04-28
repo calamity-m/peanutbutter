@@ -1,3 +1,4 @@
+use clap::{CommandFactory, FromArgMatches};
 use peanutbutter::BINARY_NAME;
 use peanutbutter::cli;
 use peanutbutter::config;
@@ -12,24 +13,21 @@ fn main() {
         }
     };
     let paths = app_config.paths.clone();
-    let args = std::env::args_os().skip(1);
-    let command = match cli::parse_args(args) {
-        Ok(command) => command,
-        Err(err) => {
+    let mut clap_command = cli::Cli::command().after_help(cli::after_help(&paths));
+    let matches = clap_command.clone().get_matches();
+    let cli = cli::Cli::from_arg_matches(&matches).unwrap_or_else(|err| err.exit());
+    let Some(command) = cli.command else {
+        clap_command.print_help().unwrap_or_else(|err| {
             eprintln!("{BINARY_NAME}: {err}");
-            eprintln!();
-            eprint!("{}", cli::help_text(&paths));
-            std::process::exit(2);
-        }
+            std::process::exit(1);
+        });
+        println!();
+        std::process::exit(0);
     };
-    let is_execute = matches!(&command, cli::CliCommand::Execute);
+    let is_execute = matches!(&command, cli::Command::Execute);
 
     let result = match command {
-        cli::CliCommand::Help => {
-            print!("{}", cli::help_text(&paths));
-            Ok(())
-        }
-        cli::CliCommand::Execute => {
+        cli::Command::Execute => {
             let mut stdout = io::stdout();
             let result = cli::run_execute_command(&paths, &mut stdout);
             let _ = stdout.flush();
@@ -43,17 +41,15 @@ fn main() {
                 Err(err) => Err(err),
             }
         }
-        cli::CliCommand::Bash { binding } => {
-            match cli::bash_integration_for_current_exe(&binding) {
-                Ok(script) => {
-                    print!("{script}");
-                    Ok(())
-                }
-                Err(err) => Err(err),
+        cli::Command::Bash { binding } => match cli::bash_integration_for_current_exe(&binding) {
+            Ok(script) => {
+                print!("{script}");
+                Ok(())
             }
-        }
-        cli::CliCommand::Add(path) => cli::run_add_command(&paths, path.as_deref()).map(|_| ()),
-        cli::CliCommand::Del(query) => match cli::run_del_command(&paths, &query) {
+            Err(err) => Err(err),
+        },
+        cli::Command::Add { path } => cli::run_add_command(&paths, path.as_deref()).map(|_| ()),
+        cli::Command::Del { name } => match cli::run_del_command(&paths, &name) {
             Ok(deleted) => {
                 eprintln!("deleted {}", deleted.id);
                 Ok(())

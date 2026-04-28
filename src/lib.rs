@@ -35,5 +35,5 @@ pub mod search;
 
 /// The binary name used in help text and warning messages.
 pub const BINARY_NAME: &str = "peanutbutter";
-/// The shell alias installed by `peanutbutter --bash`.
+/// The shell alias installed by `peanutbutter bash`.
 pub const BASH_ALIAS_NAME: &str = "pb";

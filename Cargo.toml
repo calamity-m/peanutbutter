@@ -10,6 +10,7 @@ path = "src/main.rs"
 
 [dependencies]
 ansi-to-tui = "8.0"
+clap = { version = "4", features = ["derive"] }
 crossterm = "0.28"
 libc = "0.2"
 nucleo-matcher = "0.3"

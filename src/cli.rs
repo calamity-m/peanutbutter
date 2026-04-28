@@ -5,30 +5,42 @@ use crate::frecency::FrecencyStore;
 use crate::index::{IndexedSnippet, SnippetIndex};
 use crate::parser::{SnippetLineRange, snippet_line_ranges};
 use crate::{BASH_ALIAS_NAME, BINARY_NAME};
+use clap::{Parser, Subcommand};
 use std::env;
-use std::ffi::OsString;
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::Command as ProcessCommand;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const DEFAULT_ADD_PATH: &str = "snippets.md";
-const DEFAULT_BASH_BINDING: &str = "C+b";
 
-/// A parsed CLI invocation, ready to dispatch.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum CliCommand {
-    /// Print usage and exit (no args, `-h`, `--help`, or `help`).
-    Help,
+/// Terminal snippet manager.
+#[derive(Debug, Clone, Parser, PartialEq, Eq)]
+#[command(name = BINARY_NAME, about = "terminal snippet manager")]
+#[command(version)]
+pub struct Cli {
+    #[command(subcommand)]
+    pub command: Option<Command>,
+}
+
+/// A parsed CLI subcommand, ready to dispatch.
+#[derive(Debug, Clone, Subcommand, PartialEq, Eq)]
+pub enum Command {
     /// Run the interactive TUI and emit the selected command to stdout.
     Execute,
     /// Open `$EDITOR` on the given snippet file (or the default file).
-    Add(Option<PathBuf>),
+    Add { path: Option<PathBuf> },
     /// Delete the named or id-matched snippet from its source file.
-    Del(String),
+    Del {
+        #[arg(value_name = "NAME_OR_ID")]
+        name: String,
+    },
     /// Emit shell integration code for the given readline binding.
-    Bash { binding: String },
+    Bash {
+        #[arg(default_value = "C+b")]
+        binding: String,
+    },
 }
 
 /// Result returned by [`run_execute_command`].
@@ -49,74 +61,12 @@ pub struct DeletedSnippet {
     pub path: PathBuf,
 }
 
-/// Parse `args` (everything after the binary name) into a [`CliCommand`].
-/// Returns `Err` with a human-readable message on unknown commands or
-/// incorrect argument counts.
-pub fn parse_args<I>(args: I) -> Result<CliCommand, String>
-where
-    I: IntoIterator<Item = OsString>,
-{
-    let mut args = args.into_iter();
-    let Some(first) = args.next() else {
-        return Ok(CliCommand::Help);
-    };
-    let first = first.to_string_lossy().into_owned();
-    match first.as_str() {
-        "-h" | "--help" | "help" => {
-            if args.next().is_some() {
-                Err("help does not accept extra arguments".to_string())
-            } else {
-                Ok(CliCommand::Help)
-            }
-        }
-        "execute" => {
-            if args.next().is_some() {
-                Err("execute does not accept extra arguments".to_string())
-            } else {
-                Ok(CliCommand::Execute)
-            }
-        }
-        "add" => {
-            let path = args.next().map(PathBuf::from);
-            if args.next().is_some() {
-                Err("add accepts at most one path".to_string())
-            } else {
-                Ok(CliCommand::Add(path))
-            }
-        }
-        "del" => match (args.next(), args.next()) {
-            (Some(name), None) => Ok(CliCommand::Del(name.to_string_lossy().into_owned())),
-            (None, _) => Err("del requires an exact snippet name or id".to_string()),
-            (_, Some(_)) => Err("del accepts exactly one exact snippet name or id".to_string()),
-        },
-        "--bash" => match (args.next(), args.next()) {
-            (Some(binding), None) => Ok(CliCommand::Bash {
-                binding: binding.to_string_lossy().into_owned(),
-            }),
-            (None, None) => Ok(CliCommand::Bash {
-                binding: DEFAULT_BASH_BINDING.to_string(),
-            }),
-            (_, Some(_)) => Err("--bash accepts at most one binding".to_string()),
-        },
-        other => Err(format!("unknown command or flag: {other}")),
-    }
-}
-
-/// Produce the human-readable help/usage string shown on `--help` or bare
-/// invocation. Includes resolved snippet roots and config/state paths so the
-/// user can immediately see where the tool is looking for files.
-pub fn help_text(paths: &Paths) -> String {
+/// Produce dynamic help content for resolved snippet roots and config/state
+/// paths. This is attached to clap's generated help at runtime.
+pub fn after_help(paths: &Paths) -> String {
     let mut out = String::new();
-    out.push_str(&format!("{BINARY_NAME}: snippet manager\n"));
-    out.push_str("usage:\n");
-    out.push_str(&format!("  {BINARY_NAME}\n"));
-    out.push_str(&format!("  {BINARY_NAME} execute\n"));
-    out.push_str(&format!("  {BINARY_NAME} --bash [C+b]\n"));
-    out.push_str(&format!("  {BINARY_NAME} add [path]\n"));
-    out.push_str(&format!("  {BINARY_NAME} del <name-or-id>\n"));
-    out.push('\n');
     out.push_str(&format!(
-        "bash shorthand: `{BINARY_NAME} --bash` also defines `{BASH_ALIAS_NAME}`\n\n"
+        "bash shorthand: `{BINARY_NAME} bash` also defines `{BASH_ALIAS_NAME}`\n\n"
     ));
     out.push_str("snippet roots:\n");
     for root in &paths.snippet_roots {
@@ -128,8 +78,8 @@ pub fn help_text(paths: &Paths) -> String {
 }
 
 /// Emit the bash integration script using the path of the currently running
-/// executable. Intended for `peanutbutter --bash`; the caller should `eval`
-/// the output in their shell init file.
+/// executable. Intended for `peanutbutter bash`; the caller should `eval` the
+/// output in their shell init file.
 pub fn bash_integration_for_current_exe(binding: &str) -> io::Result<String> {
     let exe = env::current_exe()?;
     bash_integration_script(binding, &exe)
@@ -408,7 +358,7 @@ fn open_in_editor(target: &Path, editor_override: Option<&str>) -> io::Result<()
             ))
         })?;
 
-    let status = Command::new("bash")
+    let status = ProcessCommand::new("bash")
         .arg("-lc")
         .arg("eval \"$PB_EDITOR\" \"$PB_TARGET_QUOTED\"")
         .env("PB_EDITOR", editor)
@@ -479,35 +429,115 @@ mod tests {
     }
 
     #[test]
-    fn parse_args_recognizes_expected_commands() {
+    fn clap_recognizes_expected_commands() {
         assert_eq!(
-            parse_args(Vec::<OsString>::new()).unwrap(),
-            CliCommand::Help
+            Cli::try_parse_from(["peanutbutter"]).unwrap(),
+            Cli { command: None }
         );
         assert_eq!(
-            parse_args(vec![OsString::from("execute")]).unwrap(),
-            CliCommand::Execute
+            Cli::try_parse_from(["peanutbutter", "execute"])
+                .unwrap()
+                .command,
+            Some(Command::Execute)
         );
         assert_eq!(
-            parse_args(vec![OsString::from("add"), OsString::from("nested/demo")]).unwrap(),
-            CliCommand::Add(Some(PathBuf::from("nested/demo")))
+            Cli::try_parse_from(["peanutbutter", "add", "nested/demo"])
+                .unwrap()
+                .command,
+            Some(Command::Add {
+                path: Some(PathBuf::from("nested/demo"))
+            })
         );
         assert_eq!(
-            parse_args(vec![OsString::from("del"), OsString::from("Echo")]).unwrap(),
-            CliCommand::Del("Echo".to_string())
+            Cli::try_parse_from(["peanutbutter", "del", "Echo"])
+                .unwrap()
+                .command,
+            Some(Command::Del {
+                name: "Echo".to_string()
+            })
         );
         assert_eq!(
-            parse_args(vec![OsString::from("--bash")]).unwrap(),
-            CliCommand::Bash {
+            Cli::try_parse_from(["peanutbutter", "bash"])
+                .unwrap()
+                .command,
+            Some(Command::Bash {
                 binding: "C+b".to_string()
+            })
+        );
+        assert_eq!(
+            Cli::try_parse_from(["peanutbutter", "bash", "C+f"])
+                .unwrap()
+                .command,
+            Some(Command::Bash {
+                binding: "C+f".to_string()
+            })
+        );
+    }
+
+    #[test]
+    fn clap_rejects_old_bash_flag() {
+        let err = Cli::try_parse_from(["peanutbutter", "--bash"]).unwrap_err();
+        assert_eq!(err.kind(), clap::error::ErrorKind::UnknownArgument);
+    }
+
+    #[test]
+    fn clap_del_usage_names_argument_name_or_id() {
+        let err = Cli::try_parse_from(["peanutbutter", "del"]).unwrap_err();
+        let message = err.to_string();
+        assert!(message.contains("<NAME_OR_ID>"));
+    }
+
+    #[test]
+    fn default_bash_binding_script_emits_pb_alias() {
+        let Some(Command::Bash { binding }) = Cli::try_parse_from(["peanutbutter", "bash"])
+            .unwrap()
+            .command
+        else {
+            panic!("expected bash command");
+        };
+        let script = bash_integration_script(&binding, Path::new("/tmp/peanutbutter")).unwrap();
+        assert!(script.contains("\\builtin alias pb='peanutbutter'"));
+        assert!(script.contains("bind -x '\"\\C-b\":__pb_insert_command'"));
+    }
+
+    #[test]
+    fn after_help_prefers_peanutbutter_and_mentions_pb_alias() {
+        let paths = test_paths(Path::new("/tmp/snippets"));
+        let help = after_help(&paths);
+        assert!(help.contains("`peanutbutter bash` also defines `pb`"));
+        assert!(help.contains("snippet roots:"));
+        assert!(help.contains("/tmp/snippets"));
+    }
+
+    #[test]
+    fn clap_help_mentions_bash_subcommand() {
+        let mut command = <Cli as clap::CommandFactory>::command();
+        let mut help = Vec::new();
+        command.write_long_help(&mut help).unwrap();
+        let help = String::from_utf8(help).unwrap();
+        assert!(help.contains("bash"));
+        assert!(!help.contains("--bash"));
+    }
+
+    #[test]
+    fn explicit_bash_binding_script_uses_requested_binding() {
+        let Some(Command::Bash { binding }) = Cli::try_parse_from(["peanutbutter", "bash", "C+b"])
+            .unwrap()
+            .command
+        else {
+            panic!("expected bash command");
+        };
+        assert_eq!(
+            Command::Bash {
+                binding: "C+b".to_string()
+            },
+            Command::Bash {
+                binding: binding.clone()
             }
         );
-        assert_eq!(
-            parse_args(vec![OsString::from("--bash"), OsString::from("C+b")]).unwrap(),
-            CliCommand::Bash {
-                binding: "C+b".to_string()
-            }
-        );
+        let script = bash_integration_script(&binding, Path::new("/tmp/peanutbutter")).unwrap();
+        assert!(script.contains("\\builtin alias pb='peanutbutter'"));
+        assert!(script.contains("bind -x '\"\\C-b\":__pb_insert_command'"));
     }
 
     #[test]
@@ -519,27 +549,6 @@ mod tests {
         assert!(script.contains("'/tmp/peanutbutter' execute"));
         assert!(script.contains("READLINE_LINE=\"${READLINE_LINE}\""));
         assert!(script.contains("READLINE_POINT=${READLINE_POINT}"));
-    }
-
-    #[test]
-    fn help_text_prefers_peanutbutter_and_mentions_pb_alias() {
-        let paths = test_paths(Path::new("/tmp/snippets"));
-        let help = help_text(&paths);
-        assert!(help.contains("peanutbutter: snippet manager"));
-        assert!(help.contains("  peanutbutter --bash [C+b]"));
-        assert!(help.contains("defines `pb`"));
-        assert!(!help.contains("  pb execute"));
-    }
-
-    #[test]
-    fn default_bash_binding_script_emits_pb_alias() {
-        let CliCommand::Bash { binding } = parse_args(vec![OsString::from("--bash")]).unwrap()
-        else {
-            panic!("expected bash command");
-        };
-        let script = bash_integration_script(&binding, Path::new("/tmp/peanutbutter")).unwrap();
-        assert!(script.contains("\\builtin alias pb='peanutbutter'"));
-        assert!(script.contains("bind -x '\"\\C-b\":__pb_insert_command'"));
     }
 
     #[test]
@@ -570,7 +579,7 @@ mod tests {
             ),
         )
         .unwrap();
-        let status = Command::new("chmod")
+        let status = ProcessCommand::new("chmod")
             .arg("+x")
             .arg(&editor)
             .status()
