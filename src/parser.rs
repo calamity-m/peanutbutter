@@ -32,8 +32,7 @@ pub fn parse_file(absolute_path: &Path, root: &Path, content: &str) -> SnippetFi
 }
 
 /// Return the source line ranges of every snippet in `content`, identified by
-/// their [`SnippetId`]. Used by `del` to locate and remove the right lines
-/// without re-parsing the full file through [`parse_file`].
+/// their [`SnippetId`].
 pub fn snippet_line_ranges(relative_path: &Path, content: &str) -> Vec<SnippetLineRange> {
     let lines: Vec<&str> = content.lines().collect();
     let (_, body_start) = parse_frontmatter(&lines);

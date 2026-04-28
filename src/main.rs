@@ -49,13 +49,6 @@ fn main() {
             Err(err) => Err(err),
         },
         cli::Command::Add { path } => cli::run_add_command(&paths, path.as_deref()).map(|_| ()),
-        cli::Command::Del { name } => match cli::run_del_command(&paths, &name) {
-            Ok(deleted) => {
-                eprintln!("deleted {}", deleted.id);
-                Ok(())
-            }
-            Err(err) => Err(err),
-        },
     };
 
     if let Err(err) = result {

@@ -1,9 +1,7 @@
 use crate::config::Paths;
-use crate::domain::SnippetId;
 use crate::execute::{self, ExecuteOptions, ExecutionOutcome};
 use crate::frecency::FrecencyStore;
-use crate::index::{IndexedSnippet, SnippetIndex};
-use crate::parser::{SnippetLineRange, snippet_line_ranges};
+use crate::index::SnippetIndex;
 use crate::{BASH_ALIAS_NAME, BINARY_NAME};
 use clap::{Parser, Subcommand};
 use std::env;
@@ -31,11 +29,6 @@ pub enum Command {
     Execute,
     /// Open `$EDITOR` on the given snippet file (or the default file).
     Add { path: Option<PathBuf> },
-    /// Delete the named or id-matched snippet from its source file.
-    Del {
-        #[arg(value_name = "NAME_OR_ID")]
-        name: String,
-    },
     /// Emit shell integration code for the given readline binding.
     Bash {
         #[arg(default_value = "C+b")]
@@ -50,15 +43,6 @@ pub struct ExecuteCommandResult {
     pub emitted: bool,
     /// Non-fatal warning shown when the frecency state could not be saved.
     pub persist_warning: Option<String>,
-}
-
-/// Identifies the snippet that was removed by [`run_del_command`].
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DeletedSnippet {
-    /// Id of the removed snippet.
-    pub id: SnippetId,
-    /// Path of the file that was modified (it may now be empty).
-    pub path: PathBuf,
 }
 
 /// Produce dynamic help content for resolved snippet roots and config/state
@@ -227,111 +211,6 @@ pub fn resolve_add_target(paths: &Paths, requested: Option<&Path>) -> io::Result
     Ok(target)
 }
 
-/// Delete the snippet identified by `query` (exact name or `file#slug` id).
-/// Removes the `##` section and its code block from the source file. If the
-/// file becomes empty after removal, the file itself is deleted.
-pub fn run_del_command(paths: &Paths, query: &str) -> io::Result<DeletedSnippet> {
-    let index = crate::index::load_from_roots(&paths.snippet_roots)?;
-    let target = resolve_delete_target(&index, query)?;
-    let content = fs::read_to_string(target.path())?;
-    let rendered = remove_snippet_from_content(&target.relative_path, &content, target.id())?;
-    if rendered.trim().is_empty() {
-        fs::remove_file(target.path())?;
-    } else {
-        fs::write(target.path(), rendered)?;
-    }
-    Ok(DeletedSnippet {
-        id: target.id().clone(),
-        path: target.path().to_path_buf(),
-    })
-}
-
-fn resolve_delete_target<'a>(
-    index: &'a SnippetIndex,
-    query: &str,
-) -> io::Result<&'a IndexedSnippet> {
-    if let Some(entry) = index.iter().find(|entry| entry.id().as_str() == query) {
-        return Ok(entry);
-    }
-
-    let matches: Vec<&IndexedSnippet> =
-        index.iter().filter(|entry| entry.name() == query).collect();
-    match matches.as_slice() {
-        [entry] => Ok(*entry),
-        [] => Err(io::Error::other(format!(
-            "no snippet matched exactly: {query}"
-        ))),
-        many => {
-            let ids = many
-                .iter()
-                .map(|entry| entry.id().as_str().to_string())
-                .collect::<Vec<_>>()
-                .join(", ");
-            Err(io::Error::other(format!(
-                "snippet name is ambiguous; use an exact id instead: {ids}"
-            )))
-        }
-    }
-}
-
-fn remove_snippet_from_content(
-    relative_path: &Path,
-    content: &str,
-    snippet_id: &SnippetId,
-) -> io::Result<String> {
-    let ranges = snippet_line_ranges(relative_path, content);
-    let target = ranges
-        .iter()
-        .find(|range| &range.id == snippet_id)
-        .ok_or_else(|| io::Error::other(format!("snippet not found in file: {snippet_id}")))?;
-    remove_lines_in_range(content, target)
-}
-
-fn remove_lines_in_range(content: &str, target: &SnippetLineRange) -> io::Result<String> {
-    let lines: Vec<&str> = content.lines().collect();
-    if target.start_line > lines.len()
-        || target.end_line > lines.len()
-        || target.start_line > target.end_line
-    {
-        return Err(io::Error::other(format!(
-            "snippet line range out of bounds for {}: {}..{} (file has {} lines)",
-            target.id,
-            target.start_line,
-            target.end_line,
-            lines.len()
-        )));
-    }
-
-    let had_trailing_newline = content.ends_with('\n');
-    let mut prefix: Vec<&str> = lines[..target.start_line].to_vec();
-    let mut suffix: Vec<&str> = lines[target.end_line..].to_vec();
-    while prefix
-        .last()
-        .is_some_and(|line: &&str| line.trim().is_empty())
-    {
-        prefix.pop();
-    }
-    while suffix
-        .first()
-        .is_some_and(|line: &&str| line.trim().is_empty())
-    {
-        suffix.remove(0);
-    }
-
-    let mut out = Vec::new();
-    out.extend(prefix);
-    if !out.is_empty() && !suffix.is_empty() {
-        out.push("");
-    }
-    out.extend(suffix);
-
-    let mut rendered = out.join("\n");
-    if had_trailing_newline && !rendered.is_empty() {
-        rendered.push('\n');
-    }
-    Ok(rendered)
-}
-
 fn normalize_add_path(mut path: PathBuf) -> PathBuf {
     if path.extension().is_none() {
         path.set_extension("md");
@@ -406,6 +285,7 @@ fn unix_now() -> u64 {
 mod tests {
     use super::*;
     use crate::config::Paths;
+    use crate::domain::SnippetId;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     fn temp_dir(prefix: &str) -> PathBuf {
@@ -449,14 +329,6 @@ mod tests {
             })
         );
         assert_eq!(
-            Cli::try_parse_from(["peanutbutter", "del", "Echo"])
-                .unwrap()
-                .command,
-            Some(Command::Del {
-                name: "Echo".to_string()
-            })
-        );
-        assert_eq!(
             Cli::try_parse_from(["peanutbutter", "bash"])
                 .unwrap()
                 .command,
@@ -481,10 +353,9 @@ mod tests {
     }
 
     #[test]
-    fn clap_del_usage_names_argument_name_or_id() {
-        let err = Cli::try_parse_from(["peanutbutter", "del"]).unwrap_err();
-        let message = err.to_string();
-        assert!(message.contains("<NAME_OR_ID>"));
+    fn clap_rejects_removed_del_subcommand() {
+        let err = Cli::try_parse_from(["peanutbutter", "del", "Echo"]).unwrap_err();
+        assert_eq!(err.kind(), clap::error::ErrorKind::InvalidSubcommand);
     }
 
     #[test]
@@ -653,77 +524,5 @@ mod tests {
         assert_eq!(err.to_string(), "nope");
         let saved = FrecencyStore::load(&paths.state_file).unwrap();
         assert!(saved.events().is_empty());
-    }
-
-    #[test]
-    fn delete_removes_only_target_snippet_block() {
-        let root = temp_dir("delete");
-        let content = "\
----\n\
-name: demo\n\
----\n\
-\n\
-# Title\n\
-\n\
-## One\n\
-\n\
-```\n\
-echo one\n\
-```\n\
-\n\
-## Two\n\
-\n\
-```\n\
-echo two\n\
-```\n";
-        fs::write(root.join("snippets.md"), content).unwrap();
-        let paths = test_paths(&root);
-        let deleted = run_del_command(&paths, "Two").unwrap();
-        assert_eq!(deleted.id.as_str(), "snippets.md#two");
-        let rewritten = fs::read_to_string(root.join("snippets.md")).unwrap();
-        assert!(rewritten.contains("## One"));
-        assert!(!rewritten.contains("## Two"));
-        assert!(rewritten.contains("# Title"));
-    }
-
-    #[test]
-    fn remove_lines_in_range_errors_when_out_of_bounds() {
-        let content = "one\ntwo\nthree\n";
-        let bogus = SnippetLineRange {
-            id: SnippetId::new("snippets.md", "ghost"),
-            start_line: 10,
-            end_line: 20,
-        };
-        let err = remove_lines_in_range(content, &bogus).unwrap_err();
-        assert!(
-            err.to_string().contains("out of bounds"),
-            "unexpected error: {err}"
-        );
-    }
-
-    #[test]
-    fn remove_lines_in_range_errors_when_start_after_end() {
-        let content = "one\ntwo\nthree\n";
-        let bogus = SnippetLineRange {
-            id: SnippetId::new("snippets.md", "ghost"),
-            start_line: 2,
-            end_line: 1,
-        };
-        let err = remove_lines_in_range(content, &bogus).unwrap_err();
-        assert!(err.to_string().contains("out of bounds"));
-    }
-
-    #[test]
-    fn delete_reports_ambiguous_exact_name_matches() {
-        let root = temp_dir("delete-ambiguous");
-        fs::create_dir_all(root.join("a")).unwrap();
-        fs::create_dir_all(root.join("b")).unwrap();
-        fs::write(root.join("a/one.md"), "## Echo\n\n```\na\n```\n").unwrap();
-        fs::write(root.join("b/two.md"), "## Echo\n\n```\nb\n```\n").unwrap();
-        let paths = test_paths(&root);
-        let err = run_del_command(&paths, "Echo").unwrap_err();
-        assert!(err.to_string().contains("ambiguous"));
-        assert!(err.to_string().contains("a/one.md#echo"));
-        assert!(err.to_string().contains("b/two.md#echo"));
     }
 }
