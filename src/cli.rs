@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command as ProcessCommand;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-const DEFAULT_ADD_PATH: &str = "snippets.md";
+const DEFAULT_EDIT_PATH: &str = "snippets.md";
 
 /// Terminal snippet manager.
 #[derive(Debug, Clone, Parser, PartialEq, Eq)]
@@ -28,7 +28,7 @@ pub enum Command {
     /// Run the interactive TUI and emit the selected command to stdout.
     Execute,
     /// Open `$EDITOR` on the given snippet file (or the default file).
-    Add { path: Option<PathBuf> },
+    Edit { path: Option<PathBuf> },
     /// Emit shell integration code for the given readline binding.
     Bash {
         #[arg(default_value = "C+b")]
@@ -158,16 +158,16 @@ where
 /// Resolve the target snippet file and open it in `$EDITOR` / `$VISUAL`.
 /// Creates the file (and any parent directories) if it doesn't exist yet.
 /// Returns the path of the file that was opened.
-pub fn run_add_command(paths: &Paths, requested: Option<&Path>) -> io::Result<PathBuf> {
-    run_add_command_with_editor(paths, requested, None)
+pub fn run_edit_command(paths: &Paths, requested: Option<&Path>) -> io::Result<PathBuf> {
+    run_edit_command_with_editor(paths, requested, None)
 }
 
-fn run_add_command_with_editor(
+fn run_edit_command_with_editor(
     paths: &Paths,
     requested: Option<&Path>,
     editor_override: Option<&str>,
 ) -> io::Result<PathBuf> {
-    let target = resolve_add_target(paths, requested)?;
+    let target = resolve_edit_target(paths, requested)?;
     if let Some(parent) = target.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -178,21 +178,21 @@ fn run_add_command_with_editor(
     Ok(target)
 }
 
-/// Determine the absolute path of the file to edit for `add`.
+/// Determine the absolute path of the file to edit for `edit`.
 ///
 /// - `None` → `<first-root>/snippets.md`
 /// - Relative path → anchored under the first snippet root
 /// - Absolute path → used as-is after verifying it's inside a known root
-pub fn resolve_add_target(paths: &Paths, requested: Option<&Path>) -> io::Result<PathBuf> {
+pub fn resolve_edit_target(paths: &Paths, requested: Option<&Path>) -> io::Result<PathBuf> {
     let default_root = paths
         .snippet_roots
         .first()
         .ok_or_else(|| io::Error::other("no snippet roots configured"))?;
 
     let target = match requested {
-        None => default_root.join(DEFAULT_ADD_PATH),
+        None => default_root.join(DEFAULT_EDIT_PATH),
         Some(path) if path.is_absolute() => {
-            let target = normalize_add_path(path.to_path_buf());
+            let target = normalize_edit_path(path.to_path_buf());
             if paths
                 .snippet_roots
                 .iter()
@@ -201,17 +201,17 @@ pub fn resolve_add_target(paths: &Paths, requested: Option<&Path>) -> io::Result
                 target
             } else {
                 return Err(io::Error::other(format!(
-                    "absolute add target must live under a configured snippet root: {}",
+                    "absolute edit target must live under a configured snippet root: {}",
                     path.display()
                 )));
             }
         }
-        Some(path) => default_root.join(normalize_add_path(path.to_path_buf())),
+        Some(path) => default_root.join(normalize_edit_path(path.to_path_buf())),
     };
     Ok(target)
 }
 
-fn normalize_add_path(mut path: PathBuf) -> PathBuf {
+fn normalize_edit_path(mut path: PathBuf) -> PathBuf {
     if path.extension().is_none() {
         path.set_extension("md");
     }
@@ -233,7 +233,7 @@ fn open_in_editor(target: &Path, editor_override: Option<&str>) -> io::Result<()
         })
         .ok_or_else(|| {
             io::Error::other(format!(
-                "set $VISUAL or $EDITOR before using {BINARY_NAME} add"
+                "set $VISUAL or $EDITOR before using {BINARY_NAME} edit"
             ))
         })?;
 
@@ -321,10 +321,10 @@ mod tests {
             Some(Command::Execute)
         );
         assert_eq!(
-            Cli::try_parse_from(["peanutbutter", "add", "nested/demo"])
+            Cli::try_parse_from(["peanutbutter", "edit", "nested/demo"])
                 .unwrap()
                 .command,
-            Some(Command::Add {
+            Some(Command::Edit {
                 path: Some(PathBuf::from("nested/demo"))
             })
         );
@@ -355,6 +355,12 @@ mod tests {
     #[test]
     fn clap_rejects_removed_del_subcommand() {
         let err = Cli::try_parse_from(["peanutbutter", "del", "Echo"]).unwrap_err();
+        assert_eq!(err.kind(), clap::error::ErrorKind::InvalidSubcommand);
+    }
+
+    #[test]
+    fn clap_rejects_old_add_subcommand() {
+        let err = Cli::try_parse_from(["peanutbutter", "add", "nested/demo"]).unwrap_err();
         assert_eq!(err.kind(), clap::error::ErrorKind::InvalidSubcommand);
     }
 
@@ -423,22 +429,22 @@ mod tests {
     }
 
     #[test]
-    fn resolve_add_target_defaults_and_appends_markdown_extension() {
-        let root = temp_dir("add-target");
+    fn resolve_edit_target_defaults_and_appends_markdown_extension() {
+        let root = temp_dir("edit-target");
         let paths = test_paths(&root);
         assert_eq!(
-            resolve_add_target(&paths, None).unwrap(),
+            resolve_edit_target(&paths, None).unwrap(),
             root.join("snippets.md")
         );
         assert_eq!(
-            resolve_add_target(&paths, Some(Path::new("docker/compose"))).unwrap(),
+            resolve_edit_target(&paths, Some(Path::new("docker/compose"))).unwrap(),
             root.join("docker/compose.md")
         );
     }
 
     #[test]
-    fn run_add_command_creates_file_and_invokes_editor() {
-        let root = temp_dir("add-command");
+    fn run_edit_command_creates_file_and_invokes_editor() {
+        let root = temp_dir("edit-command");
         let paths = test_paths(&root);
         let editor_log = root.join("editor.log");
         let editor = root.join("fake-editor.sh");
@@ -457,7 +463,7 @@ mod tests {
             .unwrap();
         assert!(status.success());
 
-        let target = run_add_command_with_editor(
+        let target = run_edit_command_with_editor(
             &paths,
             Some(Path::new("git/log")),
             Some(&editor.to_string_lossy()),

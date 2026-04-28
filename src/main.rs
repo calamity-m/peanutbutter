@@ -48,7 +48,7 @@ fn main() {
             }
             Err(err) => Err(err),
         },
-        cli::Command::Add { path } => cli::run_add_command(&paths, path.as_deref()).map(|_| ()),
+        cli::Command::Edit { path } => cli::run_edit_command(&paths, path.as_deref()).map(|_| ()),
     };
 
     if let Err(err) = result {
