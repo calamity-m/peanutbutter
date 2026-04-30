@@ -52,6 +52,8 @@ or burn it at the stake.
 
 ## Snippet Specification
 
+For a stricter syntax reference, see [docs/SNIPPET_SYNTAX.md](docs/SNIPPET_SYNTAX.md).
+
 Snippets are really just **ANY** markdown file that follows the following structure:
 
 A `##` heading, followed below by some ``` ``` code wrapping block. If multiple code wrapping blocks
