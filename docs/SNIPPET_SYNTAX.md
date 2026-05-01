@@ -174,6 +174,20 @@ Inline placeholder sources take precedence over config-defined variables. For
 example, `<@target:?world>` uses the inline default rather than a configured
 default for `target`.
 
+### Multi-line Values
+
+When filling in a variable, the value can span multiple lines:
+
+- Press **Alt+Enter** (or **Ctrl+J** on terminals that don't deliver Alt+Enter
+  as a distinct key) to insert a literal newline into the current value.
+- **Paste** preserves newlines: pasting a multi-line block from the clipboard
+  inserts it verbatim as a single multi-line value.
+- Plain **Enter** still submits the current value and advances to the next
+  variable.
+
+This is useful for prompt-template snippets where a variable holds a
+multi-paragraph prompt.
+
 ## Reusing Variable Values
 
 Placeholders with the same name are prompted once. Every occurrence of that

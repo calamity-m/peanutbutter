@@ -261,6 +261,18 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
         }
     }
 
+    /// Forward a bracketed-paste event to the active screen.
+    ///
+    /// Only the variable-prompt screen consumes pastes — multi-line snippet
+    /// values are the use case. Pastes on the select screen (fuzzy/browse) are
+    /// dropped intentionally so a stray multi-line clipboard doesn't garble the
+    /// search query.
+    pub fn handle_paste(&mut self, text: &str) {
+        if let Screen::Prompt(prompt) = &mut self.screen {
+            prompt.append_input(text);
+        }
+    }
+
     fn handle_select_key(&mut self, key: KeyEvent) -> AppEvent {
         if matches!(key.code, KeyCode::Esc) {
             self.status = Some("cancelled".to_string());

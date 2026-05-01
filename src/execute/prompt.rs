@@ -95,6 +95,26 @@ impl PromptState {
         visible.get(idx).copied()
     }
 
+    /// Append `text` to the in-progress input, normalizing line endings.
+    ///
+    /// Bracketed paste typically delivers `\r` (or `\r\n`) for newlines because
+    /// that's what the terminal saw on Enter; we translate to `\n` so the
+    /// cursor math (`advance_cursor`) and the line-splitting renderer stay in
+    /// sync. Also strips other control characters that would corrupt the
+    /// inline viewport (e.g. ESC sequences nested in the paste).
+    pub(crate) fn append_input(&mut self, text: &str) {
+        if text.is_empty() {
+            return;
+        }
+        let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
+        for ch in normalized.chars() {
+            if ch == '\n' || !ch.is_control() {
+                self.input.push(ch);
+            }
+        }
+        self.reset_selection();
+    }
+
     pub(crate) fn reset_selection(&mut self) {
         if self.visible_suggestions().is_empty() {
             self.selection = None;
@@ -150,6 +170,20 @@ pub(crate) fn handle_prompt_key<P: SuggestionProvider>(
             } else {
                 PromptTransition::ToSelect
             }
+        }
+        // Alt+Enter — insert a literal newline rather than submitting. Lets the
+        // user type multi-line values (e.g. multi-paragraph LLM prompts).
+        KeyCode::Enter if key.modifiers.contains(KeyModifiers::ALT) => {
+            prompt.input.push('\n');
+            prompt.reset_selection();
+            PromptTransition::Stay
+        }
+        // Ctrl+J — same intent as Alt+Enter, for terminals that don't deliver
+        // Alt+Enter as a distinct key event. Ctrl+J is LF on the wire.
+        KeyCode::Char('j') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            prompt.input.push('\n');
+            prompt.reset_selection();
+            PromptTransition::Stay
         }
         KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
             prompt.input.push(c);

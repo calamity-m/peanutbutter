@@ -5,7 +5,8 @@ use crate::frecency::FrecencyStore;
 use crate::index::IndexedSnippet;
 use crate::index::SnippetIndex;
 use crossterm::cursor;
-use crossterm::event::{self, Event};
+use crossterm::event::{self, DisableBracketedPaste, EnableBracketedPaste, Event};
+use crossterm::execute;
 use crossterm::terminal::{self, ClearType, disable_raw_mode, enable_raw_mode};
 use ratatui::backend::CrosstermBackend;
 use ratatui::{Terminal, TerminalOptions, Viewport};
@@ -89,10 +90,16 @@ pub fn run_execute_with_provider<P: SuggestionProvider>(
         if !event::poll(Duration::from_millis(250))? {
             continue;
         }
-        let Event::Key(key) = event::read()? else {
-            continue;
+        let event = event::read()?;
+        let app_event = match event {
+            Event::Key(key) => app.handle_key(key),
+            Event::Paste(text) => {
+                app.handle_paste(&text);
+                continue;
+            }
+            _ => continue,
         };
-        match app.handle_key(key) {
+        match app_event {
             AppEvent::Continue => {}
             AppEvent::EditSnippet(id) => {
                 let Some(snippet) = app.index.get(&id).cloned() else {
@@ -204,11 +211,17 @@ struct RawModeGuard {
 impl RawModeGuard {
     fn enter() -> io::Result<Self> {
         enable_raw_mode()?;
+        // Bracketed paste lets the terminal deliver pasted text as a single
+        // Event::Paste(String) — preserving newlines — instead of a stream of
+        // KeyCode::Char events that strip them. Best-effort: terminals that
+        // don't support it silently ignore the escape.
+        let _ = execute!(io::stdout(), EnableBracketedPaste);
         Ok(Self { active: true })
     }
 
     fn suspend(&mut self) -> io::Result<()> {
         if self.active {
+            let _ = execute!(io::stdout(), DisableBracketedPaste);
             disable_raw_mode()?;
             self.active = false;
         }
@@ -218,6 +231,7 @@ impl RawModeGuard {
     fn resume(&mut self) -> io::Result<()> {
         if !self.active {
             enable_raw_mode()?;
+            let _ = execute!(io::stdout(), EnableBracketedPaste);
             self.active = true;
         }
         Ok(())
@@ -227,6 +241,7 @@ impl RawModeGuard {
 impl Drop for RawModeGuard {
     fn drop(&mut self) {
         if self.active {
+            let _ = execute!(io::stdout(), DisableBracketedPaste);
             let _ = disable_raw_mode();
         }
     }

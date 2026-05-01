@@ -866,3 +866,151 @@ fn browse_entering_directory_resets_preview_scroll() {
     assert_eq!(app.browse.path, vec!["git".to_string()]);
     assert_eq!(app.preview_scroll, 0);
 }
+
+fn alt_enter() -> KeyEvent {
+    KeyEvent::new(KeyCode::Enter, KeyModifiers::ALT)
+}
+
+fn ctrl(c: char) -> KeyEvent {
+    KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL)
+}
+
+#[test]
+fn alt_enter_inserts_newline_and_does_not_submit() {
+    let variables = vec![Variable {
+        name: "msg".to_string(),
+        source: VariableSource::Free,
+    }];
+    let mut app = app_with_body("echo <@msg>", variables, TestProvider::default());
+    // Enter the prompt screen.
+    let _ = app.handle_key(press(KeyCode::Enter));
+    let _ = app.handle_key(press(KeyCode::Char('a')));
+    let _ = app.handle_key(alt_enter());
+    let _ = app.handle_key(press(KeyCode::Char('b')));
+    let outcome = completed(app.handle_key(press(KeyCode::Enter)));
+    assert_eq!(outcome.command, "echo a\nb");
+}
+
+#[test]
+fn ctrl_j_inserts_newline_in_prompt_input() {
+    let variables = vec![Variable {
+        name: "msg".to_string(),
+        source: VariableSource::Free,
+    }];
+    let mut app = app_with_body("echo <@msg>", variables, TestProvider::default());
+    let _ = app.handle_key(press(KeyCode::Enter));
+    let _ = app.handle_key(press(KeyCode::Char('a')));
+    let _ = app.handle_key(ctrl('j'));
+    let _ = app.handle_key(press(KeyCode::Char('b')));
+    let outcome = completed(app.handle_key(press(KeyCode::Enter)));
+    assert_eq!(outcome.command, "echo a\nb");
+}
+
+#[test]
+fn paste_into_prompt_preserves_newlines_as_single_value() {
+    let variables = vec![Variable {
+        name: "msg".to_string(),
+        source: VariableSource::Free,
+    }];
+    let mut app = app_with_body("echo <@msg>", variables, TestProvider::default());
+    let _ = app.handle_key(press(KeyCode::Enter));
+    app.handle_paste("line1\nline2\nline3");
+    let outcome = completed(app.handle_key(press(KeyCode::Enter)));
+    assert_eq!(outcome.command, "echo line1\nline2\nline3");
+}
+
+#[test]
+fn paste_normalizes_cr_and_crlf_to_lf() {
+    // Bracketed paste on most terminals delivers \r (or \r\n) for newlines —
+    // not \n. Without normalization the renderer's split('\n') leaves stray
+    // \r in spans, which corrupts the inline viewport and desyncs the cursor.
+    let variables = vec![Variable {
+        name: "msg".to_string(),
+        source: VariableSource::Free,
+    }];
+    let mut app = app_with_body("echo <@msg>", variables, TestProvider::default());
+    let _ = app.handle_key(press(KeyCode::Enter));
+    app.handle_paste("a\r\nb\rc");
+    let outcome = completed(app.handle_key(press(KeyCode::Enter)));
+    assert_eq!(outcome.command, "echo a\nb\nc");
+}
+
+#[test]
+fn paste_strips_other_control_characters() {
+    let variables = vec![Variable {
+        name: "msg".to_string(),
+        source: VariableSource::Free,
+    }];
+    let mut app = app_with_body("echo <@msg>", variables, TestProvider::default());
+    let _ = app.handle_key(press(KeyCode::Enter));
+    app.handle_paste("hi\x07\x1b[31mthere");
+    let outcome = completed(app.handle_key(press(KeyCode::Enter)));
+    assert_eq!(outcome.command, "echo hi[31mthere");
+}
+
+#[test]
+fn paste_then_tab_cycles_to_next_variable_preserving_value() {
+    let variables = vec![
+        Variable {
+            name: "first".to_string(),
+            source: VariableSource::Free,
+        },
+        Variable {
+            name: "second".to_string(),
+            source: VariableSource::Free,
+        },
+    ];
+    let mut app = app_with_body("<@first> | <@second>", variables, TestProvider::default());
+    let _ = app.handle_key(press(KeyCode::Enter));
+    app.handle_paste("a\nb");
+    let _ = app.handle_key(press(KeyCode::Tab));
+    let _ = app.handle_key(press(KeyCode::Char('z')));
+    let outcome = completed(app.handle_key(press(KeyCode::Enter)));
+    assert_eq!(outcome.command, "a\nb | z");
+}
+
+#[test]
+fn paste_on_select_screen_is_dropped() {
+    let variables = vec![Variable {
+        name: "msg".to_string(),
+        source: VariableSource::Free,
+    }];
+    let mut app = app_with_body("echo <@msg>", variables, TestProvider::default());
+    // Still on the select screen — paste must not affect search query.
+    app.handle_paste("multi\nline\npaste");
+    assert_eq!(app.fuzzy.query, "");
+}
+
+#[test]
+fn inline_default_with_embedded_newline_is_preserved() {
+    let variables = vec![Variable {
+        name: "block".to_string(),
+        source: VariableSource::Default("line1\nline2".to_string()),
+    }];
+    let mut app = app_with_body(
+        "cat <<EOF\n<@block:?ignored>\nEOF",
+        variables,
+        TestProvider::default(),
+    );
+    let _ = app.handle_key(press(KeyCode::Enter));
+    let Screen::Prompt(prompt) = &app.screen else {
+        panic!("expected prompt screen");
+    };
+    assert_eq!(prompt.input, "line1\nline2");
+    let outcome = completed(app.handle_key(press(KeyCode::Enter)));
+    assert_eq!(outcome.command, "cat <<EOF\nline1\nline2\nEOF");
+}
+
+#[test]
+fn plain_enter_still_submits_after_keybinds_added() {
+    let variables = vec![Variable {
+        name: "msg".to_string(),
+        source: VariableSource::Free,
+    }];
+    let mut app = app_with_body("echo <@msg>", variables, TestProvider::default());
+    let _ = app.handle_key(press(KeyCode::Enter));
+    let _ = app.handle_key(press(KeyCode::Char('h')));
+    let _ = app.handle_key(press(KeyCode::Char('i')));
+    let outcome = completed(app.handle_key(press(KeyCode::Enter)));
+    assert_eq!(outcome.command, "echo hi");
+}
