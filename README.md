@@ -1,15 +1,14 @@
 # Peanutbutter
 
-A command-line snippet tool that tries to mould to your own use-cases.
+A friendly terminal snippet management tool
 
 ## Quick-Start
 
 ```bash
 export PEANUTBUTTER_PATH="$PWD/examples"
-# peanutbutter bash C+b
-# peanutbutter bash C+f
-# etc.
 eval "$(peanutbutter bash)"
+# then press Ctrl + b and have fun.
+
 # also installs `pb` as a bash alias for `peanutbutter`
 ```
 
@@ -17,39 +16,43 @@ eval "$(peanutbutter bash)"
 
 I personally find that other cheatsheet or snippet tools don't adapt to my workflows, and cause me to constantly exit out of my own flow state.
 Ideally a snippet/cheatsheet tool should feel natural and complete at "the speed of thought" or whatever the fuck that means - really just, allow me to express myself naturally.
-Nothing can do that, but peanutbutter tries to do that through understanding:
+Nothing can do that sadly, but peanutbutter tries to get close by understanding:
 
 - Snippets need to be readable outside of the tool.
 - Fuzzy finding is amazing, and allows you to narrow in a command you know exists, or feel out the existence of some shell script; but:
-- Sometimes I have no idea what I want, only a feeling. Sometimes I want a structured way to look through my collection.
+- Sometimes I have no idea what I want, just knowledge that I have something in my personal journal with a bajillion pages. Fuzzy finding through that is just going to frustrate me.
+
+## Modes
+
+Peanutbutter has a fuzzy find mode, and a structured "file-list" mode.
+
+- Fuzzy finding is basically like fzf, I just stand on the back of helix's `nucleo-matcher` crate.
+- File-list mode lets you walk through your snippets as they're structured via directories and files. I find this useful when I need inspiration on what I want to do. It's hard to explain, but when you **know** you need to do something, but you want to explore what you have.
+
+## Curating, Editing and Maintaining Snippets
+
+I personally hate having to interact with snippet/cheatsheet tools, I want the easiest and lowest cost way to edit, delete, add, or whatever, my snippets. I consider this curating them.
+
+- In the picker, `Ctrl+E` opens the selected snippet in `$VISUAL` or `$EDITOR` at its heading line. When the editor exits, peanutbutter reloads snippets and returns to the picker.
+- You can add snippets via the cli - `pb edit <tab-complete>`.
+
+:shrug: maybe this is pointless but oh well.
 
 ## Alternatives
 
 There are alternatives to this, as this isn't a unique or new problem. These alternatives probably do this concept better, but they just don't hit every single note I'm looking for.
 
 - `denisidoro/navi` is probably the best, and does most of this tool but better - but has some minor annoyances around searching and the specification for cheats that irks me.
-- `fzf` can do this with a bit of bash-fu - frequency/recency is harder to tune. 
+- `fzf` can do this with a bit of bash-fu - frequency/recency is harder to tune.
 - `alexpasmantier/television` with a cheatsheet channel. This can be pretty nice, but I didn't like how restricted I felt in channel definitions
 - the "mega" cheatsheet things like tl;dr, but I don't really want 90k commands I'll never use, in formats I don't like.
 
-## Modes
-
-Peanutbutter has a fuzzy find mode, and a structured "file-list" mode. 
-
-- Fuzzy finding is basically like fzf, I just stand on the back of helix's `nucleo-matcher` crate.
-- File-list mode lets you walk through your snippets as they're structured via directories and files. I find this useful when I need inspiration on what I want to do. It's hard to explain,
-but when you __know__ you need to do something, but you want to explore what you have.
-- In the picker, `Ctrl+E` opens the selected snippet in `$VISUAL` or `$EDITOR` at its heading line. When the editor exits, peanutbutter reloads snippets and returns to the picker.
-
-:shrug: maybe this is pointless but oh well.
-
 ## AI Disclaimer
 
-This tool has been [VIBED] with direction from myself. It's a tool I don't care enough about to craft myself painstakingly after work and on my weekends, 
+This tool has been [VIBED] with direction from myself. It's a tool I don't care enough about to craft myself painstakingly after work and on my weekends,
 but enough that I've thought about it for years.
 
-Code probably shit - but the code would be shit if I wrote every single line myself too. Nothing in the repo would cause a `CVE-999-999` so feel safe to use it,
-or burn it at the stake.
+Code probably shit - but the code would be shit if I wrote every single line myself too. Use it like I do, or burn it at the stake. You have free-will right? ;)
 
 ## Snippet Specification
 
@@ -57,23 +60,25 @@ For a stricter syntax reference, see [docs/SNIPPET_SYNTAX.md](docs/SNIPPET_SYNTA
 
 Snippets are really just **ANY** markdown file that follows the following structure:
 
-A `##` heading, followed below by some ``` ``` code wrapping block. If multiple code wrapping blocks
+A `##` heading, followed below by some ` ` code wrapping block. If multiple code wrapping blocks
 are present, only the first will be considered the snippet. Otherwise, anything between the code wrapping block
-and the heading is considered description/preview data. 
+and the heading is considered description/preview data.
 
 Here are the following rules:
 
 1. A snippet file can be any markdown file, or directory containing nested markdown files
-2. A snippet is defined by a preceeding `##` heading, and some ``` ``` code wrapping block
+2. A snippet is defined by a preceeding `##` heading, and some ` ` code wrapping block
 3. Snippets have variable input syntax of <@AAA:BBB>, where AAA is the name of the input, which
-is shown to the user/provide context to what to input, and BBB is the pre-seeded options the user
-can select from. A user can enter something completely different however, as BBB is just a hint/options
-list.
+   is shown to the user/provide context to what to input, and BBB is the pre-seeded options the user
+   can select from. A user can enter something completely different however, as BBB is just a hint/options
+   list.
 4. Variable input syntax is extended with `:?`, which denotes a default/pre-populated option.
 5. Common variable inputs are setup by default, such as:
-    <@file> <-- list of files in the current working directory
-    <@directory> <--- list of directories in the current working directory
+   <@file> <-- list of files in the current working directory
+   <@directory> <--- list of directories in the current working directory
 6. Predefined variable inputs can be defined by the user in peanutbutter's config file
+
+This snippet syntax lets you show your snippets to random coworkers, friends or what have you without asking them to understand much - the input variable syntax is fairly simple and close to self explanatory.
 
 ## Configuration
 
