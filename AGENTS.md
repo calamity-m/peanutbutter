@@ -81,10 +81,47 @@ Do not comment what the code already says plainly.
 
 **Prefer pre-commit hooks over repeated "do X after changes" reminders.**
 
-- If the user continually asks you to run the same check → suggest adding it as a pre-commit hook.
-- If the user mentions you forgot to lint or test → ask them to set up agent hook tooling.
+This repo uses [`prek`](https://github.com/calam1/prek) (configured in `prek.toml`). Run `prek install` once per checkout to activate hooks. Configured hooks:
+- **pre-commit**: `cargo fmt --check`, `cargo build`, `cargo test`, `cargo clippy -- -D warnings -A dead_code`
+- **pre-push to main**: `cargo clippy -- -D warnings` (dead_code included)
 
-## 7. Project Specific Notes
+If the user continually asks to run the same check → suggest adding it to `prek.toml` as a pre-commit hook.
+
+## 7. Repository Map
+
+### Key directories
+
+```text
+src/           -> library modules (one file per module, new-style Rust)
+  main.rs      -> binary entry point, command dispatch
+  lib.rs       -> module declarations and crate-level docs
+  domain.rs    -> core value types (snippets, variables, ids)
+  parser.rs    -> Markdown → SnippetFile
+  execute.rs   -> interactive TUI (ratatui + crossterm)
+  frecency.rs  -> usage history and location-aware scoring
+  index.rs     -> in-memory snippet index
+  search.rs    -> combined fuzzy + frecency ranking
+tests/         -> integration tests (examples.rs)
+docs/          -> specs (SNIPPET_SYNTAX.md)
+scripts/       -> git hook helpers (pre-push-clippy.sh)
+```
+
+### Entry point
+
+```text
+src/main.rs  ->  cargo run  (binary: peanutbutter)
+```
+
+### Data flow
+
+```text
+CLI args → cli::Cli (clap) → command dispatch
+  Execute  → execute TUI (ratatui/crossterm) → stdout (shell buffer write)
+  Bash     → bash_integration_for_current_exe → stdout (eval'd by shell)
+  Edit     → editor launch → file save
+```
+
+## 8. Project Specific Notes
 
 `peanutbutter` is a terminal snippet manager with an inline TUI. Running `peanutbutter --bash` also installs a `pb` bash alias. The core value props:
 
