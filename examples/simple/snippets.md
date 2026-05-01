@@ -1,57 +1,51 @@
 ---
-name: Example Snippet Name Metadata
-tags: 
-    - example tag
-    - example tag 2
-description: frontmatter metadata, this stuff gets fuzzy searched so use at your own peril. Helpful, but beyond tags ehhh - do as you see fit.
+name: Shell utilities
+tags:
+  - shell
+  - files
+description: Common shell and file operations.
 ---
 
-# Example Snippets
+# Shell Utilities
 
-This file has example snippets that show the basic syntax for peanutbutter. The README specifies the specification better,
-but examples are easiest to grep.
-
-## Echo something without newline
-
-This is a description, which we can use some pretty markdown in. 
-Our first wrapped code block (backticks) will be considered the
-"snippet"
-
-For instance, the following snippet takes an input variable, and
-echoes it back to the terminal with no newline.
+## List directory contents
 
 ```bash
-echo -n <@input>
+ls -lsha <@path:?.>
 ```
 
-## List all files, including hidden
-
-Here, we have a more complex example of user input. `:?` sets a default value
-for the user input.
+## Watch a file for new lines
 
 ```bash
-ls -lsha <@input:?.>
+tail -f <@file:rg . --files>
 ```
 
-## Cat file and base64 contents, with no newline
+## Find files by name pattern
 
-Sometimes we want to populate suggestions, and have those suggestions come from
-some shell command. This can be done by just specifying the command after your colon.
-
-Here we have a definition for input, which is the output of "rg . --files".
-
-It's also worth pointing out that the "description" here is markdown that gets rendered nicely.
-Sometimes you have a snippet that needs context displayed with it, instructions or just a primer.
-
-### wheeeeeeeee
-
-1. you
-2. so
-3. fine
-
-Why use this snippet? Idk.
-
-```
-cat <@input:rg . --files> | base64 -w 0
+```bash
+find <@directory:?.> -name "<@pattern>" -type f
 ```
 
+## Read and decode base64 content from a file
+
+```bash
+cat <@file:rg . --files> | base64 -d
+```
+
+## Create a directory and navigate into it
+
+```bash
+mkdir -p <@path> && cd <@path>
+```
+
+## Copy a file to a timestamped backup
+
+```bash
+cp <@file:rg . --files> <@file:rg . --files>.$(date +%Y%m%d%H%M%S).bak
+```
+
+## Search for a running process
+
+```bash
+ps aux | grep <@process>
+```
