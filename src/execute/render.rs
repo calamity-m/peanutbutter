@@ -232,9 +232,15 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
         frame.render_widget(border, outer);
         let area = Block::default().borders(Borders::ALL).inner(outer);
         let preview = self.prompt_preview_text(prompt);
-        let cmd_height = (preview.lines.len() as u16).max(1);
+        let total_preview_lines = preview.lines.len() as u16;
 
+        // Reserve rows for status (1) + help (1) + suggestions (variable). The
+        // command preview takes whatever is left, capped so it never crowds out
+        // the panes below — large multi-line values scroll within `cmd_area`
+        // instead of pushing the suggestions/help off-screen.
         let (cmd_area, status_area, sugg_area, help_area) = if prompt.suggestions.is_empty() {
+            let cmd_max = area.height.saturating_sub(2).max(1);
+            let cmd_height = total_preview_lines.max(1).min(cmd_max);
             let chunks = Layout::default()
                 .direction(Direction::Vertical)
                 .constraints([
@@ -245,10 +251,12 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
                 .split(area);
             (chunks[0], chunks[1], None, chunks[2])
         } else {
-            let max_sugg = area.height.saturating_sub(cmd_height + 2);
-            let sugg_height = (prompt.visible_suggestions().len() as u16)
-                .min(max_sugg)
-                .max(1);
+            let visible_sugg = prompt.visible_suggestions().len() as u16;
+            // Cap suggestions to leave at least 1 row for cmd + 2 for status/help.
+            let max_sugg = area.height.saturating_sub(3);
+            let sugg_height = visible_sugg.min(max_sugg).max(1);
+            let cmd_max = area.height.saturating_sub(sugg_height + 2).max(1);
+            let cmd_height = total_preview_lines.max(1).min(cmd_max);
             let chunks = Layout::default()
                 .direction(Direction::Vertical)
                 .constraints([
@@ -260,7 +268,33 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
                 .split(area);
             (chunks[0], chunks[1], Some(chunks[2]), chunks[3])
         };
-        frame.render_widget(Paragraph::new(preview).wrap(Wrap { trim: false }), cmd_area);
+
+        // Compute the cursor row first so we can scroll the preview to keep it
+        // visible. `cursor_in_template` returns a row index in the unscrolled
+        // text; subtract `scroll_y` when placing the on-screen cursor.
+        let (cursor_col, cursor_row) = self
+            .index
+            .get(&prompt.snippet_id)
+            .map(|snippet| {
+                let mut values = prompt.values.clone();
+                let value = prompt.current_value();
+                if !value.is_empty() {
+                    values.insert(prompt.current_variable().name.clone(), value);
+                }
+                cursor_in_template(snippet.body(), &values, &prompt.current_variable().name)
+            })
+            .unwrap_or((0, 0));
+        let cmd_inner_height = cmd_area.height.max(1);
+        let max_scroll = total_preview_lines.saturating_sub(cmd_inner_height);
+        let scroll_y = cursor_row
+            .saturating_sub(cmd_inner_height.saturating_sub(1))
+            .min(max_scroll);
+        frame.render_widget(
+            Paragraph::new(preview)
+                .wrap(Wrap { trim: false })
+                .scroll((scroll_y, 0)),
+            cmd_area,
+        );
 
         let variable = prompt.current_variable();
         let label = prompt.error.as_deref().unwrap_or(variable.name.as_str());
@@ -297,17 +331,11 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
             frame.render_stateful_widget(List::new(items), area, &mut list_state);
         }
 
-        if let Some(snippet) = self.index.get(&prompt.snippet_id) {
-            let mut values = prompt.values.clone();
-            let value = prompt.current_value();
-            if !value.is_empty() {
-                values.insert(variable.name.clone(), value);
-            }
-            let (cursor_col, cursor_row) =
-                cursor_in_template(snippet.body(), &values, &variable.name);
+        if self.index.get(&prompt.snippet_id).is_some() {
+            let visible_row = cursor_row.saturating_sub(scroll_y);
             frame.set_cursor_position(Position {
                 x: cmd_area.x + cursor_col,
-                y: cmd_area.y + cursor_row,
+                y: cmd_area.y + visible_row,
             });
         }
 
