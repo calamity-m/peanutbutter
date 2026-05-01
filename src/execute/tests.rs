@@ -56,6 +56,21 @@ fn snippet_file(rel: &str, name: &str, body: &str, variables: Vec<Variable>) -> 
     }
 }
 
+fn snippet_file_with_slug(rel: &str, slug: &str, name: &str, body: &str) -> SnippetFile {
+    SnippetFile {
+        path: PathBuf::from(rel),
+        relative_path: PathBuf::from(rel),
+        frontmatter: Frontmatter::default(),
+        snippets: vec![Snippet {
+            id: crate::domain::SnippetId::new(rel, slug),
+            name: name.to_string(),
+            description: "desc".to_string(),
+            body: body.to_string(),
+            variables: vec![],
+        }],
+    }
+}
+
 fn app_with_body(
     body: &str,
     variables: Vec<Variable>,
@@ -82,7 +97,17 @@ fn completed(event: AppEvent) -> ExecutionOutcome {
     match event {
         AppEvent::Completed(outcome) => outcome,
         AppEvent::Continue => panic!("expected completed event, got continue"),
+        AppEvent::EditSnippet(id) => panic!("expected completed event, got edit request for {id}"),
         AppEvent::Cancelled => panic!("expected completed event, got cancelled"),
+    }
+}
+
+fn edit_requested(event: AppEvent) -> crate::domain::SnippetId {
+    match event {
+        AppEvent::EditSnippet(id) => id,
+        AppEvent::Continue => panic!("expected edit request, got continue"),
+        AppEvent::Cancelled => panic!("expected edit request, got cancelled"),
+        AppEvent::Completed(_) => panic!("expected edit request, got completed"),
     }
 }
 
@@ -211,6 +236,195 @@ fn enter_from_picker_completes_snippet_with_no_variables() {
     let mut app = app_with_body("echo hi", vec![], TestProvider::default());
     let outcome = completed(app.handle_key(press(KeyCode::Enter)));
     assert_eq!(outcome.command, "echo hi");
+}
+
+#[test]
+fn ctrl_e_from_fuzzy_requests_edit_for_selected_snippet() {
+    let mut app = app_with_body("echo hi", vec![], TestProvider::default());
+    let id =
+        edit_requested(app.handle_key(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL)));
+    assert_eq!(id.as_str(), "x.md#slug");
+}
+
+#[test]
+fn ctrl_e_from_browse_requests_edit_for_selected_snippet() {
+    let mut app = app_with_body("echo hi", vec![], TestProvider::default());
+    app.nav_mode = NavigationMode::Browse;
+    app.browse.path = vec!["x.md".to_string()];
+    app.browse.selection = Some(0);
+
+    let id =
+        edit_requested(app.handle_key(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL)));
+    assert_eq!(id.as_str(), "x.md#slug");
+}
+
+#[test]
+fn ctrl_e_from_browse_directory_does_not_request_edit() {
+    let mut app = app_with_body("echo hi", vec![], TestProvider::default());
+    app.nav_mode = NavigationMode::Browse;
+    app.browse.selection = Some(0);
+
+    let event = app.handle_key(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL));
+    assert!(matches!(event, AppEvent::Continue));
+    assert_eq!(app.browse.path, Vec::<String>::new());
+}
+
+#[test]
+fn replace_index_preserves_fuzzy_query_and_selects_previous_snippet() {
+    let mut app = ExecutionApp::new(
+        SnippetIndex::from_files([
+            snippet_file_with_slug("git.md", "status", "Git Status", "git status"),
+            snippet_file_with_slug("docker.md", "ps", "Docker Ps", "docker ps"),
+        ]),
+        FrecencyStore::new(),
+        PathBuf::from("."),
+        0,
+        crate::config::SearchConfig::default(),
+        crate::config::Theme::default(),
+        TestProvider::default(),
+    );
+    app.fuzzy.set_query("docker");
+    let previous_id = crate::domain::SnippetId::new("docker.md", "ps");
+
+    let found = app.replace_index(
+        SnippetIndex::from_files([
+            snippet_file_with_slug("git.md", "status", "Git Status", "git status"),
+            snippet_file_with_slug("docker.md", "ps", "Docker Ps", "docker ps -a"),
+        ]),
+        Some(&previous_id),
+    );
+
+    assert!(found);
+    assert_eq!(app.fuzzy.query, "docker");
+    assert_eq!(
+        app.selected_snippet().map(|snippet| snippet.id().as_str()),
+        Some("docker.md#ps")
+    );
+}
+
+#[test]
+fn replace_index_reports_when_previous_snippet_is_missing() {
+    let mut app = app_with_body("echo hi", vec![], TestProvider::default());
+    let previous_id = crate::domain::SnippetId::new("missing.md", "gone");
+
+    let found = app.replace_index(
+        SnippetIndex::from_files([snippet_file_with_slug("x.md", "slug", "Demo", "echo hi")]),
+        Some(&previous_id),
+    );
+
+    assert!(!found);
+    assert_eq!(
+        app.selected_snippet().map(|snippet| snippet.id().as_str()),
+        Some("x.md#slug")
+    );
+}
+
+#[test]
+fn replace_index_preserves_query_when_previous_snippet_no_longer_matches() {
+    let mut app = ExecutionApp::new(
+        SnippetIndex::from_files([snippet_file_with_slug(
+            "ops.md",
+            "ps",
+            "Docker Ps",
+            "docker ps",
+        )]),
+        FrecencyStore::new(),
+        PathBuf::from("."),
+        0,
+        crate::config::SearchConfig::default(),
+        crate::config::Theme::default(),
+        TestProvider::default(),
+    );
+    app.fuzzy.set_query("docker");
+    let previous_id = crate::domain::SnippetId::new("ops.md", "ps");
+
+    let found = app.replace_index(
+        SnippetIndex::from_files([snippet_file_with_slug(
+            "ops.md",
+            "ps",
+            "Pods",
+            "kubectl get pods",
+        )]),
+        Some(&previous_id),
+    );
+
+    assert!(found);
+    assert_eq!(app.fuzzy.query, "docker");
+    assert!(app.selected_snippet().is_none());
+}
+
+#[test]
+fn replace_index_selects_previous_browse_snippet_when_still_visible() {
+    let mut app = ExecutionApp::new(
+        SnippetIndex::from_files([snippet_file_with_slug(
+            "git/commands.md",
+            "status",
+            "Status",
+            "git status",
+        )]),
+        FrecencyStore::new(),
+        PathBuf::from("."),
+        0,
+        crate::config::SearchConfig::default(),
+        crate::config::Theme::default(),
+        TestProvider::default(),
+    );
+    app.nav_mode = NavigationMode::Browse;
+    app.browse.path = vec!["git".to_string(), "commands.md".to_string()];
+    app.browse.selection = Some(0);
+    let previous_id = crate::domain::SnippetId::new("git/commands.md", "status");
+
+    let found = app.replace_index(
+        SnippetIndex::from_files([snippet_file_with_slug(
+            "git/commands.md",
+            "status",
+            "Status",
+            "git status --short",
+        )]),
+        Some(&previous_id),
+    );
+
+    assert!(found);
+    assert_eq!(
+        app.selected_snippet().map(|snippet| snippet.body()),
+        Some("git status --short")
+    );
+}
+
+#[test]
+fn replace_index_climbs_missing_browse_directory() {
+    let mut app = ExecutionApp::new(
+        SnippetIndex::from_files([snippet_file_with_slug(
+            "old/place.md",
+            "demo",
+            "Demo",
+            "echo old",
+        )]),
+        FrecencyStore::new(),
+        PathBuf::from("."),
+        0,
+        crate::config::SearchConfig::default(),
+        crate::config::Theme::default(),
+        TestProvider::default(),
+    );
+    app.nav_mode = NavigationMode::Browse;
+    app.browse.path = vec!["old".to_string(), "place.md".to_string()];
+    app.browse.selection = Some(0);
+    let previous_id = crate::domain::SnippetId::new("old/place.md", "demo");
+
+    let found = app.replace_index(
+        SnippetIndex::from_files([snippet_file_with_slug(
+            "new/place.md",
+            "demo",
+            "Demo",
+            "echo new",
+        )]),
+        Some(&previous_id),
+    );
+
+    assert!(!found);
+    assert_eq!(app.browse.path, Vec::<String>::new());
+    assert_eq!(app.browse.selection, Some(0));
 }
 
 #[test]

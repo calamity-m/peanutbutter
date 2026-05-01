@@ -1,5 +1,8 @@
 use crate::config;
+use crate::domain::SnippetId;
+use crate::editor;
 use crate::frecency::FrecencyStore;
+use crate::index::IndexedSnippet;
 use crate::index::SnippetIndex;
 use crossterm::cursor;
 use crossterm::event::{self, Event};
@@ -28,6 +31,7 @@ pub fn execute_default() -> io::Result<Option<ExecutionOutcome>> {
         search: app_config.search.clone(),
         theme: app_config.theme.clone(),
         variables: app_config.variables.clone(),
+        snippet_roots: app_config.paths.snippet_roots.clone(),
         ..ExecuteOptions::default()
     };
     run_execute(index, frecency, options)
@@ -74,7 +78,7 @@ pub fn run_execute_with_provider<P: SuggestionProvider>(
         provider,
     );
     let _stdout_guard = StdoutTtyGuard::enter()?;
-    let _raw_mode = RawModeGuard::enter()?;
+    let mut raw_mode = RawModeGuard::enter()?;
     let mut terminal = build_terminal(options.viewport_height)?;
     let mut viewport_top: Option<u16> = None;
     let outcome = loop {
@@ -90,6 +94,23 @@ pub fn run_execute_with_provider<P: SuggestionProvider>(
         };
         match app.handle_key(key) {
             AppEvent::Continue => {}
+            AppEvent::EditSnippet(id) => {
+                let Some(snippet) = app.index.get(&id).cloned() else {
+                    app.status = Some(edit_status(
+                        EditResult::MissingSnippet(id),
+                        &mut app,
+                        &options.snippet_roots,
+                    ));
+                    continue;
+                };
+                cleanup_terminal(viewport_top)?;
+                raw_mode.suspend()?;
+                let edit_result = edit_snippet(&snippet);
+                raw_mode.resume()?;
+                terminal = build_terminal(options.viewport_height)?;
+                viewport_top = None;
+                app.status = Some(edit_status(edit_result, &mut app, &options.snippet_roots));
+            }
             AppEvent::Cancelled => break None,
             AppEvent::Completed(outcome) => break Some(outcome),
         }
@@ -126,20 +147,88 @@ pub(crate) fn compact_viewport_height(max_height: u16) -> u16 {
     max_height.max(1)
 }
 
+#[derive(Debug)]
+enum EditResult {
+    Edited(String),
+    Failed(io::Error),
+    MissingSnippet(SnippetId),
+}
+
+fn edit_snippet(snippet: &IndexedSnippet) -> EditResult {
+    match editor::open_snippet(snippet, None) {
+        Ok(()) => EditResult::Edited(snippet.name().to_string()),
+        Err(err) => EditResult::Failed(err),
+    }
+}
+
+fn edit_status<P: SuggestionProvider>(
+    result: EditResult,
+    app: &mut ExecutionApp<P>,
+    snippet_roots: &[std::path::PathBuf],
+) -> String {
+    match result {
+        EditResult::Edited(name) => reload_after_edit(app, snippet_roots, name),
+        EditResult::Failed(err) => format!("edit failed: {err}"),
+        EditResult::MissingSnippet(id) => format!("snippet no longer exists: {id}"),
+    }
+}
+
+fn reload_after_edit<P: SuggestionProvider>(
+    app: &mut ExecutionApp<P>,
+    snippet_roots: &[std::path::PathBuf],
+    name: String,
+) -> String {
+    let previous_id = app.selected_snippet().map(|snippet| snippet.id().clone());
+    if snippet_roots.is_empty() {
+        return format!("edited {name}; reload skipped");
+    }
+    match crate::index::load_from_roots(snippet_roots) {
+        Ok(index) => {
+            let previous_found = app.replace_index(index, previous_id.as_ref());
+            if previous_found {
+                format!("edited {name}; reloaded")
+            } else {
+                format!("edited {name}; reloaded, previous snippet not found")
+            }
+        }
+        Err(err) => format!("edited {name}; reload failed: {err}"),
+    }
+}
+
 /// RAII guard that enables terminal raw mode on construction and disables it
 /// on drop, even if the TUI exits via `?`.
-struct RawModeGuard;
+struct RawModeGuard {
+    active: bool,
+}
 
 impl RawModeGuard {
     fn enter() -> io::Result<Self> {
         enable_raw_mode()?;
-        Ok(Self)
+        Ok(Self { active: true })
+    }
+
+    fn suspend(&mut self) -> io::Result<()> {
+        if self.active {
+            disable_raw_mode()?;
+            self.active = false;
+        }
+        Ok(())
+    }
+
+    fn resume(&mut self) -> io::Result<()> {
+        if !self.active {
+            enable_raw_mode()?;
+            self.active = true;
+        }
+        Ok(())
     }
 }
 
 impl Drop for RawModeGuard {
     fn drop(&mut self) {
-        let _ = disable_raw_mode();
+        if self.active {
+            let _ = disable_raw_mode();
+        }
     }
 }
 
@@ -236,4 +325,131 @@ pub(crate) fn unix_now() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_secs())
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::{Frontmatter, Snippet, SnippetFile};
+    use std::fs;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    #[test]
+    fn edit_status_reports_success() {
+        let mut app = test_app();
+        assert_eq!(
+            edit_status(EditResult::Edited("Demo".to_string()), &mut app, &[]),
+            "edited Demo; reload skipped"
+        );
+    }
+
+    #[test]
+    fn edit_status_reports_failure_without_panicking() {
+        let mut app = test_app();
+        let status = edit_status(
+            EditResult::Failed(io::Error::other("no editor")),
+            &mut app,
+            &[],
+        );
+
+        assert_eq!(status, "edit failed: no editor");
+    }
+
+    #[test]
+    fn edit_status_reports_missing_snippet() {
+        let mut app = test_app();
+        let id = SnippetId::new("snippets.md", "demo");
+
+        assert_eq!(
+            edit_status(EditResult::MissingSnippet(id), &mut app, &[]),
+            "snippet no longer exists: snippets.md#demo"
+        );
+    }
+
+    #[test]
+    fn reload_after_edit_replaces_index_from_roots() {
+        let root = temp_dir("reload-success");
+        let path = root.join("snippets.md");
+        fs::write(&path, "## Demo\n\n```\necho old\n```\n").unwrap();
+        let mut app = test_app_with_file(snippet_file(&path, "echo old"));
+        fs::write(&path, "## Demo\n\n```\necho new\n```\n").unwrap();
+
+        let status = reload_after_edit(&mut app, &[root.clone()], "Demo".to_string());
+
+        assert_eq!(status, "edited Demo; reloaded");
+        assert_eq!(
+            app.selected_snippet().map(|snippet| snippet.body()),
+            Some("echo new")
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn reload_after_edit_failure_keeps_previous_index() {
+        let root = temp_dir("reload-failure");
+        let path = root.join("snippets.md");
+        fs::write(&path, "## Demo\n\n```\necho old\n```\n").unwrap();
+        let mut app = test_app_with_file(snippet_file(&path, "echo old"));
+        fs::write(&path, b"\xff").unwrap();
+
+        let status = reload_after_edit(&mut app, &[root.clone()], "Demo".to_string());
+
+        assert!(status.starts_with("edited Demo; reload failed:"));
+        assert_eq!(
+            app.selected_snippet().map(|snippet| snippet.body()),
+            Some("echo old")
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    fn test_app() -> ExecutionApp {
+        ExecutionApp::new(
+            SnippetIndex::new(),
+            FrecencyStore::new(),
+            std::path::PathBuf::from("."),
+            0,
+            config::SearchConfig::default(),
+            config::Theme::default(),
+            SystemSuggestionProvider::new(Default::default()),
+        )
+    }
+
+    fn test_app_with_file(file: SnippetFile) -> ExecutionApp {
+        ExecutionApp::new(
+            SnippetIndex::from_files([file]),
+            FrecencyStore::new(),
+            std::path::PathBuf::from("."),
+            0,
+            config::SearchConfig::default(),
+            config::Theme::default(),
+            SystemSuggestionProvider::new(Default::default()),
+        )
+    }
+
+    fn snippet_file(path: &std::path::Path, body: &str) -> SnippetFile {
+        SnippetFile {
+            path: path.to_path_buf(),
+            relative_path: std::path::PathBuf::from("snippets.md"),
+            frontmatter: Frontmatter::default(),
+            snippets: vec![Snippet {
+                id: SnippetId::new("snippets.md", "demo"),
+                name: "Demo".to_string(),
+                description: String::new(),
+                body: body.to_string(),
+                variables: vec![],
+            }],
+        }
+    }
+
+    fn temp_dir(prefix: &str) -> std::path::PathBuf {
+        static NEXT: AtomicU64 = AtomicU64::new(1);
+        let path = std::env::temp_dir().join(format!(
+            "pb-terminal-{prefix}-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        let _ = fs::remove_dir_all(&path);
+        fs::create_dir_all(&path).unwrap();
+        path
+    }
 }

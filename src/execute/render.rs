@@ -196,7 +196,7 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
         } else {
             match self.nav_mode {
                 NavigationMode::Fuzzy => {
-                    "enter accept  ctrl+j/k/↑↓ scroll preview  ctrl+t browse  esc cancel"
+                    "enter accept  ctrl+e edit  ctrl+j/k/↑↓ preview  ctrl+t browse  esc cancel"
                         .to_string()
                 }
                 NavigationMode::Browse => {
@@ -205,9 +205,10 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
                         .map(|e| matches!(e, BrowseEntry::Directory(_)))
                         .unwrap_or(false);
                     if selected_is_dir {
-                        "tab complete  enter open  ctrl+j/k/↑↓ scroll preview  ctrl+t search  esc cancel".to_string()
+                        "tab complete  enter open  ctrl+j/k/↑↓ preview  ctrl+t search  esc cancel"
+                            .to_string()
                     } else {
-                        "tab complete  enter accept  ctrl+j/k/↑↓ scroll preview  ctrl+t search  esc cancel".to_string()
+                        "tab complete  enter accept  ctrl+e edit  ctrl+j/k/↑↓ preview  ctrl+t search  esc cancel".to_string()
                     }
                 }
             }

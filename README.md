@@ -39,6 +39,7 @@ Peanutbutter has a fuzzy find mode, and a structured "file-list" mode.
 - Fuzzy finding is basically like fzf, I just stand on the back of helix's `nucleo-matcher` crate.
 - File-list mode lets you walk through your snippets as they're structured via directories and files. I find this useful when I need inspiration on what I want to do. It's hard to explain,
 but when you __know__ you need to do something, but you want to explore what you have.
+- In the picker, `Ctrl+E` opens the selected snippet in `$VISUAL` or `$EDITOR` at its heading line. When the editor exits, peanutbutter reloads snippets and returns to the picker.
 
 :shrug: maybe this is pointless but oh well.
 

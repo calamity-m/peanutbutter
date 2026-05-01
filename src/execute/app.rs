@@ -118,6 +118,8 @@ pub struct ExecutionApp<P = SystemSuggestionProvider> {
 pub enum AppEvent {
     /// The event was handled; keep running the event loop.
     Continue,
+    /// The user requested to edit the currently selected snippet.
+    EditSnippet(SnippetId),
     /// The user pressed Esc or Ctrl+C; the TUI should exit without a result.
     Cancelled,
     /// The user confirmed a fully filled-in snippet; the TUI should exit with
@@ -197,6 +199,30 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
         }
     }
 
+    /// Replace the snippet index after an on-disk edit, rebuilding derived
+    /// picker state while preserving the current navigation mode and query.
+    ///
+    /// Returns `true` when `preferred_id` still exists in the refreshed index.
+    pub(crate) fn replace_index(
+        &mut self,
+        index: SnippetIndex,
+        preferred_id: Option<&SnippetId>,
+    ) -> bool {
+        self.tree = BrowseTree::from_index(&index);
+        self.index = index;
+        self.screen = Screen::Select;
+
+        let preferred_found = preferred_id
+            .and_then(|id| self.index.get(id))
+            .map(|_| true)
+            .unwrap_or(false);
+        match self.nav_mode {
+            NavigationMode::Fuzzy => self.restore_fuzzy_selection(preferred_id),
+            NavigationMode::Browse => self.restore_browse_selection(preferred_id),
+        }
+        preferred_found
+    }
+
     /// Dispatch a crossterm key event to the appropriate screen handler and
     /// return the resulting [`AppEvent`].
     ///
@@ -250,6 +276,14 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
             };
             self.preview_scroll = 0;
             self.status = None;
+            return AppEvent::Continue;
+        }
+
+        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('e') {
+            if let Some(id) = self.selected_snippet_id() {
+                self.status = None;
+                return AppEvent::EditSnippet(id);
+            }
             return AppEvent::Continue;
         }
 
@@ -407,5 +441,47 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
             BrowseEntry::Snippet(snippet) => self.index.get(&snippet.id),
             BrowseEntry::Directory(_) => None,
         }
+    }
+
+    fn selected_snippet_id(&self) -> Option<SnippetId> {
+        self.selected_snippet().map(|snippet| snippet.id().clone())
+    }
+
+    fn restore_fuzzy_selection(&mut self, preferred_id: Option<&SnippetId>) {
+        let hits = self.search_hits();
+        if hits.is_empty() {
+            self.fuzzy.selection = None;
+            return;
+        }
+        if let Some(position) =
+            preferred_id.and_then(|id| hits.iter().position(|hit| hit.snippet.id() == id))
+        {
+            self.fuzzy.selection = Some(position);
+            return;
+        }
+        let current = self.fuzzy.selection.unwrap_or(0).min(hits.len() - 1);
+        self.fuzzy.selection = Some(current);
+    }
+
+    fn restore_browse_selection(&mut self, preferred_id: Option<&SnippetId>) {
+        while !self.browse.path.is_empty() && self.tree.get(&self.browse.path).is_none() {
+            self.browse.path.pop();
+        }
+        let visible = self.browse.visible(&self.tree);
+        if visible.is_empty() {
+            self.browse.selection = None;
+            return;
+        }
+        if let Some(position) = preferred_id.and_then(|id| {
+            visible.iter().position(|entry| match entry {
+                BrowseEntry::Snippet(snippet) => snippet.id == *id,
+                BrowseEntry::Directory(_) => false,
+            })
+        }) {
+            self.browse.selection = Some(position);
+            return;
+        }
+        let current = self.browse.selection.unwrap_or(0).min(visible.len() - 1);
+        self.browse.selection = Some(current);
     }
 }

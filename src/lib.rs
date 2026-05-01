@@ -26,6 +26,7 @@ pub mod cli;
 pub mod config;
 pub mod discovery;
 pub mod domain;
+pub mod editor;
 pub mod execute;
 pub mod frecency;
 pub mod fuzzy;

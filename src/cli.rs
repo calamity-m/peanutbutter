@@ -1,4 +1,5 @@
 use crate::config::Paths;
+use crate::editor::{self, EditorTarget};
 use crate::execute::{self, ExecuteOptions, ExecutionOutcome};
 use crate::frecency::FrecencyStore;
 use crate::index::SnippetIndex;
@@ -8,7 +9,6 @@ use std::env;
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Component, Path, PathBuf};
-use std::process::Command as ProcessCommand;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const DEFAULT_EDIT_PATH: &str = "snippets.md";
@@ -148,6 +148,7 @@ where
         search: app_config.search.clone(),
         theme: app_config.theme.clone(),
         variables: app_config.variables.clone(),
+        snippet_roots: paths.snippet_roots.clone(),
         ..ExecuteOptions::default()
     };
     let outcome = runner(index, store.clone(), options)?;
@@ -192,7 +193,7 @@ fn run_edit_command_with_editor(
     if !target.exists() {
         fs::write(&target, "")?;
     }
-    open_in_editor(&target, editor_override)?;
+    editor::open(&EditorTarget::file(target.clone()), editor_override)?;
     Ok(target)
 }
 
@@ -403,41 +404,6 @@ fn normalize_edit_path(mut path: PathBuf) -> PathBuf {
     path
 }
 
-fn open_in_editor(target: &Path, editor_override: Option<&str>) -> io::Result<()> {
-    let editor = editor_override
-        .map(ToOwned::to_owned)
-        .or_else(|| {
-            env::var("VISUAL")
-                .ok()
-                .filter(|value| !value.trim().is_empty())
-        })
-        .or_else(|| {
-            env::var("EDITOR")
-                .ok()
-                .filter(|value| !value.trim().is_empty())
-        })
-        .ok_or_else(|| {
-            io::Error::other(format!(
-                "set $VISUAL or $EDITOR before using {BINARY_NAME} edit"
-            ))
-        })?;
-
-    let status = ProcessCommand::new("bash")
-        .arg("-lc")
-        .arg("eval \"$PB_EDITOR\" \"$PB_TARGET_QUOTED\"")
-        .env("PB_EDITOR", editor)
-        .env("PB_TARGET_QUOTED", shell_quote(&target.to_string_lossy()))
-        .status()?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err(io::Error::other(format!(
-            "editor exited unsuccessfully for {}",
-            target.display()
-        )))
-    }
-}
-
 fn readline_binding(binding: &str) -> Result<String, String> {
     let binding = binding.trim();
     for prefix in ["C+", "C-", "Ctrl+", "Ctrl-", "ctrl+", "ctrl-"] {
@@ -471,6 +437,7 @@ mod tests {
     use super::*;
     use crate::config::Paths;
     use crate::domain::SnippetId;
+    use std::process::Command as ProcessCommand;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     fn temp_dir(prefix: &str) -> PathBuf {

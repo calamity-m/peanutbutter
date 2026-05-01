@@ -56,6 +56,9 @@ pub struct ExecuteOptions {
     pub theme: config::Theme,
     /// Per-variable config overrides (keyed by variable name).
     pub variables: std::collections::BTreeMap<String, VariableInputConfig>,
+    /// Snippet roots used to build the original index. These are reused when
+    /// the TUI reloads snippets after editing.
+    pub snippet_roots: Vec<PathBuf>,
 }
 
 impl Default for ExecuteOptions {
@@ -67,6 +70,7 @@ impl Default for ExecuteOptions {
             search: config::SearchConfig::default(),
             theme: config::Theme::default(),
             variables: std::collections::BTreeMap::new(),
+            snippet_roots: Vec::new(),
         }
     }
 }
