@@ -1,5 +1,9 @@
 # Peanutbutter
 
+[![Unstable](https://github.com/calamity-m/peanutbutter/actions/workflows/unstable.yml/badge.svg)](https://github.com/calamity-m/peanutbutter/actions/workflows/unstable.yml)
+[![Release](https://github.com/calamity-m/peanutbutter/actions/workflows/release.yml/badge.svg)](https://github.com/calamity-m/peanutbutter/actions/workflows/release.yml)
+[![Latest Release](https://img.shields.io/github/v/release/calamity-m/peanutbutter)](https://github.com/calamity-m/peanutbutter/releases/latest)
+
 A friendly terminal snippet management tool
 
 ## Quick-Start
