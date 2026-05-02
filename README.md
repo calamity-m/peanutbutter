@@ -91,7 +91,7 @@ This snippet syntax lets you show your snippets to random coworkers, friends or 
 
 ### Snippet Paths
 
-By default, peanutbutter looks for snippets in `~/.config/peanutbutter/snippets/`. Additional directories can be added via the `PEANUTBUTTER_PATH` environment variable, using colon-separated paths (same convention as `$PATH`). [Snippet paths can also be added via configuration](#configuration)
+By default, peanutbutter looks for snippets in `~/.config/peanutbutter/snippets/`. Additional directories can be added via the `PEANUTBUTTER_PATH` environment variable, using colon-separated paths (same convention as `$PATH`). [Snippet paths can also be added via configuration](#config-file)
 
 For example, to also include the bundled `examples/` directory from this repo:
 
