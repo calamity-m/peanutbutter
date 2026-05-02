@@ -112,52 +112,6 @@ This file is optional. If it doesn't exist, peanutbutter uses built-in defaults.
 
 A fully commented example config lives at [examples/config.toml](/home/calam/code/peanutbutter/examples/config.toml).
 
-Example:
-
-```toml
-[paths]
-snippets = [
-  "/home/me/work-snippets",
-  "/home/me/personal-snippets",
-]
-state_file = "/home/me/.local/state/peanutbutter/state.tsv"
-
-[ui]
-height = 18
-
-[search]
-frecency_weight = 250.0
-
-[search.frecency]
-half_life_days = 14.0
-location_weight = 1.0
-frequency_weight = 1.0
-
-[search.fuzzy]
-name = 30
-tag = 20
-frontmatter_name = 15
-description = 10
-path = 10
-body = 8
-
-[theme]
-accent = "red"
-muted = "dark_gray"
-selected_bg = "#30343f"
-selected_fg = "white"
-prompt_active_fg = "black"
-prompt_active_bg = "#f4d35e"
-error_fg = "red"
-
-[variables.http_method]
-default = "GET"
-suggestions = ["GET", "POST", "PUT", "PATCH", "DELETE"]
-
-[variables.kube_context]
-command = "kubectl config get-contexts -o name"
-```
-
 Notes:
 
 - `paths.snippets` adds extra snippet roots, alongside `PEANUTBUTTER_PATH` and the default XDG snippets directory
