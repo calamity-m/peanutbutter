@@ -4,11 +4,12 @@
 [![Release](https://github.com/calamity-m/peanutbutter/actions/workflows/release.yml/badge.svg)](https://github.com/calamity-m/peanutbutter/actions/workflows/release.yml)
 [![Latest Release](https://img.shields.io/github/v/release/calamity-m/peanutbutter)](https://github.com/calamity-m/peanutbutter/releases/latest)
 
-A friendly terminal snippet management tool
+A friendly terminal snippet management tool.
 
 ## Quick-Start
 
 **bash** — add to `~/.bashrc`:
+
 ```bash
 export PEANUTBUTTER_PATH="$PWD/examples"
 eval "$(peanutbutter bash)"
@@ -17,12 +18,14 @@ eval "$(peanutbutter bash)"
 ```
 
 **zsh** — add to `~/.zshrc`:
+
 ```zsh
 export PEANUTBUTTER_PATH="$PWD/examples"
 eval "$(peanutbutter zsh)"
 ```
 
 **fish** — add to `~/.config/fish/config.fish`:
+
 ```fish
 set -x PEANUTBUTTER_PATH "$PWD/examples"
 peanutbutter fish | source
@@ -35,8 +38,8 @@ Ideally a snippet/cheatsheet tool should feel natural and complete at "the speed
 Nothing can do that sadly, but peanutbutter tries to get close by understanding:
 
 - Snippets need to be readable outside of the tool.
-- Fuzzy finding is amazing, and allows you to narrow in a command you know exists, or feel out the existence of some shell script; but:
-- Sometimes I have no idea what I want, just knowledge that I have something in my personal journal with a bajillion pages. Fuzzy finding through that is just going to frustrate me.
+- Fuzzy finding is amazing, and allows you to narrow in a command you know exists, or feel out the existence of some shell script;
+- But sometimes I have no idea what I want, just knowledge that I have something in my personal journal with a bajillion pages. Fuzzy finding through that is just going to frustrate me.
 
 ## Modes
 
@@ -80,19 +83,7 @@ A `##` heading, followed below by some ` ` code wrapping block. If multiple code
 are present, only the first will be considered the snippet. Otherwise, anything between the code wrapping block
 and the heading is considered description/preview data.
 
-Here are the following rules:
-
-1. A snippet file can be any markdown file, or directory containing nested markdown files
-2. A snippet is defined by a preceeding `##` heading, and some ` ` code wrapping block
-3. Snippets have variable input syntax of <@AAA:BBB>, where AAA is the name of the input, which
-   is shown to the user/provide context to what to input, and BBB is the pre-seeded options the user
-   can select from. A user can enter something completely different however, as BBB is just a hint/options
-   list.
-4. Variable input syntax is extended with `:?`, which denotes a default/pre-populated option.
-5. Common variable inputs are setup by default, such as:
-   <@file> <-- list of files in the current working directory
-   <@directory> <--- list of directories in the current working directory
-6. Predefined variable inputs can be defined by the user in peanutbutter's config file
+I recommend just [just reading through the examples](/examples/simple/snippets.md)
 
 This snippet syntax lets you show your snippets to random coworkers, friends or what have you without asking them to understand much - the input variable syntax is fairly simple and close to self explanatory.
 
@@ -100,7 +91,7 @@ This snippet syntax lets you show your snippets to random coworkers, friends or 
 
 ### Snippet Paths
 
-By default, peanutbutter looks for snippets in `~/.config/peanutbutter/snippets/`. Additional directories can be added via the `PEANUTBUTTER_PATH` environment variable, using colon-separated paths (same convention as `$PATH`).
+By default, peanutbutter looks for snippets in `~/.config/peanutbutter/snippets/`. Additional directories can be added via the `PEANUTBUTTER_PATH` environment variable, using colon-separated paths (same convention as `$PATH`). [Snippet paths can also be added via configuration](#configuration)
 
 For example, to also include the bundled `examples/` directory from this repo:
 
@@ -122,7 +113,7 @@ Peanutbutter reads config from `~/.config/peanutbutter/config.toml` by default. 
 
 This file is optional. If it doesn't exist, peanutbutter uses built-in defaults.
 
-A fully commented example config lives at [examples/config.toml](/home/calam/code/peanutbutter/examples/config.toml).
+A fully commented example config lives at [examples/config.toml](examples/config.toml).
 
 Notes:
 
@@ -139,7 +130,7 @@ Notes:
 ## Peanutbutter CLI
 
 1. `peanutbutter bash [C+b]` — emit bash integration script (eval it in `~/.bashrc`)
-2. `peanutbutter zsh [C+b]`  — emit zsh integration script (eval it in `~/.zshrc`)
+2. `peanutbutter zsh [C+b]` — emit zsh integration script (eval it in `~/.zshrc`)
 3. `peanutbutter fish [C+b]` — emit fish integration script (source it in `config.fish`)
 4. `peanutbutter edit ...` — edit a snippet file in `$EDITOR`/`$VISUAL`
 5. `peanutbutter execute` — run the inline TUI; output can be piped, e.g. `peanutbutter execute | grep foo`

@@ -4,14 +4,18 @@ Candidate features to grow peanutbutter from "personal tool" into "tool you'd
 recommend to a teammate". Ordered roughly by impact ÷ effort. Nothing here is
 committed — this is a backlog, not a plan.
 
+## Completed
+
+- **Zsh + fish integration.** `peanutbutter zsh` / `peanutbutter fish`
+  subcommands emitting ZLE / `commandline -i` glue equivalent to the bash
+  script. Shipped in v0.5.1.
+
 ## Near-term cut
 
 The five items I'd ship first. Together they turn the project from a personal
 tool into something shareable.
 
-- **Zsh + fish integration.** A `peanutbutter zsh` / `peanutbutter fish`
-  subcommand emitting ZLE / `commandline -i` glue equivalent to today's bash
-  script. Single biggest accessibility gap.
+- ~~**Zsh + fish integration.**~~ Done — see Completed above.
 - **Snippet-local variable declarations in frontmatter.** Let a snippet declare
   its own variable specs (suggestions, defaults, command) so the file is
   self-contained and shareable without depending on the reader's `config.toml`.
@@ -26,7 +30,7 @@ tool into something shareable.
 
 ## Tier 1 — High leverage, fits the philosophy
 
-- **Zsh + fish integration.** (See above.)
+- ~~**Zsh + fish integration.**~~ Done — see Completed above.
 - **Snippet-local variable declarations.** (See above.)
 - **Tag-as-navigation.** (See above.)
 - **`pb check` lint.** (See above.)
