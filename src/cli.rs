@@ -282,35 +282,94 @@ struct EditRootAlias {
     root: PathBuf,
 }
 
+/// Build a short, unique alias for each snippet root. The alias is the leaf
+/// path component by default; on collision (common because conventional setups
+/// use `…/snippets/` for every root) we walk toward `/` and use the first
+/// ancestor segment that disambiguates the colliding roots from each other.
+/// A numeric suffix (`alias-N`) is the last-resort fallback when two roots are
+/// indistinguishable even at every ancestor depth.
 fn edit_root_aliases(paths: &Paths) -> Vec<EditRootAlias> {
-    let mut aliases = Vec::new();
-    let mut seen: Vec<String> = Vec::new();
-    for root in &paths.snippet_roots {
-        let base = root
-            .file_name()
-            .and_then(|name| name.to_str())
-            .filter(|name| !name.is_empty())
-            .unwrap_or("root")
-            .to_string();
-        let alias = if seen.iter().any(|seen| seen == &base) {
+    let component_lists: Vec<Vec<String>> = paths
+        .snippet_roots
+        .iter()
+        .map(|root| named_components(root))
+        .collect();
+    let mut depths: Vec<usize> = vec![0; paths.snippet_roots.len()];
+    let mut aliases: Vec<String> = component_lists
+        .iter()
+        .map(|components| component_at_depth(components, 0))
+        .collect();
+
+    loop {
+        let colliding: Vec<usize> = (0..aliases.len())
+            .filter(|&i| {
+                aliases
+                    .iter()
+                    .enumerate()
+                    .any(|(j, other)| j != i && other == &aliases[i])
+            })
+            .collect();
+        if colliding.is_empty() {
+            break;
+        }
+        let mut progressed = false;
+        for &idx in &colliding {
+            let next_depth = depths[idx] + 1;
+            if next_depth < component_lists[idx].len() {
+                depths[idx] = next_depth;
+                aliases[idx] = component_at_depth(&component_lists[idx], next_depth);
+                progressed = true;
+            }
+        }
+        if !progressed {
+            break;
+        }
+    }
+
+    let mut final_aliases: Vec<String> = Vec::with_capacity(aliases.len());
+    for alias in aliases {
+        let mut candidate = alias;
+        if final_aliases.contains(&candidate) {
+            let base = candidate.clone();
             let mut next = 2;
             loop {
-                let candidate = format!("{base}-{next}");
-                if !seen.iter().any(|seen| seen == &candidate) {
-                    break candidate;
+                let attempt = format!("{base}-{next}");
+                if !final_aliases.contains(&attempt) {
+                    candidate = attempt;
+                    break;
                 }
                 next += 1;
             }
-        } else {
-            base
-        };
-        seen.push(alias.clone());
-        aliases.push(EditRootAlias {
+        }
+        final_aliases.push(candidate);
+    }
+
+    paths
+        .snippet_roots
+        .iter()
+        .zip(final_aliases)
+        .map(|(root, alias)| EditRootAlias {
             alias,
             root: root.clone(),
-        });
+        })
+        .collect()
+}
+
+fn named_components(path: &Path) -> Vec<String> {
+    path.components()
+        .filter_map(|c| match c {
+            Component::Normal(s) => Some(s.to_string_lossy().into_owned()),
+            _ => None,
+        })
+        .collect()
+}
+
+fn component_at_depth(components: &[String], depth: usize) -> String {
+    if components.is_empty() {
+        return "root".to_string();
     }
-    aliases
+    let idx = components.len() - 1 - depth.min(components.len() - 1);
+    components[idx].clone()
 }
 
 fn starts_with_current_dir(path: &Path) -> bool {
@@ -620,12 +679,11 @@ mod tests {
     }
 
     #[test]
-    fn edit_root_aliases_use_basename_and_suffix_duplicates() {
-        let workspace = temp_dir("edit-aliases");
+    fn edit_root_aliases_use_basename_when_unique() {
         let paths = test_paths_with_roots(vec![
-            workspace.join("snippets"),
-            workspace.join("work"),
-            workspace.join("other").join("work"),
+            PathBuf::from("/home/me/snippets"),
+            PathBuf::from("/home/me/work"),
+            PathBuf::from("/home/me/personal"),
         ]);
 
         let aliases: Vec<_> = edit_root_aliases(&paths)
@@ -633,7 +691,66 @@ mod tests {
             .map(|entry| entry.alias)
             .collect();
 
-        assert_eq!(aliases, vec!["snippets", "work", "work-2"]);
+        assert_eq!(aliases, vec!["snippets", "work", "personal"]);
+    }
+
+    #[test]
+    fn edit_root_aliases_walk_up_to_disambiguate_basename_collisions() {
+        let paths = test_paths_with_roots(vec![
+            PathBuf::from("/home/me/.config/peanutbutter/snippets"),
+            PathBuf::from("/home/me/.config/peanutbutter-private/snippets"),
+        ]);
+
+        let aliases: Vec<_> = edit_root_aliases(&paths)
+            .into_iter()
+            .map(|entry| entry.alias)
+            .collect();
+
+        assert_eq!(aliases, vec!["peanutbutter", "peanutbutter-private"]);
+    }
+
+    #[test]
+    fn edit_root_aliases_walk_only_colliding_roots() {
+        let paths = test_paths_with_roots(vec![
+            PathBuf::from("/home/me/snippets"),
+            PathBuf::from("/home/me/work"),
+            PathBuf::from("/home/other/work"),
+        ]);
+
+        let aliases: Vec<_> = edit_root_aliases(&paths)
+            .into_iter()
+            .map(|entry| entry.alias)
+            .collect();
+
+        assert_eq!(aliases, vec!["snippets", "me", "other"]);
+    }
+
+    #[test]
+    fn edit_root_aliases_walk_past_shared_ancestors() {
+        let paths = test_paths_with_roots(vec![
+            PathBuf::from("/home/work/team/snippets"),
+            PathBuf::from("/home/personal/team/snippets"),
+        ]);
+
+        let aliases: Vec<_> = edit_root_aliases(&paths)
+            .into_iter()
+            .map(|entry| entry.alias)
+            .collect();
+
+        assert_eq!(aliases, vec!["work", "personal"]);
+    }
+
+    #[test]
+    fn edit_root_aliases_fall_back_to_numeric_suffix_when_indistinguishable() {
+        let paths =
+            test_paths_with_roots(vec![PathBuf::from("/snippets"), PathBuf::from("/snippets")]);
+
+        let aliases: Vec<_> = edit_root_aliases(&paths)
+            .into_iter()
+            .map(|entry| entry.alias)
+            .collect();
+
+        assert_eq!(aliases, vec!["snippets", "snippets-2"]);
     }
 
     #[test]
