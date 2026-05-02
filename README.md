@@ -8,12 +8,24 @@ A friendly terminal snippet management tool
 
 ## Quick-Start
 
+**bash** — add to `~/.bashrc`:
 ```bash
 export PEANUTBUTTER_PATH="$PWD/examples"
 eval "$(peanutbutter bash)"
 # then press Ctrl + b and have fun.
-
 # also installs `pb` as a bash alias for `peanutbutter`
+```
+
+**zsh** — add to `~/.zshrc`:
+```zsh
+export PEANUTBUTTER_PATH="$PWD/examples"
+eval "$(peanutbutter zsh)"
+```
+
+**fish** — add to `~/.config/fish/config.fish`:
+```fish
+set -x PEANUTBUTTER_PATH "$PWD/examples"
+peanutbutter fish | source
 ```
 
 ## Why
@@ -126,8 +138,10 @@ Notes:
 
 ## Peanutbutter CLI
 
-1. `peanutbutter bash C+b` <-- create bash for ctrl+b hotkey, so I can put into my bashrc eval "$(...)"
-2. `peanutbutter edit ...` <-- edit a snippet file in $EDITOR/$VISUAL
-3. `peanutbutter execute` <-- run the inline tui for people who want to be explicit, and just execute the snippet they complete. doesn't have to go into bash buffer, but could be piped, e.g. peanutbutter execute | grep -i "a"
+1. `peanutbutter bash [C+b]` — emit bash integration script (eval it in `~/.bashrc`)
+2. `peanutbutter zsh [C+b]`  — emit zsh integration script (eval it in `~/.zshrc`)
+3. `peanutbutter fish [C+b]` — emit fish integration script (source it in `config.fish`)
+4. `peanutbutter edit ...` — edit a snippet file in `$EDITOR`/`$VISUAL`
+5. `peanutbutter execute` — run the inline TUI; output can be piped, e.g. `peanutbutter execute | grep foo`
 
-After `eval "$(peanutbutter bash)"`, bash also gets a `pb` alias that points at `peanutbutter`.
+All three shell integrations install a `pb` alias and wire up `pb edit <TAB>` completion.

@@ -34,6 +34,16 @@ pub enum Command {
         #[arg(default_value = "C+b")]
         binding: String,
     },
+    /// Emit zsh integration code for the given ZLE binding.
+    Zsh {
+        #[arg(default_value = "C+b")]
+        binding: String,
+    },
+    /// Emit fish integration code for the given key binding.
+    Fish {
+        #[arg(default_value = "C+b")]
+        binding: String,
+    },
     /// Internal bash completion helper for `edit`.
     #[command(hide = true)]
     CompleteEdit { current: Option<String> },
@@ -53,7 +63,7 @@ pub struct ExecuteCommandResult {
 pub fn after_help(paths: &Paths) -> String {
     let mut out = String::new();
     out.push_str(&format!(
-        "bash shorthand: `{BINARY_NAME} bash` also defines `{BASH_ALIAS_NAME}`\n\n"
+        "shell integration: `{BINARY_NAME} bash|zsh|fish` also defines `{BASH_ALIAS_NAME}`\n\n"
     ));
     out.push_str("snippet roots:\n");
     for root in &paths.snippet_roots {
@@ -62,59 +72,6 @@ pub fn after_help(paths: &Paths) -> String {
     out.push_str(&format!("config file: {}\n", paths.config_file.display()));
     out.push_str(&format!("state file: {}\n", paths.state_file.display()));
     out
-}
-
-/// Emit the bash integration script using the path of the currently running
-/// executable. Intended for `peanutbutter bash`; the caller should `eval` the
-/// output in their shell init file.
-pub fn bash_integration_for_current_exe(binding: &str) -> io::Result<String> {
-    let exe = env::current_exe()?;
-    bash_integration_script(binding, &exe)
-}
-
-/// Build the bash integration script for a given `executable` path and
-/// readline `binding` (e.g. `"C+b"`). Separated from
-/// [`bash_integration_for_current_exe`] so tests can supply a controlled path.
-pub fn bash_integration_script(binding: &str, executable: &Path) -> io::Result<String> {
-    let binding = readline_binding(binding)
-        .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err))?;
-    let executable = shell_quote(&executable.to_string_lossy());
-    Ok(format!(
-        r#"\builtin unalias {BASH_ALIAS_NAME} &>/dev/null || \builtin true
-\builtin alias {BASH_ALIAS_NAME}='{BINARY_NAME}'
-__pb_insert_command() {{
-  local __pb_cmd
-  __pb_cmd=$({executable} execute)
-  local __pb_status=$?
-  if [[ $__pb_status -ne 0 ]]; then
-    return $__pb_status
-  fi
-  if [[ -z $__pb_cmd ]]; then
-    READLINE_LINE="${{READLINE_LINE}}"
-    READLINE_POINT=${{READLINE_POINT}}
-    return 0
-  fi
-  READLINE_LINE="${{READLINE_LINE:0:$READLINE_POINT}}${{__pb_cmd}}${{READLINE_LINE:$READLINE_POINT}}"
-  READLINE_POINT=$(( READLINE_POINT + ${{#__pb_cmd}} ))
-}}
-bind -x '"{binding}":__pb_insert_command'
-__pb_complete() {{
-  local cur subcommand
-  cur="${{COMP_WORDS[COMP_CWORD]}}"
-  subcommand="${{COMP_WORDS[1]}}"
-  if [[ "$subcommand" == "edit" ]]; then
-    COMPREPLY=()
-    local candidate
-    while IFS= read -r candidate; do
-      COMPREPLY+=("$candidate")
-    done < <({executable} complete-edit "$cur")
-    return 0
-  fi
-  COMPREPLY=( $(compgen -W "bash edit execute" -- "$cur") )
-}}
-complete -o nospace -F __pb_complete {BINARY_NAME} {BASH_ALIAS_NAME}
-"#
-    ))
 }
 
 /// Run the execute TUI, write the selected command to `writer`, and record a
@@ -463,27 +420,6 @@ fn normalize_edit_path(mut path: PathBuf) -> PathBuf {
     path
 }
 
-fn readline_binding(binding: &str) -> Result<String, String> {
-    let binding = binding.trim();
-    for prefix in ["C+", "C-", "Ctrl+", "Ctrl-", "ctrl+", "ctrl-"] {
-        if let Some(rest) = binding.strip_prefix(prefix) {
-            let mut chars = rest.chars();
-            let ch = chars
-                .next()
-                .ok_or_else(|| "binding is missing a key after the control prefix".to_string())?;
-            if chars.next().is_some() {
-                return Err("only single-key control bindings are supported in v1".to_string());
-            }
-            return Ok(format!("\\C-{}", ch.to_ascii_lowercase()));
-        }
-    }
-    Err("expected a control binding like C+b".to_string())
-}
-
-fn shell_quote(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "'\\''"))
-}
-
 fn unix_now() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -498,6 +434,10 @@ mod tests {
     use crate::domain::SnippetId;
     use std::process::Command as ProcessCommand;
     use std::sync::atomic::{AtomicU64, Ordering};
+
+    fn shell_quote(value: &str) -> String {
+        format!("'{}'", value.replace('\'', "'\\''"))
+    }
 
     fn temp_dir(prefix: &str) -> PathBuf {
         static NEXT: AtomicU64 = AtomicU64::new(1);
@@ -593,23 +533,10 @@ mod tests {
     }
 
     #[test]
-    fn default_bash_binding_script_emits_pb_alias() {
-        let Some(Command::Bash { binding }) = Cli::try_parse_from(["peanutbutter", "bash"])
-            .unwrap()
-            .command
-        else {
-            panic!("expected bash command");
-        };
-        let script = bash_integration_script(&binding, Path::new("/tmp/peanutbutter")).unwrap();
-        assert!(script.contains("\\builtin alias pb='peanutbutter'"));
-        assert!(script.contains("bind -x '\"\\C-b\":__pb_insert_command'"));
-    }
-
-    #[test]
-    fn after_help_prefers_peanutbutter_and_mentions_pb_alias() {
+    fn after_help_mentions_all_shells_and_pb_alias() {
         let paths = test_paths(Path::new("/tmp/snippets"));
         let help = after_help(&paths);
-        assert!(help.contains("`peanutbutter bash` also defines `pb`"));
+        assert!(help.contains("bash|zsh|fish` also defines `pb`"));
         assert!(help.contains("snippet roots:"));
         assert!(help.contains("/tmp/snippets"));
     }
@@ -622,46 +549,6 @@ mod tests {
         let help = String::from_utf8(help).unwrap();
         assert!(help.contains("bash"));
         assert!(!help.contains("--bash"));
-    }
-
-    #[test]
-    fn explicit_bash_binding_script_uses_requested_binding() {
-        let Some(Command::Bash { binding }) = Cli::try_parse_from(["peanutbutter", "bash", "C+b"])
-            .unwrap()
-            .command
-        else {
-            panic!("expected bash command");
-        };
-        assert_eq!(
-            Command::Bash {
-                binding: "C+b".to_string()
-            },
-            Command::Bash {
-                binding: binding.clone()
-            }
-        );
-        let script = bash_integration_script(&binding, Path::new("/tmp/peanutbutter")).unwrap();
-        assert!(script.contains("\\builtin alias pb='peanutbutter'"));
-        assert!(script.contains("bind -x '\"\\C-b\":__pb_insert_command'"));
-    }
-
-    #[test]
-    fn bash_script_uses_readline_bind_and_executable_path() {
-        let script = bash_integration_script("C+b", Path::new("/tmp/peanutbutter")).unwrap();
-        assert!(script.contains("\\builtin unalias pb &>/dev/null || \\builtin true"));
-        assert!(script.contains("\\builtin alias pb='peanutbutter'"));
-        assert!(script.contains("bind -x '\"\\C-b\":__pb_insert_command'"));
-        assert!(script.contains("'/tmp/peanutbutter' execute"));
-        assert!(script.contains("READLINE_LINE=\"${READLINE_LINE}\""));
-        assert!(script.contains("READLINE_POINT=${READLINE_POINT}"));
-    }
-
-    #[test]
-    fn bash_script_registers_edit_completion_for_binary_and_alias() {
-        let script = bash_integration_script("C+b", Path::new("/tmp/peanutbutter")).unwrap();
-        assert!(script.contains("__pb_complete()"));
-        assert!(script.contains("'/tmp/peanutbutter' complete-edit \"$cur\""));
-        assert!(script.contains("complete -o nospace -F __pb_complete peanutbutter pb"));
     }
 
     #[test]

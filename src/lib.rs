@@ -23,6 +23,7 @@
 
 pub mod browse;
 pub mod cli;
+pub mod completions;
 pub mod config;
 pub mod discovery;
 pub mod domain;

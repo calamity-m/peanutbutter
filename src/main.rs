@@ -1,6 +1,7 @@
 use clap::{CommandFactory, FromArgMatches};
 use peanutbutter::BINARY_NAME;
 use peanutbutter::cli;
+use peanutbutter::completions;
 use peanutbutter::config;
 use std::io::{self, Write};
 
@@ -41,13 +42,33 @@ fn main() {
                 Err(err) => Err(err),
             }
         }
-        cli::Command::Bash { binding } => match cli::bash_integration_for_current_exe(&binding) {
-            Ok(script) => {
-                print!("{script}");
-                Ok(())
+        cli::Command::Bash { binding } => {
+            match completions::bash_integration_for_current_exe(&binding) {
+                Ok(script) => {
+                    print!("{script}");
+                    Ok(())
+                }
+                Err(err) => Err(err),
             }
-            Err(err) => Err(err),
-        },
+        }
+        cli::Command::Zsh { binding } => {
+            match completions::zsh_integration_for_current_exe(&binding) {
+                Ok(script) => {
+                    print!("{script}");
+                    Ok(())
+                }
+                Err(err) => Err(err),
+            }
+        }
+        cli::Command::Fish { binding } => {
+            match completions::fish_integration_for_current_exe(&binding) {
+                Ok(script) => {
+                    print!("{script}");
+                    Ok(())
+                }
+                Err(err) => Err(err),
+            }
+        }
         cli::Command::Edit { path } => cli::run_edit_command(&paths, path.as_deref()).map(|_| ()),
         cli::Command::CompleteEdit { current } => {
             match cli::complete_edit(&paths, current.as_deref().unwrap_or("")) {
