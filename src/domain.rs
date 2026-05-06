@@ -1,3 +1,5 @@
+use serde::Deserialize;
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -36,6 +38,20 @@ pub struct Frontmatter {
     pub description: Option<String>,
     /// Searchable tags (`tags: [a, b]` or block-list form).
     pub tags: Vec<String>,
+    /// File-local variable input specs keyed by placeholder name.
+    pub variables: BTreeMap<String, VariableSpec>,
+}
+
+/// Reusable input behavior for a free-form template variable.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(default)]
+pub struct VariableSpec {
+    /// Pre-populated value shown in the prompt input box.
+    pub default: Option<String>,
+    /// Fixed suggestion values shown in the prompt suggestion list.
+    pub suggestions: Vec<String>,
+    /// Shell command whose stdout lines are used as suggestions.
+    pub command: Option<String>,
 }
 
 /// How a template variable `<@name[:source]>` should be filled.

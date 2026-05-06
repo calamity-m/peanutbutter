@@ -1,6 +1,6 @@
 use crate::browse::{BrowseEntry, BrowseState, BrowseTree};
 use crate::config::{SearchConfig, Theme, VariableInputConfig};
-use crate::domain::{SnippetId, Variable, VariableSource};
+use crate::domain::{SnippetId, Variable, VariableSource, VariableSpec};
 use crate::frecency::FrecencyStore;
 use crate::fuzzy::FuzzyState;
 use crate::index::{IndexedSnippet, SnippetIndex};
@@ -33,9 +33,18 @@ pub trait SuggestionProvider {
     /// Return the candidate values to show in the suggestion list for `variable`
     /// when the user is in the given `cwd`. Returns an empty vec (not an error)
     /// when there are no suggestions.
-    fn suggestions(&self, variable: &Variable, cwd: &Path) -> io::Result<Vec<String>>;
+    fn suggestions(
+        &self,
+        variable: &Variable,
+        cwd: &Path,
+        local_variables: &std::collections::BTreeMap<String, VariableSpec>,
+    ) -> io::Result<Vec<String>>;
     /// Return the value to pre-populate the input box with, if any.
-    fn default_input(&self, variable: &Variable) -> Option<String>;
+    fn default_input(
+        &self,
+        variable: &Variable,
+        local_variables: &std::collections::BTreeMap<String, VariableSpec>,
+    ) -> Option<String>;
 }
 
 /// Production [`SuggestionProvider`] backed by config overrides and built-in
@@ -52,11 +61,24 @@ impl SystemSuggestionProvider {
 }
 
 impl SuggestionProvider for SystemSuggestionProvider {
-    fn suggestions(&self, variable: &Variable, cwd: &Path) -> io::Result<Vec<String>> {
+    fn suggestions(
+        &self,
+        variable: &Variable,
+        cwd: &Path,
+        local_variables: &std::collections::BTreeMap<String, VariableSpec>,
+    ) -> io::Result<Vec<String>> {
         match &variable.source {
             VariableSource::Command(cmd) => super::prompt::command_suggestions(cmd, cwd),
             VariableSource::Default(_) => Ok(Vec::new()),
             VariableSource::Free => {
+                if let Some(config) = local_variables.get(&variable.name) {
+                    if !config.suggestions.is_empty() {
+                        return Ok(config.suggestions.clone());
+                    }
+                    if let Some(command) = &config.command {
+                        return super::prompt::command_suggestions(command, cwd);
+                    }
+                }
                 if let Some(config) = self.variable_inputs.get(&variable.name) {
                     if !config.suggestions.is_empty() {
                         return Ok(config.suggestions.clone());
@@ -70,14 +92,22 @@ impl SuggestionProvider for SystemSuggestionProvider {
         }
     }
 
-    fn default_input(&self, variable: &Variable) -> Option<String> {
+    fn default_input(
+        &self,
+        variable: &Variable,
+        local_variables: &std::collections::BTreeMap<String, VariableSpec>,
+    ) -> Option<String> {
         match &variable.source {
             VariableSource::Default(value) => Some(value.clone()),
             VariableSource::Command(_) => None,
-            VariableSource::Free => self
-                .variable_inputs
+            VariableSource::Free => local_variables
                 .get(&variable.name)
-                .and_then(|config| config.default.clone()),
+                .and_then(|config| config.default.clone())
+                .or_else(|| {
+                    self.variable_inputs
+                        .get(&variable.name)
+                        .and_then(|config| config.default.clone())
+                }),
         }
     }
 }
@@ -421,7 +451,8 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
                 command: snippet.body().to_string(),
             });
         }
-        let mut prompt = PromptState::new(snippet_id, variables);
+        let mut prompt =
+            PromptState::new(snippet_id, variables, snippet.frontmatter.variables.clone());
         load_prompt_state(&mut prompt, &self.provider, &self.cwd);
         self.status = prompt.error.clone();
         self.screen = Screen::Prompt(prompt);

@@ -4,6 +4,9 @@ tags:
   - http
   - curl
   - api
+variables:
+  url:
+    default: https://example.com
 ---
 
 # HTTP

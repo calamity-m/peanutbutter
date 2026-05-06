@@ -1,4 +1,7 @@
-use crate::domain::{Frontmatter, Snippet, SnippetFile, SnippetId, Variable, VariableSource};
+use crate::domain::{
+    Frontmatter, Snippet, SnippetFile, SnippetId, Variable, VariableSource, VariableSpec,
+};
+use std::collections::BTreeMap;
 use std::path::Path;
 
 /// Half-open line range `[start_line, end_line)` over `content.lines()`,
@@ -54,13 +57,14 @@ fn parse_frontmatter(lines: &[&str]) -> (Frontmatter, usize) {
         Some(i) => i,
         None => return (Frontmatter::default(), 0),
     };
-    let fm = parse_yaml_subset(&lines[1..end]);
+    let fm = parse_yaml_frontmatter(&lines[1..end]);
     (fm, end + 1)
 }
 
-fn parse_yaml_subset(lines: &[&str]) -> Frontmatter {
+fn parse_yaml_frontmatter(lines: &[&str]) -> Frontmatter {
     let mut fm = Frontmatter::default();
     let mut i = 0;
+
     while i < lines.len() {
         let line = lines[i];
         let trimmed = line.trim();
@@ -68,7 +72,7 @@ fn parse_yaml_subset(lines: &[&str]) -> Frontmatter {
             i += 1;
             continue;
         }
-        let (key, value) = match line.split_once(':') {
+        let (key, value) = match trimmed.split_once(':') {
             Some(kv) => kv,
             None => {
                 i += 1;
@@ -78,49 +82,118 @@ fn parse_yaml_subset(lines: &[&str]) -> Frontmatter {
         let key = key.trim();
         let value = value.trim();
 
-        if value.is_empty() {
-            let mut items = Vec::new();
-            i += 1;
-            while i < lines.len() {
-                let child = lines[i];
-                let child_trim = child.trim_start();
-                let indent = child.len() - child_trim.len();
-                if indent == 0 || !child_trim.starts_with('-') {
-                    break;
-                }
-                let item = child_trim[1..].trim();
-                items.push(strip_quotes(item).to_string());
-                i += 1;
-            }
-            if key == "tags" {
-                fm.tags = items;
-            }
-            continue;
-        }
-
         if value.starts_with('[') && value.ends_with(']') {
-            let inner = &value[1..value.len() - 1];
-            let items: Vec<String> = inner
-                .split(',')
-                .map(|s| strip_quotes(s.trim()).to_string())
-                .filter(|s| !s.is_empty())
-                .collect();
             if key == "tags" {
-                fm.tags = items;
+                fm.tags = parse_inline_list(value);
             }
             i += 1;
             continue;
         }
 
-        let v = strip_quotes(value).to_string();
+        if value.is_empty() {
+            i += 1;
+            match key {
+                "tags" => {
+                    while i < lines.len() {
+                        let child = lines[i].trim_start();
+                        let indent = lines[i].len() - child.len();
+                        if indent == 0 || !child.starts_with('-') {
+                            break;
+                        }
+                        fm.tags.push(strip_quotes(child[1..].trim()).to_string());
+                        i += 1;
+                    }
+                }
+                "variables" => {
+                    let (vars, consumed) = parse_variable_block(&lines[i..]);
+                    fm.variables = vars;
+                    i += consumed;
+                }
+                _ => {}
+            }
+            continue;
+        }
+
         match key {
-            "name" => fm.name = Some(v),
-            "description" => fm.description = Some(v),
+            "name" => fm.name = Some(strip_quotes(value).to_string()),
+            "description" => fm.description = Some(strip_quotes(value).to_string()),
             _ => {}
         }
         i += 1;
     }
+
     fm
+}
+
+/// Parse a `variables:` block into a map of name → [`VariableSpec`].
+/// Returns the map and the number of lines consumed from `lines`.
+fn parse_variable_block(lines: &[&str]) -> (BTreeMap<String, VariableSpec>, usize) {
+    let mut out = BTreeMap::new();
+    let mut j = 0;
+
+    while j < lines.len() {
+        let line = lines[j];
+        let trimmed = line.trim_start();
+        let var_indent = line.len() - trimmed.len();
+
+        if var_indent == 0 || trimmed.is_empty() || trimmed.starts_with('#') {
+            break;
+        }
+
+        let (name, rest) = match trimmed.split_once(':') {
+            Some(kv) => kv,
+            None => {
+                j += 1;
+                continue;
+            }
+        };
+        let name = name.trim().to_string();
+        let rest = rest.trim();
+
+        // A valid variable entry is a block mapping (`varname:` with no inline value).
+        if !rest.is_empty() {
+            j += 1;
+            continue;
+        }
+
+        j += 1;
+        let mut spec = VariableSpec::default();
+        while j < lines.len() {
+            let field_line = lines[j];
+            let field_trim = field_line.trim_start();
+            let field_indent = field_line.len() - field_trim.len();
+            if field_indent <= var_indent {
+                break;
+            }
+            if let Some((fkey, fval)) = field_trim.split_once(':') {
+                let fkey = fkey.trim();
+                let fval = fval.trim();
+                if !fval.is_empty() {
+                    match fkey {
+                        "default" => spec.default = Some(strip_quotes(fval).to_string()),
+                        "suggestions" if fval.starts_with('[') && fval.ends_with(']') => {
+                            spec.suggestions = parse_inline_list(fval);
+                        }
+                        "command" => spec.command = Some(fval.to_string()),
+                        _ => {}
+                    }
+                }
+            }
+            j += 1;
+        }
+        out.insert(name, spec);
+    }
+
+    (out, j)
+}
+
+fn parse_inline_list(value: &str) -> Vec<String> {
+    let inner = &value[1..value.len() - 1];
+    inner
+        .split(',')
+        .map(|s| strip_quotes(s.trim()).to_string())
+        .filter(|s| !s.is_empty())
+        .collect()
 }
 
 fn strip_quotes(s: &str) -> &str {
@@ -455,6 +528,39 @@ mod tests {
         let (fm, _) = parse_frontmatter(&lines);
         assert_eq!(fm.tags, vec!["a".to_string(), "b".to_string()]);
         assert_eq!(fm.description.as_deref(), Some("meta"));
+    }
+
+    #[test]
+    fn parses_frontmatter_variable_specs() {
+        let content = r#"---
+name: HTTP
+variables:
+  http_method:
+    default: GET
+    suggestions: [GET, POST]
+  git_branch:
+    command: git branch --format='%(refname:short)'
+  bad_spec: nope
+---
+"#;
+        let lines: Vec<&str> = content.lines().collect();
+        let (fm, _) = parse_frontmatter(&lines);
+        let method = fm.variables.get("http_method").unwrap();
+        assert_eq!(method.default.as_deref(), Some("GET"));
+        assert_eq!(method.suggestions, vec!["GET", "POST"]);
+        assert_eq!(
+            fm.variables.get("git_branch").unwrap().command.as_deref(),
+            Some("git branch --format='%(refname:short)'")
+        );
+        assert!(!fm.variables.contains_key("bad_spec"));
+    }
+
+    #[test]
+    fn malformed_frontmatter_is_ignored() {
+        let content = "---\nvariables: [\n---\n\n## Demo\n\n```\necho hi\n```\n";
+        let parsed = parse_file(Path::new("demo.md"), Path::new("."), content);
+        assert_eq!(parsed.frontmatter, Frontmatter::default());
+        assert_eq!(parsed.snippets.len(), 1);
     }
 
     #[test]
