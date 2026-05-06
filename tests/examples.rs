@@ -92,6 +92,22 @@ fn complex_file_has_five_snippets_with_variables() {
         var_names,
         vec!["http_method", "header_name", "header_value", "body", "url"]
     );
+    let http_method = parsed.frontmatter.variables.get("http_method").unwrap();
+    assert_eq!(http_method.default, None);
+    assert_eq!(
+        http_method.suggestions,
+        vec!["GET", "POST", "PUT", "PATCH", "DELETE"]
+    );
+}
+
+#[test]
+fn nested_http_file_declares_url_default() {
+    let root = examples_root();
+    let path = root.join("nested/http/http.md");
+    let content = fs::read_to_string(&path).unwrap();
+    let parsed = parse_file(&path, &root, &content);
+    let url = parsed.frontmatter.variables.get("url").unwrap();
+    assert_eq!(url.default.as_deref(), Some("https://example.com"));
 }
 
 #[test]

@@ -1,6 +1,6 @@
 use super::app::Screen;
 use super::*;
-use crate::domain::{Frontmatter, Snippet, SnippetFile, Variable, VariableSource};
+use crate::domain::{Frontmatter, Snippet, SnippetFile, Variable, VariableSource, VariableSpec};
 use crate::frecency::FrecencyStore;
 use crate::index::SnippetIndex;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -27,7 +27,12 @@ impl TestProvider {
 }
 
 impl SuggestionProvider for TestProvider {
-    fn suggestions(&self, variable: &Variable, _cwd: &Path) -> io::Result<Vec<String>> {
+    fn suggestions(
+        &self,
+        variable: &Variable,
+        _cwd: &Path,
+        _local_variables: &BTreeMap<String, VariableSpec>,
+    ) -> io::Result<Vec<String>> {
         Ok(self
             .values
             .borrow()
@@ -36,7 +41,11 @@ impl SuggestionProvider for TestProvider {
             .unwrap_or_default())
     }
 
-    fn default_input(&self, _variable: &Variable) -> Option<String> {
+    fn default_input(
+        &self,
+        _variable: &Variable,
+        _local_variables: &BTreeMap<String, VariableSpec>,
+    ) -> Option<String> {
         None
     }
 }
@@ -566,6 +575,134 @@ fn variable_flow_uses_config_defined_inputs() {
 }
 
 #[test]
+fn variable_flow_uses_file_local_specs_over_config_by_field() {
+    let variables = vec![Variable {
+        name: "http_method".to_string(),
+        source: VariableSource::Free,
+    }];
+    let mut configured = BTreeMap::new();
+    configured.insert(
+        "http_method".to_string(),
+        crate::config::VariableInputConfig {
+            default: Some("POST".to_string()),
+            suggestions: vec!["POST".to_string(), "PUT".to_string()],
+            command: None,
+        },
+    );
+    let mut frontmatter = Frontmatter::default();
+    frontmatter.variables.insert(
+        "http_method".to_string(),
+        VariableSpec {
+            default: Some("GET".to_string()),
+            suggestions: vec![],
+            command: None,
+        },
+    );
+    let mut file = snippet_file("x.md", "Demo", "curl -X <@http_method>", variables);
+    file.frontmatter = frontmatter;
+    let mut app = ExecutionApp::new(
+        SnippetIndex::from_files([file]),
+        FrecencyStore::new(),
+        PathBuf::from("."),
+        0,
+        crate::config::SearchConfig::default(),
+        crate::config::Theme::default(),
+        SystemSuggestionProvider::new(configured),
+    );
+
+    let _ = app.handle_key(press(KeyCode::Enter));
+    let Screen::Prompt(prompt) = &app.screen else {
+        panic!("expected prompt");
+    };
+    assert_eq!(prompt.input, "GET");
+    assert_eq!(prompt.suggestions, vec!["POST", "PUT"]);
+}
+
+#[test]
+fn file_local_suggestions_override_config_suggestions() {
+    let variables = vec![Variable {
+        name: "namespace".to_string(),
+        source: VariableSource::Free,
+    }];
+    let mut configured = BTreeMap::new();
+    configured.insert(
+        "namespace".to_string(),
+        crate::config::VariableInputConfig {
+            default: Some("default".to_string()),
+            suggestions: vec!["prod".to_string()],
+            command: None,
+        },
+    );
+    let mut frontmatter = Frontmatter::default();
+    frontmatter.variables.insert(
+        "namespace".to_string(),
+        VariableSpec {
+            default: None,
+            suggestions: vec!["dev".to_string(), "stage".to_string()],
+            command: None,
+        },
+    );
+    let mut file = snippet_file("x.md", "Demo", "kubectl -n <@namespace>", variables);
+    file.frontmatter = frontmatter;
+    let mut app = ExecutionApp::new(
+        SnippetIndex::from_files([file]),
+        FrecencyStore::new(),
+        PathBuf::from("."),
+        0,
+        crate::config::SearchConfig::default(),
+        crate::config::Theme::default(),
+        SystemSuggestionProvider::new(configured),
+    );
+
+    let _ = app.handle_key(press(KeyCode::Enter));
+    let Screen::Prompt(prompt) = &app.screen else {
+        panic!("expected prompt");
+    };
+    assert_eq!(prompt.input, "default");
+    assert_eq!(prompt.suggestions, vec!["dev", "stage"]);
+}
+
+#[test]
+fn file_local_suggestions_without_default_leave_input_empty() {
+    let variables = vec![Variable {
+        name: "http_method".to_string(),
+        source: VariableSource::Free,
+    }];
+    let mut frontmatter = Frontmatter::default();
+    frontmatter.variables.insert(
+        "http_method".to_string(),
+        VariableSpec {
+            default: None,
+            suggestions: vec!["GET".to_string(), "POST".to_string()],
+            command: None,
+        },
+    );
+    let mut file = snippet_file("x.md", "Demo", "curl -X <@http_method>", variables);
+    file.frontmatter = frontmatter;
+    let mut app = ExecutionApp::new(
+        SnippetIndex::from_files([file]),
+        FrecencyStore::new(),
+        PathBuf::from("."),
+        0,
+        crate::config::SearchConfig::default(),
+        crate::config::Theme::default(),
+        SystemSuggestionProvider::new(Default::default()),
+    );
+
+    let _ = app.handle_key(press(KeyCode::Enter));
+    let Screen::Prompt(prompt) = &app.screen else {
+        panic!("expected prompt");
+    };
+    assert_eq!(prompt.input, "");
+    let visible: Vec<&str> = prompt
+        .visible_suggestions()
+        .into_iter()
+        .map(String::as_str)
+        .collect();
+    assert_eq!(visible, vec!["GET", "POST"]);
+}
+
+#[test]
 fn inline_default_overrides_config_default() {
     let variables = vec![Variable {
         name: "namespace".to_string(),
@@ -593,6 +730,45 @@ fn inline_default_overrides_config_default() {
         crate::config::SearchConfig::default(),
         crate::config::Theme::default(),
         SystemSuggestionProvider::new(configured),
+    );
+
+    let _ = app.handle_key(press(KeyCode::Enter));
+    let Screen::Prompt(prompt) = &app.screen else {
+        panic!("expected prompt");
+    };
+    assert_eq!(prompt.input, "inline-default");
+}
+
+#[test]
+fn inline_default_overrides_file_local_default() {
+    let variables = vec![Variable {
+        name: "namespace".to_string(),
+        source: VariableSource::Default("inline-default".to_string()),
+    }];
+    let mut frontmatter = Frontmatter::default();
+    frontmatter.variables.insert(
+        "namespace".to_string(),
+        VariableSpec {
+            default: Some("frontmatter-default".to_string()),
+            suggestions: vec![],
+            command: None,
+        },
+    );
+    let mut file = snippet_file(
+        "x.md",
+        "Demo",
+        "kubectl get pods -n <@namespace:?inline-default>",
+        variables,
+    );
+    file.frontmatter = frontmatter;
+    let mut app = ExecutionApp::new(
+        SnippetIndex::from_files([file]),
+        FrecencyStore::new(),
+        PathBuf::from("."),
+        0,
+        crate::config::SearchConfig::default(),
+        crate::config::Theme::default(),
+        SystemSuggestionProvider::new(Default::default()),
     );
 
     let _ = app.handle_key(press(KeyCode::Enter));

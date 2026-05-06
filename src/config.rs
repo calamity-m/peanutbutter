@@ -137,17 +137,7 @@ impl Default for FrecencyConfig {
 ///
 /// These override or supplement the inline `<@name[:source]>` syntax from the
 /// snippet body. All fields are optional and independent.
-#[derive(Debug, Clone, Default, Deserialize)]
-#[serde(default)]
-pub struct VariableInputConfig {
-    /// Pre-populated default value shown in the prompt input box.
-    pub default: Option<String>,
-    /// Fixed list of suggestions shown in the suggestion list.
-    pub suggestions: Vec<String>,
-    /// Shell command whose stdout lines are used as suggestions (overrides
-    /// `suggestions` when both are set and `suggestions` is empty).
-    pub command: Option<String>,
-}
+pub type VariableInputConfig = crate::domain::VariableSpec;
 
 /// Visual theme: a set of ratatui [`Style`] values covering every distinct UI
 /// role. Build via [`Theme::default`] or [`Theme::from_raw`] (the TOML path).

@@ -1,4 +1,8 @@
-use crate::domain::{Frontmatter, Snippet, SnippetFile, SnippetId, Variable, VariableSource};
+use crate::domain::{
+    Frontmatter, Snippet, SnippetFile, SnippetId, Variable, VariableSource, VariableSpec,
+};
+use serde_yaml::Value;
+use std::collections::BTreeMap;
 use std::path::Path;
 
 /// Half-open line range `[start_line, end_line)` over `content.lines()`,
@@ -54,85 +58,70 @@ fn parse_frontmatter(lines: &[&str]) -> (Frontmatter, usize) {
         Some(i) => i,
         None => return (Frontmatter::default(), 0),
     };
-    let fm = parse_yaml_subset(&lines[1..end]);
+    let fm = parse_yaml_frontmatter(&lines[1..end]);
     (fm, end + 1)
 }
 
-fn parse_yaml_subset(lines: &[&str]) -> Frontmatter {
-    let mut fm = Frontmatter::default();
-    let mut i = 0;
-    while i < lines.len() {
-        let line = lines[i];
-        let trimmed = line.trim();
-        if trimmed.is_empty() || trimmed.starts_with('#') {
-            i += 1;
-            continue;
-        }
-        let (key, value) = match line.split_once(':') {
-            Some(kv) => kv,
-            None => {
-                i += 1;
-                continue;
-            }
-        };
-        let key = key.trim();
-        let value = value.trim();
+fn parse_yaml_frontmatter(lines: &[&str]) -> Frontmatter {
+    let raw = lines.join("\n");
+    let Ok(value) = serde_yaml::from_str::<Value>(&raw) else {
+        return Frontmatter::default();
+    };
+    let Some(mapping) = value.as_mapping() else {
+        return Frontmatter::default();
+    };
 
-        if value.is_empty() {
-            let mut items = Vec::new();
-            i += 1;
-            while i < lines.len() {
-                let child = lines[i];
-                let child_trim = child.trim_start();
-                let indent = child.len() - child_trim.len();
-                if indent == 0 || !child_trim.starts_with('-') {
-                    break;
-                }
-                let item = child_trim[1..].trim();
-                items.push(strip_quotes(item).to_string());
-                i += 1;
-            }
-            if key == "tags" {
-                fm.tags = items;
-            }
-            continue;
-        }
-
-        if value.starts_with('[') && value.ends_with(']') {
-            let inner = &value[1..value.len() - 1];
-            let items: Vec<String> = inner
-                .split(',')
-                .map(|s| strip_quotes(s.trim()).to_string())
-                .filter(|s| !s.is_empty())
-                .collect();
-            if key == "tags" {
-                fm.tags = items;
-            }
-            i += 1;
-            continue;
-        }
-
-        let v = strip_quotes(value).to_string();
-        match key {
-            "name" => fm.name = Some(v),
-            "description" => fm.description = Some(v),
-            _ => {}
-        }
-        i += 1;
+    Frontmatter {
+        name: mapping_string(mapping, "name"),
+        description: mapping_string(mapping, "description"),
+        tags: mapping_strings(mapping, "tags"),
+        variables: mapping_variable_specs(mapping, "variables"),
     }
-    fm
 }
 
-fn strip_quotes(s: &str) -> &str {
-    let bytes = s.as_bytes();
-    if bytes.len() >= 2 {
-        let first = bytes[0];
-        let last = bytes[bytes.len() - 1];
-        if (first == b'"' && last == b'"') || (first == b'\'' && last == b'\'') {
-            return &s[1..s.len() - 1];
-        }
+fn mapping_string(mapping: &serde_yaml::Mapping, key: &str) -> Option<String> {
+    mapping
+        .get(Value::String(key.to_string()))
+        .and_then(Value::as_str)
+        .map(str::to_string)
+}
+
+fn mapping_strings(mapping: &serde_yaml::Mapping, key: &str) -> Vec<String> {
+    mapping
+        .get(Value::String(key.to_string()))
+        .and_then(Value::as_sequence)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn mapping_variable_specs(
+    mapping: &serde_yaml::Mapping,
+    key: &str,
+) -> BTreeMap<String, VariableSpec> {
+    let mut out = BTreeMap::new();
+    let Some(variables) = mapping
+        .get(Value::String(key.to_string()))
+        .and_then(Value::as_mapping)
+    else {
+        return out;
+    };
+
+    for (name, spec) in variables {
+        let Some(name) = name.as_str() else {
+            continue;
+        };
+        let Ok(spec) = serde_yaml::from_value::<VariableSpec>(spec.clone()) else {
+            continue;
+        };
+        out.insert(name.to_string(), spec);
     }
-    s
+    out
 }
 
 enum State {
@@ -455,6 +444,39 @@ mod tests {
         let (fm, _) = parse_frontmatter(&lines);
         assert_eq!(fm.tags, vec!["a".to_string(), "b".to_string()]);
         assert_eq!(fm.description.as_deref(), Some("meta"));
+    }
+
+    #[test]
+    fn parses_frontmatter_variable_specs() {
+        let content = r#"---
+name: HTTP
+variables:
+  http_method:
+    default: GET
+    suggestions: [GET, POST]
+  git_branch:
+    command: git branch --format='%(refname:short)'
+  bad_spec: nope
+---
+"#;
+        let lines: Vec<&str> = content.lines().collect();
+        let (fm, _) = parse_frontmatter(&lines);
+        let method = fm.variables.get("http_method").unwrap();
+        assert_eq!(method.default.as_deref(), Some("GET"));
+        assert_eq!(method.suggestions, vec!["GET", "POST"]);
+        assert_eq!(
+            fm.variables.get("git_branch").unwrap().command.as_deref(),
+            Some("git branch --format='%(refname:short)'")
+        );
+        assert!(!fm.variables.contains_key("bad_spec"));
+    }
+
+    #[test]
+    fn malformed_frontmatter_is_ignored() {
+        let content = "---\nvariables: [\n---\n\n## Demo\n\n```\necho hi\n```\n";
+        let parsed = parse_file(Path::new("demo.md"), Path::new("."), content);
+        assert_eq!(parsed.frontmatter, Frontmatter::default());
+        assert_eq!(parsed.snippets.len(), 1);
     }
 
     #[test]

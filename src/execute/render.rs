@@ -854,6 +854,7 @@ mod tests {
                 name: None,
                 description: None,
                 tags: tags.iter().map(|tag| tag.to_string()).collect(),
+                variables: Default::default(),
             },
         }
     }

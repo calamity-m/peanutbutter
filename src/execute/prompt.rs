@@ -1,5 +1,5 @@
 use crate::config::Theme;
-use crate::domain::Variable;
+use crate::domain::{Variable, VariableSpec};
 use crate::index::SnippetIndex;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::style::Style;
@@ -26,6 +26,8 @@ pub(crate) struct PromptState {
     pub(crate) snippet_id: crate::domain::SnippetId,
     /// Deduplicated list of variables to fill, in order.
     pub(crate) variables: Vec<Variable>,
+    /// File-local variable specs from the selected snippet's frontmatter.
+    pub(crate) local_variables: BTreeMap<String, VariableSpec>,
     /// Index into `variables` of the variable currently being edited.
     pub(crate) index: usize,
     /// Values that have been confirmed for each variable name so far.
@@ -41,7 +43,11 @@ pub(crate) struct PromptState {
 }
 
 impl PromptState {
-    pub(crate) fn new(snippet_id: crate::domain::SnippetId, variables: Vec<Variable>) -> Self {
+    pub(crate) fn new(
+        snippet_id: crate::domain::SnippetId,
+        variables: Vec<Variable>,
+        local_variables: BTreeMap<String, VariableSpec>,
+    ) -> Self {
         debug_assert!(
             !variables.is_empty(),
             "PromptState requires at least one variable; callers must complete the snippet directly when variables.is_empty()"
@@ -49,6 +55,7 @@ impl PromptState {
         Self {
             snippet_id,
             variables,
+            local_variables,
             index: 0,
             values: BTreeMap::new(),
             input: String::new(),
@@ -273,10 +280,10 @@ pub(crate) fn load_prompt_state<P: SuggestionProvider>(
         .get(&variable.name)
         .cloned()
         .or_else(|| default_input(&variable))
-        .or_else(|| provider.default_input(&variable))
+        .or_else(|| provider.default_input(&variable, &prompt.local_variables))
         .unwrap_or_default();
     prompt.error = None;
-    prompt.suggestions = match provider.suggestions(&variable, cwd) {
+    prompt.suggestions = match provider.suggestions(&variable, cwd, &prompt.local_variables) {
         Ok(values) => values,
         Err(err) => {
             prompt.error = Some(err.to_string());

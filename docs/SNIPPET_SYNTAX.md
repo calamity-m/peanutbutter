@@ -16,6 +16,12 @@ Files may include optional YAML frontmatter at the top:
 name: Docker helpers
 tags: [docker, containers]
 description: Commands for local container workflows
+variables:
+  container:
+    command: docker ps --format '{{.Names}}'
+  environment:
+    default: dev
+    suggestions: [dev, stage, prod]
 ---
 ```
 
@@ -25,8 +31,35 @@ Supported frontmatter fields:
 - `description` — optional display/search metadata for the file.
 - `tags` — optional searchable tags, either inline (`[a, b]`) or as a YAML
   block list.
+- `variables` — optional file-local variable specs keyed by placeholder name.
 
 Unknown frontmatter keys are ignored.
+
+### File-local Variable Specs
+
+Frontmatter can declare reusable input behavior for free-form placeholders in
+that file:
+
+```yaml
+variables:
+  http_method:
+    suggestions: [GET, POST, PUT, PATCH, DELETE]
+  git_branch:
+    command: git branch --format='%(refname:short)'
+```
+
+Each variable spec may include:
+
+- `default` — pre-populates the prompt input.
+- `suggestions` — fixed suggestion values.
+- `command` — shell command whose stdout lines become suggestions.
+
+These specs apply only to snippets in the same markdown file. They do not
+apply to other files.
+
+Malformed or unsupported frontmatter variable specs are ignored during normal
+execution. A future `pb check` command is expected to validate them more
+strictly.
 
 ## Snippets
 
@@ -170,9 +203,19 @@ Some free-form variable names have built-in suggestions:
 Config-defined variables can also provide defaults or suggestions for
 free-form placeholders such as `<@http_method>`.
 
-Inline placeholder sources take precedence over config-defined variables. For
-example, `<@target:?world>` uses the inline default rather than a configured
-default for `target`.
+Frontmatter-defined variables can also provide defaults or suggestions for
+free-form placeholders in the same file. Resolution order is:
+
+1. Inline placeholder source (`<@target:?world>` or `<@target:command>`).
+2. File-local frontmatter spec for that variable.
+3. Config-defined variable spec.
+4. Built-in suggestions for `file` and `directory`.
+
+File-local specs overlay config-defined specs by field. For example, if
+frontmatter defines only `default` and config defines `suggestions`, the prompt
+uses the frontmatter default and config suggestions. If frontmatter defines
+either `suggestions` or `command`, that frontmatter suggestion source is used
+instead of config suggestions or command.
 
 ### Multi-line Values
 

@@ -3,6 +3,9 @@ name: Multi-line scripts
 tags:
   - scripts
   - shell
+variables:
+  http_method:
+    suggestions: [GET, POST, PUT, PATCH, DELETE]
 ---
 
 # Scripts
@@ -45,7 +48,7 @@ tar -czf <@archive:?archive.tar.gz> <@source:?.>
 ## Curl with method, headers, and body
 
 ```bash
-curl -s -X <@http_method:printf 'GET\nPOST\nPUT\nPATCH\nDELETE'> \
+curl -s -X <@http_method> \
      -H "Content-Type: application/json" \
      -H "<@header_name:?Authorization>: <@header_value>" \
      -d '<@body:?{}>'\
