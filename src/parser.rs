@@ -1,7 +1,6 @@
 use crate::domain::{
     Frontmatter, Snippet, SnippetFile, SnippetId, Variable, VariableSource, VariableSpec,
 };
-use serde_yaml::Value;
 use std::collections::BTreeMap;
 use std::path::Path;
 
@@ -63,65 +62,150 @@ fn parse_frontmatter(lines: &[&str]) -> (Frontmatter, usize) {
 }
 
 fn parse_yaml_frontmatter(lines: &[&str]) -> Frontmatter {
-    let raw = lines.join("\n");
-    let Ok(value) = serde_yaml::from_str::<Value>(&raw) else {
-        return Frontmatter::default();
-    };
-    let Some(mapping) = value.as_mapping() else {
-        return Frontmatter::default();
-    };
+    let mut fm = Frontmatter::default();
+    let mut i = 0;
 
-    Frontmatter {
-        name: mapping_string(mapping, "name"),
-        description: mapping_string(mapping, "description"),
-        tags: mapping_strings(mapping, "tags"),
-        variables: mapping_variable_specs(mapping, "variables"),
+    while i < lines.len() {
+        let line = lines[i];
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            i += 1;
+            continue;
+        }
+        let (key, value) = match trimmed.split_once(':') {
+            Some(kv) => kv,
+            None => {
+                i += 1;
+                continue;
+            }
+        };
+        let key = key.trim();
+        let value = value.trim();
+
+        if value.starts_with('[') && value.ends_with(']') {
+            if key == "tags" {
+                fm.tags = parse_inline_list(value);
+            }
+            i += 1;
+            continue;
+        }
+
+        if value.is_empty() {
+            i += 1;
+            match key {
+                "tags" => {
+                    while i < lines.len() {
+                        let child = lines[i].trim_start();
+                        let indent = lines[i].len() - child.len();
+                        if indent == 0 || !child.starts_with('-') {
+                            break;
+                        }
+                        fm.tags.push(strip_quotes(child[1..].trim()).to_string());
+                        i += 1;
+                    }
+                }
+                "variables" => {
+                    let (vars, consumed) = parse_variable_block(&lines[i..]);
+                    fm.variables = vars;
+                    i += consumed;
+                }
+                _ => {}
+            }
+            continue;
+        }
+
+        match key {
+            "name" => fm.name = Some(strip_quotes(value).to_string()),
+            "description" => fm.description = Some(strip_quotes(value).to_string()),
+            _ => {}
+        }
+        i += 1;
     }
+
+    fm
 }
 
-fn mapping_string(mapping: &serde_yaml::Mapping, key: &str) -> Option<String> {
-    mapping
-        .get(Value::String(key.to_string()))
-        .and_then(Value::as_str)
-        .map(str::to_string)
-}
-
-fn mapping_strings(mapping: &serde_yaml::Mapping, key: &str) -> Vec<String> {
-    mapping
-        .get(Value::String(key.to_string()))
-        .and_then(Value::as_sequence)
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(Value::as_str)
-                .map(str::to_string)
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
-fn mapping_variable_specs(
-    mapping: &serde_yaml::Mapping,
-    key: &str,
-) -> BTreeMap<String, VariableSpec> {
+/// Parse a `variables:` block into a map of name → [`VariableSpec`].
+/// Returns the map and the number of lines consumed from `lines`.
+fn parse_variable_block(lines: &[&str]) -> (BTreeMap<String, VariableSpec>, usize) {
     let mut out = BTreeMap::new();
-    let Some(variables) = mapping
-        .get(Value::String(key.to_string()))
-        .and_then(Value::as_mapping)
-    else {
-        return out;
-    };
+    let mut j = 0;
 
-    for (name, spec) in variables {
-        let Some(name) = name.as_str() else {
-            continue;
+    while j < lines.len() {
+        let line = lines[j];
+        let trimmed = line.trim_start();
+        let var_indent = line.len() - trimmed.len();
+
+        if var_indent == 0 || trimmed.is_empty() || trimmed.starts_with('#') {
+            break;
+        }
+
+        let (name, rest) = match trimmed.split_once(':') {
+            Some(kv) => kv,
+            None => {
+                j += 1;
+                continue;
+            }
         };
-        let Ok(spec) = serde_yaml::from_value::<VariableSpec>(spec.clone()) else {
+        let name = name.trim().to_string();
+        let rest = rest.trim();
+
+        // A valid variable entry is a block mapping (`varname:` with no inline value).
+        if !rest.is_empty() {
+            j += 1;
             continue;
-        };
-        out.insert(name.to_string(), spec);
+        }
+
+        j += 1;
+        let mut spec = VariableSpec::default();
+        while j < lines.len() {
+            let field_line = lines[j];
+            let field_trim = field_line.trim_start();
+            let field_indent = field_line.len() - field_trim.len();
+            if field_indent <= var_indent {
+                break;
+            }
+            if let Some((fkey, fval)) = field_trim.split_once(':') {
+                let fkey = fkey.trim();
+                let fval = fval.trim();
+                if !fval.is_empty() {
+                    match fkey {
+                        "default" => spec.default = Some(strip_quotes(fval).to_string()),
+                        "suggestions" if fval.starts_with('[') && fval.ends_with(']') => {
+                            spec.suggestions = parse_inline_list(fval);
+                        }
+                        "command" => spec.command = Some(fval.to_string()),
+                        _ => {}
+                    }
+                }
+            }
+            j += 1;
+        }
+        out.insert(name, spec);
     }
-    out
+
+    (out, j)
+}
+
+fn parse_inline_list(value: &str) -> Vec<String> {
+    let inner = &value[1..value.len() - 1];
+    inner
+        .split(',')
+        .map(|s| strip_quotes(s.trim()).to_string())
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
+fn strip_quotes(s: &str) -> &str {
+    let bytes = s.as_bytes();
+    if bytes.len() >= 2 {
+        let first = bytes[0];
+        let last = bytes[bytes.len() - 1];
+        if (first == b'"' && last == b'"') || (first == b'\'' && last == b'\'') {
+            return &s[1..s.len() - 1];
+        }
+    }
+    s
 }
 
 enum State {

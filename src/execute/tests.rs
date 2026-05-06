@@ -779,6 +779,40 @@ fn inline_default_overrides_file_local_default() {
 }
 
 #[test]
+fn file_local_command_spec_populates_suggestions() {
+    let variables = vec![Variable {
+        name: "greeting".to_string(),
+        source: VariableSource::Free,
+    }];
+    let mut frontmatter = Frontmatter::default();
+    frontmatter.variables.insert(
+        "greeting".to_string(),
+        VariableSpec {
+            default: None,
+            suggestions: vec![],
+            command: Some("echo hello".to_string()),
+        },
+    );
+    let mut file = snippet_file("x.md", "Demo", "say <@greeting>", variables);
+    file.frontmatter = frontmatter;
+    let mut app = ExecutionApp::new(
+        SnippetIndex::from_files([file]),
+        FrecencyStore::new(),
+        PathBuf::from("."),
+        0,
+        crate::config::SearchConfig::default(),
+        crate::config::Theme::default(),
+        SystemSuggestionProvider::new(Default::default()),
+    );
+
+    let _ = app.handle_key(press(KeyCode::Enter));
+    let Screen::Prompt(prompt) = &app.screen else {
+        panic!("expected prompt");
+    };
+    assert_eq!(prompt.suggestions, vec!["hello"]);
+}
+
+#[test]
 fn prompt_tab_cycles_forward_between_variables() {
     let variables = vec![
         Variable {
