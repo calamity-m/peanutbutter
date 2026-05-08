@@ -126,6 +126,8 @@ Notes:
 - `variables.<name>` defines reusable inputs for free-form placeholders like `<@http_method>` or `<@kube_context>`
 - A configured variable can provide either `suggestions = [...]` or `command = "..."`, and may also provide `default = "..."`
 - Suggestion commands (both inline `<@name:cmd>` and `[variables.name] command = "..."`) run under non-login, non-interactive `bash -c`. They inherit `$PATH` from peanutbutter's parent process but do **not** source `~/.bash_profile` or `~/.bashrc`, so they can't use shell aliases or functions defined there. This is deliberate: a login shell's startup output (e.g. `Agent pid NNNN` from ssh-agent) would otherwise leak into the suggestion list, and any interactive prompt it triggers (e.g. an ssh-add passphrase) would hang the TUI.
+- `suggestion_commands.timeout_ms` caps how long any suggestion command may run (default `2000` ms); commands that exceed it are killed and the variable falls back to manual input
+- `suggestion_commands.allow_commands` set to `false` disables all suggestion command execution globally — variables fall back to static suggestions or manual input (useful when importing untrusted snippet collections)
 
 ## Peanutbutter CLI
 
