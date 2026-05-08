@@ -1,6 +1,7 @@
 use ansi_to_tui::IntoText;
 use ratatui::Frame;
 use ratatui::layout::Position;
+use ratatui::layout::Rect;
 use ratatui::layout::{Constraint, Direction, Layout};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span, Text};
@@ -12,7 +13,7 @@ use crate::index::IndexedSnippet;
 use crate::search;
 use nucleo_matcher::pattern::Pattern;
 
-use super::app::{ExecutionApp, NavigationMode, Screen, SuggestionProvider};
+use super::app::{ExecutionApp, NavigationMode, Screen, SuggestionProvider, tag_label};
 use super::highlight::highlight_shell;
 use super::prompt::{PromptState, cursor_in_template, render_command_text, unique_variables};
 
@@ -55,6 +56,8 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
             .map(build_pattern);
         let mut highlighter = FuzzyScorer::new();
         let browse_visible = self.browse.visible(&self.tree);
+        let tags_visible = self.visible_tags();
+        let tag_snippets = self.visible_tag_snippets();
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
@@ -84,6 +87,16 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
                 format!("{}{}", self.browse.path_display(), self.browse.input),
                 browse_visible.len().to_string(),
                 "Browse",
+            ),
+            NavigationMode::Tags => (
+                tags_prompt(self.tags.drill.as_ref(), &self.tags.drill_filter)
+                    .unwrap_or_else(|| self.tags.filter.clone()),
+                self.tags
+                    .drill
+                    .as_ref()
+                    .map(|_| tag_snippets.len().to_string())
+                    .unwrap_or_else(|| format!("{}/{}", tags_visible.len(), self.tag_index.len())),
+                "Tags",
             ),
         };
         frame.render_widget(
@@ -152,6 +165,25 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
                 self.browse_list.select(Some(visual));
                 frame.render_stateful_widget(List::new(items), main[0], &mut self.browse_list);
             }
+            NavigationMode::Tags => {
+                render_tag_view(
+                    frame,
+                    main[0],
+                    TagView {
+                        visible: &tags_visible,
+                        snippets: &tag_snippets,
+                        list_selected: self.tags.list_selection.unwrap_or(0),
+                        drill_selected: self.tags.drill_selection.unwrap_or(0),
+                        drill: self.tags.drill.as_ref(),
+                        only_untagged: self.tag_index.len() == 1
+                            && self.tag_index.contains_key(&crate::index::TagKey::Untagged),
+                    },
+                    RenderChrome {
+                        theme: &self.theme,
+                        list_state: &mut self.tags_list,
+                    },
+                );
+            }
         }
 
         let preview = match self.nav_mode {
@@ -163,6 +195,10 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
                     .unwrap_or(PickerPreview::Empty)
             }
             NavigationMode::Browse => self.browse_preview(&browse_visible),
+            NavigationMode::Tags => self
+                .selected_tag_snippet()
+                .map(PickerPreview::Snippet)
+                .unwrap_or(PickerPreview::Empty),
         };
         frame.render_widget(
             Block::default()
@@ -205,18 +241,35 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
                         .map(|e| matches!(e, BrowseEntry::Directory(_)))
                         .unwrap_or(false);
                     if selected_is_dir {
-                        "tab complete  enter open  ctrl+j/k/↑↓ preview  ctrl+t search  esc cancel"
+                        "tab complete  enter open  ctrl+j/k/↑↓ preview  ctrl+t tags  esc cancel"
                             .to_string()
                     } else {
-                        "tab complete  enter accept  ctrl+e edit  ctrl+j/k/↑↓ preview  ctrl+t search  esc cancel".to_string()
+                        "tab complete  enter accept  ctrl+e edit  ctrl+j/k/↑↓ preview  ctrl+t tags  esc cancel".to_string()
+                    }
+                }
+                NavigationMode::Tags => {
+                    if self.tags.drill.is_some() {
+                        "type filter  enter accept  esc tags  backspace clear/back  ctrl+t search"
+                            .to_string()
+                    } else {
+                        "type filter  enter open  ctrl+j/k/↑↓ preview  ctrl+t search  esc cancel"
+                            .to_string()
                     }
                 }
             }
         };
         frame.render_widget(chrome_line(&self.theme, help), chunks[2]);
 
-        if matches!(self.nav_mode, NavigationMode::Fuzzy) {
-            let x = chunks[1].x + 2 + self.fuzzy.cursor_col() as u16;
+        if matches!(self.nav_mode, NavigationMode::Fuzzy | NavigationMode::Tags) {
+            let cursor_col = match self.nav_mode {
+                NavigationMode::Fuzzy => self.fuzzy.cursor_col(),
+                NavigationMode::Tags => self.tags.drill.as_ref().map_or_else(
+                    || self.tags.cursor_col(),
+                    |tag| tags_prompt_prefix_len(tag) + self.tags.drill_cursor_col(),
+                ),
+                NavigationMode::Browse => unreachable!(),
+            };
+            let x = chunks[1].x + 2 + cursor_col as u16;
             frame.set_cursor_position(Position {
                 x,
                 y: chunks[1].y + 1,
@@ -387,6 +440,112 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
             }
         }
     }
+}
+
+struct TagView<'a> {
+    visible: &'a [super::app::TagListEntry],
+    snippets: &'a [super::app::TagSnippetEntry],
+    list_selected: usize,
+    drill_selected: usize,
+    drill: Option<&'a crate::index::TagKey>,
+    only_untagged: bool,
+}
+
+struct RenderChrome<'a> {
+    theme: &'a crate::config::Theme,
+    list_state: &'a mut ratatui::widgets::ListState,
+}
+
+fn render_tag_view(frame: &mut Frame<'_>, area: Rect, view: TagView<'_>, chrome: RenderChrome<'_>) {
+    if let Some(tag) = view.drill {
+        render_tag_drill_view(
+            frame,
+            area,
+            tag,
+            view.snippets,
+            view.drill_selected,
+            chrome.theme,
+            chrome.list_state,
+        );
+        return;
+    }
+
+    if view.only_untagged {
+        frame.render_widget(Paragraph::new("No tags yet"), area);
+        return;
+    }
+
+    let total = view.visible.len();
+    let padding = (area.height as usize).saturating_sub(total);
+    let mut items: Vec<ListItem<'_>> = (0..padding).map(|_| ListItem::new("")).collect();
+    items.extend(view.visible.iter().enumerate().rev().map(|(idx, entry)| {
+        let label = if matches!(entry.key, crate::index::TagKey::Untagged) {
+            tag_label(&entry.key).to_string()
+        } else {
+            entry.label.clone()
+        };
+        ListItem::new(snippet_list_line(
+            chrome.theme,
+            idx,
+            total,
+            view.list_selected,
+            vec![Span::raw(format!("{label} ({})", entry.count))],
+        ))
+    }));
+    let visual = padding + total.saturating_sub(1).saturating_sub(view.list_selected);
+    let items_len = items.len();
+    clamp_list_offset(chrome.list_state, items_len, area.height as usize);
+    chrome.list_state.select((total > 0).then_some(visual));
+    frame.render_stateful_widget(List::new(items), area, chrome.list_state);
+}
+
+fn render_tag_drill_view(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    tag: &crate::index::TagKey,
+    snippets: &[super::app::TagSnippetEntry],
+    selected: usize,
+    theme: &crate::config::Theme,
+    list_state: &mut ratatui::widgets::ListState,
+) {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(1), Constraint::Min(0)])
+        .split(area);
+    frame.render_widget(
+        chrome_line(theme, format!("tag: {}", tag_label(tag))),
+        chunks[0],
+    );
+
+    let total = snippets.len();
+    let padding = (chunks[1].height as usize).saturating_sub(total);
+    let mut items: Vec<ListItem<'_>> = (0..padding).map(|_| ListItem::new("")).collect();
+    items.extend(snippets.iter().enumerate().rev().map(|(idx, snippet)| {
+        ListItem::new(snippet_list_line(
+            theme,
+            idx,
+            total,
+            selected,
+            vec![Span::raw(snippet.name.clone())],
+        ))
+    }));
+    let visual = padding + total.saturating_sub(1).saturating_sub(selected);
+    let items_len = items.len();
+    clamp_list_offset(list_state, items_len, chunks[1].height as usize);
+    list_state.select((total > 0).then_some(visual));
+    frame.render_stateful_widget(List::new(items), chunks[1], list_state);
+}
+
+fn tags_prompt(tag: Option<&crate::index::TagKey>, drill_filter: &str) -> Option<String> {
+    tag.map(|tag| format!("{}{}", tags_prompt_prefix(tag), drill_filter))
+}
+
+fn tags_prompt_prefix(tag: &crate::index::TagKey) -> String {
+    format!("tag: {} > ", tag_label(tag))
+}
+
+fn tags_prompt_prefix_len(tag: &crate::index::TagKey) -> usize {
+    tags_prompt_prefix(tag).chars().count()
 }
 
 fn preview_skin() -> termimad::MadSkin {

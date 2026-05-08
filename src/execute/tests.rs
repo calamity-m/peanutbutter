@@ -4,6 +4,8 @@ use crate::domain::{Frontmatter, Snippet, SnippetFile, Variable, VariableSource,
 use crate::frecency::FrecencyStore;
 use crate::index::SnippetIndex;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use ratatui::Terminal;
+use ratatui::backend::TestBackend;
 use ratatui::text::Line;
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
@@ -76,6 +78,25 @@ fn snippet_file_with_slug(rel: &str, slug: &str, name: &str, body: &str) -> Snip
             name: name.to_string(),
             description: "desc".to_string(),
             body: body.to_string(),
+            variables: vec![],
+            language: None,
+        }],
+    }
+}
+
+fn snippet_file_with_tags(rel: &str, slug: &str, name: &str, tags: &[&str]) -> SnippetFile {
+    SnippetFile {
+        path: PathBuf::from(rel),
+        relative_path: PathBuf::from(rel),
+        frontmatter: Frontmatter {
+            tags: tags.iter().map(|tag| tag.to_string()).collect(),
+            ..Default::default()
+        },
+        snippets: vec![Snippet {
+            id: crate::domain::SnippetId::new(rel, slug),
+            name: name.to_string(),
+            description: "desc".to_string(),
+            body: "echo hi".to_string(),
             variables: vec![],
             language: None,
         }],
@@ -544,12 +565,394 @@ fn prompt_esc_in_browse_mode_preserves_browse_position() {
 }
 
 #[test]
-fn ctrl_t_toggles_between_search_and_browse() {
+fn ctrl_t_cycles_between_search_browse_and_tags() {
     let mut app = app_with_body("echo hi", vec![], TestProvider::default());
     let _ = app.handle_key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::CONTROL));
     assert_eq!(app.navigation_mode(), NavigationMode::Browse);
     let _ = app.handle_key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::CONTROL));
+    assert_eq!(app.navigation_mode(), NavigationMode::Tags);
+    let _ = app.handle_key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::CONTROL));
     assert_eq!(app.navigation_mode(), NavigationMode::Fuzzy);
+}
+
+#[test]
+fn ctrl_t_cycle_preserves_browse_state() {
+    let mut app = app_with_body("echo hi", vec![], TestProvider::default());
+    let _ = app.handle_key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::CONTROL));
+    app.browse.path = vec!["git".to_string(), "commits.md".to_string()];
+    app.browse.selection = Some(3);
+
+    let _ = app.handle_key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::CONTROL));
+    assert_eq!(app.navigation_mode(), NavigationMode::Tags);
+    let _ = app.handle_key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::CONTROL));
+    assert_eq!(app.navigation_mode(), NavigationMode::Fuzzy);
+    let _ = app.handle_key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::CONTROL));
+
+    assert_eq!(app.navigation_mode(), NavigationMode::Browse);
+    assert_eq!(
+        app.browse.path,
+        vec!["git".to_string(), "commits.md".to_string()]
+    );
+    assert_eq!(app.browse.selection, Some(3));
+}
+
+#[test]
+fn tags_mode_render_does_not_panic() {
+    let mut app = app_with_body("echo hi", vec![], TestProvider::default());
+    let _ = app.handle_key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::CONTROL));
+    let _ = app.handle_key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::CONTROL));
+    let backend = TestBackend::new(80, 20);
+    let mut terminal = Terminal::new(backend).expect("terminal");
+
+    terminal.draw(|frame| app.render(frame)).expect("draw");
+}
+
+#[test]
+fn tags_visible_list_is_alphabetical_with_untagged_last() {
+    let index = SnippetIndex::from_files([
+        snippet_file_with_tags("git.md", "git", "Git", &["git"]),
+        snippet_file_with_tags("docker.md", "docker", "Docker", &["docker"]),
+        snippet_file_with_tags("none.md", "none", "None", &[]),
+    ]);
+    let app = ExecutionApp::new(
+        index,
+        FrecencyStore::new(),
+        PathBuf::from("."),
+        0,
+        crate::config::SearchConfig::default(),
+        crate::config::Theme::default(),
+        TestProvider::default(),
+    );
+
+    let labels: Vec<_> = app
+        .visible_tags()
+        .into_iter()
+        .map(|entry| entry.label)
+        .collect();
+    assert_eq!(labels, vec!["docker", "git", "(untagged)"]);
+}
+
+#[test]
+fn tags_filter_is_case_sensitive_substring() {
+    let index = SnippetIndex::from_files([
+        snippet_file_with_tags("git.md", "git", "Git", &["git"]),
+        snippet_file_with_tags("caps.md", "caps", "Caps", &["Git"]),
+        snippet_file_with_tags("shell.md", "shell", "Shell", &["shell"]),
+        snippet_file_with_tags("none.md", "none", "None", &[]),
+    ]);
+    let mut app = ExecutionApp::new(
+        index,
+        FrecencyStore::new(),
+        PathBuf::from("."),
+        0,
+        crate::config::SearchConfig::default(),
+        crate::config::Theme::default(),
+        TestProvider::default(),
+    );
+    app.nav_mode = NavigationMode::Tags;
+
+    let _ = app.handle_key(press(KeyCode::Char('g')));
+    let _ = app.handle_key(press(KeyCode::Char('i')));
+    let labels: Vec<_> = app
+        .visible_tags()
+        .into_iter()
+        .map(|entry| entry.label)
+        .collect();
+    assert_eq!(labels, vec!["git"]);
+}
+
+#[test]
+fn tags_filter_matches_untagged_label() {
+    let index = SnippetIndex::from_files([
+        snippet_file_with_tags("git.md", "git", "Git", &["git"]),
+        snippet_file_with_tags("none.md", "none", "None", &[]),
+    ]);
+    let mut app = ExecutionApp::new(
+        index,
+        FrecencyStore::new(),
+        PathBuf::from("."),
+        0,
+        crate::config::SearchConfig::default(),
+        crate::config::Theme::default(),
+        TestProvider::default(),
+    );
+    app.nav_mode = NavigationMode::Tags;
+    app.tags.filter = "untagged".to_string();
+    app.tags.cursor = app.tags.filter.len();
+
+    let labels: Vec<_> = app
+        .visible_tags()
+        .into_iter()
+        .map(|entry| entry.label)
+        .collect();
+    assert_eq!(labels, vec!["(untagged)"]);
+}
+
+#[test]
+fn tags_counts_include_multitagged_snippets_per_bucket() {
+    let index = SnippetIndex::from_files([
+        snippet_file_with_tags("one.md", "one", "One", &["git", "shell"]),
+        snippet_file_with_tags("two.md", "two", "Two", &["git"]),
+    ]);
+    let app = ExecutionApp::new(
+        index,
+        FrecencyStore::new(),
+        PathBuf::from("."),
+        0,
+        crate::config::SearchConfig::default(),
+        crate::config::Theme::default(),
+        TestProvider::default(),
+    );
+
+    let counts: BTreeMap<_, _> = app
+        .visible_tags()
+        .into_iter()
+        .map(|entry| (entry.label, entry.count))
+        .collect();
+    assert_eq!(counts["git"], 2);
+    assert_eq!(counts["shell"], 1);
+    assert!(!counts.contains_key("(untagged)"));
+}
+
+#[test]
+fn ctrl_t_cycle_preserves_tags_filter_and_selection() {
+    let mut app = app_with_body("echo hi", vec![], TestProvider::default());
+    let _ = app.handle_key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::CONTROL));
+    let _ = app.handle_key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::CONTROL));
+    app.tags.filter = "git".to_string();
+    app.tags.cursor = app.tags.filter.len();
+    app.tags.list_selection = Some(2);
+
+    let _ = app.handle_key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::CONTROL));
+    assert_eq!(app.navigation_mode(), NavigationMode::Fuzzy);
+    let _ = app.handle_key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::CONTROL));
+    assert_eq!(app.navigation_mode(), NavigationMode::Browse);
+    let _ = app.handle_key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::CONTROL));
+
+    assert_eq!(app.navigation_mode(), NavigationMode::Tags);
+    assert_eq!(app.tags.filter, "git");
+    assert_eq!(app.tags.list_selection, Some(2));
+}
+
+#[test]
+fn replace_index_rebuilds_visible_tags() {
+    let mut app = ExecutionApp::new(
+        SnippetIndex::from_files([snippet_file_with_tags("old.md", "old", "Old", &["old"])]),
+        FrecencyStore::new(),
+        PathBuf::from("."),
+        0,
+        crate::config::SearchConfig::default(),
+        crate::config::Theme::default(),
+        TestProvider::default(),
+    );
+    app.nav_mode = NavigationMode::Tags;
+    app.tags.drill = Some(crate::index::TagKey::Tag("old".to_string()));
+
+    app.replace_index(
+        SnippetIndex::from_files([snippet_file_with_tags("new.md", "new", "New", &["new"])]),
+        None,
+    );
+
+    let labels: Vec<_> = app
+        .visible_tags()
+        .into_iter()
+        .map(|entry| entry.label)
+        .collect();
+    assert_eq!(labels, vec!["new"]);
+    assert_eq!(app.tags.drill, None);
+}
+
+#[test]
+fn enter_on_tag_then_snippet_completes_selected_snippet() {
+    let mut app = ExecutionApp::new(
+        SnippetIndex::from_files([snippet_file_with_tags(
+            "git.md",
+            "status",
+            "Git status",
+            &["git"],
+        )]),
+        FrecencyStore::new(),
+        PathBuf::from("."),
+        0,
+        crate::config::SearchConfig::default(),
+        crate::config::Theme::default(),
+        TestProvider::default(),
+    );
+    app.nav_mode = NavigationMode::Tags;
+
+    let _ = app.handle_key(press(KeyCode::Enter));
+    assert_eq!(
+        app.tags.drill,
+        Some(crate::index::TagKey::Tag("git".to_string()))
+    );
+    assert!(app.selected_snippet().is_some());
+
+    let outcome = completed(app.handle_key(press(KeyCode::Enter)));
+    assert_eq!(outcome.command, "echo hi");
+    assert_eq!(
+        outcome.snippet_id,
+        crate::domain::SnippetId::new("git.md", "status")
+    );
+}
+
+#[test]
+fn esc_from_tag_drill_returns_to_tag_list() {
+    let mut app = ExecutionApp::new(
+        SnippetIndex::from_files([snippet_file_with_tags("git.md", "git", "Git", &["git"])]),
+        FrecencyStore::new(),
+        PathBuf::from("."),
+        0,
+        crate::config::SearchConfig::default(),
+        crate::config::Theme::default(),
+        TestProvider::default(),
+    );
+    app.nav_mode = NavigationMode::Tags;
+    let _ = app.handle_key(press(KeyCode::Enter));
+
+    let event = app.handle_key(press(KeyCode::Esc));
+
+    assert!(matches!(event, AppEvent::Continue));
+    assert!(matches!(app.screen, Screen::Select));
+    assert_eq!(app.navigation_mode(), NavigationMode::Tags);
+    assert_eq!(app.tags.drill, None);
+}
+
+#[test]
+fn backspace_from_tag_drill_returns_to_tag_list() {
+    let mut app = ExecutionApp::new(
+        SnippetIndex::from_files([snippet_file_with_tags("git.md", "git", "Git", &["git"])]),
+        FrecencyStore::new(),
+        PathBuf::from("."),
+        0,
+        crate::config::SearchConfig::default(),
+        crate::config::Theme::default(),
+        TestProvider::default(),
+    );
+    app.nav_mode = NavigationMode::Tags;
+    let _ = app.handle_key(press(KeyCode::Enter));
+
+    let _ = app.handle_key(press(KeyCode::Backspace));
+
+    assert_eq!(app.tags.drill, None);
+}
+
+#[test]
+fn typing_in_tag_drill_filters_snippets_by_name() {
+    let mut app = ExecutionApp::new(
+        SnippetIndex::from_files([
+            snippet_file_with_tags("git-one.md", "one", "Git status", &["git"]),
+            snippet_file_with_tags("git-two.md", "two", "Git commit", &["git"]),
+        ]),
+        FrecencyStore::new(),
+        PathBuf::from("."),
+        0,
+        crate::config::SearchConfig::default(),
+        crate::config::Theme::default(),
+        TestProvider::default(),
+    );
+    app.nav_mode = NavigationMode::Tags;
+    let _ = app.handle_key(press(KeyCode::Enter));
+
+    let _ = app.handle_key(press(KeyCode::Char('c')));
+    let names: Vec<_> = app
+        .visible_tag_snippets()
+        .into_iter()
+        .map(|entry| entry.name)
+        .collect();
+
+    assert_eq!(names, vec!["Git commit"]);
+}
+
+#[test]
+fn enter_in_tag_drill_uses_filtered_selection() {
+    let mut app = ExecutionApp::new(
+        SnippetIndex::from_files([
+            snippet_file_with_tags("git-one.md", "one", "Git status", &["git"]),
+            snippet_file_with_tags("git-two.md", "two", "Git commit", &["git"]),
+        ]),
+        FrecencyStore::new(),
+        PathBuf::from("."),
+        0,
+        crate::config::SearchConfig::default(),
+        crate::config::Theme::default(),
+        TestProvider::default(),
+    );
+    app.nav_mode = NavigationMode::Tags;
+    let _ = app.handle_key(press(KeyCode::Enter));
+    let _ = app.handle_key(press(KeyCode::Char('c')));
+
+    let outcome = completed(app.handle_key(press(KeyCode::Enter)));
+
+    assert_eq!(
+        outcome.snippet_id,
+        crate::domain::SnippetId::new("git-two.md", "two")
+    );
+}
+
+#[test]
+fn backspace_in_tag_drill_clears_filter_before_popping() {
+    let mut app = ExecutionApp::new(
+        SnippetIndex::from_files([snippet_file_with_tags("git.md", "git", "Git", &["git"])]),
+        FrecencyStore::new(),
+        PathBuf::from("."),
+        0,
+        crate::config::SearchConfig::default(),
+        crate::config::Theme::default(),
+        TestProvider::default(),
+    );
+    app.nav_mode = NavigationMode::Tags;
+    let _ = app.handle_key(press(KeyCode::Enter));
+    let _ = app.handle_key(press(KeyCode::Char('g')));
+
+    let _ = app.handle_key(press(KeyCode::Backspace));
+    assert_eq!(app.tags.drill_filter, "");
+    assert!(app.tags.drill.is_some());
+
+    let _ = app.handle_key(press(KeyCode::Backspace));
+    assert_eq!(app.tags.drill, None);
+}
+
+#[test]
+fn ctrl_t_cycle_preserves_tag_drill_state() {
+    let mut app = ExecutionApp::new(
+        SnippetIndex::from_files([
+            snippet_file_with_tags("git-one.md", "one", "Git one", &["git"]),
+            snippet_file_with_tags("git-two.md", "two", "Git two", &["git"]),
+        ]),
+        FrecencyStore::new(),
+        PathBuf::from("."),
+        0,
+        crate::config::SearchConfig::default(),
+        crate::config::Theme::default(),
+        TestProvider::default(),
+    );
+    app.nav_mode = NavigationMode::Tags;
+    let _ = app.handle_key(press(KeyCode::Enter));
+    app.tags.drill_selection = Some(1);
+
+    let _ = app.handle_key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::CONTROL));
+    assert_eq!(app.navigation_mode(), NavigationMode::Fuzzy);
+    let _ = app.handle_key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::CONTROL));
+    assert_eq!(app.navigation_mode(), NavigationMode::Browse);
+    let _ = app.handle_key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::CONTROL));
+
+    assert_eq!(app.navigation_mode(), NavigationMode::Tags);
+    assert_eq!(
+        app.tags.drill,
+        Some(crate::index::TagKey::Tag("git".to_string()))
+    );
+    assert_eq!(app.tags.drill_selection, Some(1));
+}
+
+#[test]
+fn selected_snippet_is_none_for_empty_tag_drill() {
+    let mut app = app_with_body("echo hi", vec![], TestProvider::default());
+    app.nav_mode = NavigationMode::Tags;
+    app.tags.drill = Some(crate::index::TagKey::Tag("empty".to_string()));
+    app.tag_index
+        .insert(crate::index::TagKey::Tag("empty".to_string()), Vec::new());
+
+    assert!(app.selected_snippet().is_none());
 }
 
 #[test]

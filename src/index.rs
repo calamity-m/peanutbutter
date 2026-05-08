@@ -2,10 +2,23 @@ use crate::config::Paths;
 use crate::discovery::discover_markdown_files;
 use crate::domain::{Frontmatter, Snippet, SnippetFile, SnippetId};
 use crate::parser::parse_file;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+
+/// Key used for grouping snippets in the tags picker.
+///
+/// `Untagged` is a distinct variant so a user tag cannot collide with the
+/// synthetic untagged bucket. `BTreeMap` ordering is used for display; render
+/// code places the synthetic bucket after stored tags.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum TagKey {
+    /// A tag value parsed from snippet-file frontmatter.
+    Tag(String),
+    /// Synthetic bucket for snippets whose file has no tags.
+    Untagged,
+}
 
 /// A snippet enriched with the file-level context needed for search and display.
 ///
@@ -111,6 +124,27 @@ impl SnippetIndex {
     pub fn as_slice(&self) -> &[IndexedSnippet] {
         &self.entries
     }
+    /// Group snippets by their file-level frontmatter tags.
+    ///
+    /// Snippets with multiple tags are included once in each tag bucket.
+    /// Snippets with no tags are included in the synthetic `Untagged` bucket.
+    pub fn tag_index(&self) -> BTreeMap<TagKey, Vec<SnippetId>> {
+        let mut tags = BTreeMap::new();
+        for entry in &self.entries {
+            if entry.tags().is_empty() {
+                tags.entry(TagKey::Untagged)
+                    .or_insert_with(Vec::new)
+                    .push(entry.id().clone());
+                continue;
+            }
+            for tag in entry.tags() {
+                tags.entry(TagKey::Tag(tag.clone()))
+                    .or_insert_with(Vec::new)
+                    .push(entry.id().clone());
+            }
+        }
+        tags
+    }
 }
 
 /// Walk each root directory, parse every `.md` file found, and return a
@@ -195,5 +229,41 @@ mod tests {
         let first = index.iter().next().unwrap();
         let id = first.id().clone();
         assert_eq!(index.get(&id).unwrap().name(), first.name());
+    }
+
+    #[test]
+    fn tag_index_groups_by_tag_and_untagged_bucket() {
+        use crate::domain::{Snippet, SnippetFile};
+
+        fn file(rel: &str, tags: &[&str], slug: &str) -> SnippetFile {
+            SnippetFile {
+                path: PathBuf::from(rel),
+                relative_path: PathBuf::from(rel),
+                frontmatter: Frontmatter {
+                    tags: tags.iter().map(|tag| tag.to_string()).collect(),
+                    ..Default::default()
+                },
+                snippets: vec![Snippet {
+                    id: SnippetId::new(rel, slug),
+                    name: slug.to_string(),
+                    description: String::new(),
+                    body: "echo hi".to_string(),
+                    variables: vec![],
+                    language: None,
+                }],
+            }
+        }
+
+        let index = SnippetIndex::from_files([
+            file("git.md", &["git", "shell"], "one"),
+            file("literal.md", &["__pb_untagged__"], "two"),
+            file("none.md", &[], "three"),
+        ]);
+        let tags = index.tag_index();
+
+        assert_eq!(tags[&TagKey::Tag("git".to_string())].len(), 1);
+        assert_eq!(tags[&TagKey::Tag("shell".to_string())].len(), 1);
+        assert_eq!(tags[&TagKey::Tag("__pb_untagged__".to_string())].len(), 1);
+        assert_eq!(tags[&TagKey::Untagged].len(), 1);
     }
 }
