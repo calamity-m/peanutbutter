@@ -552,19 +552,60 @@ fn read_dir_entries(cwd: &Path, want_files: bool) -> io::Result<Vec<String>> {
 ///
 /// Each real newline and each literal `\n` in the output is treated as a
 /// separator, and blank items are dropped. Returns an error if the command
-/// exits non-zero, including the stderr output in the error message.
-pub(crate) fn command_suggestions(command: &str, cwd: &Path) -> io::Result<Vec<String>> {
+/// exits non-zero, times out, or produces no output, including stderr in the
+/// error message when available.
+///
+/// `timeout_ms` caps how long the command may run; processes that exceed it
+/// are killed and an error is returned so the caller can fall back gracefully.
+pub(crate) fn command_suggestions(
+    command: &str,
+    cwd: &Path,
+    timeout_ms: u64,
+) -> io::Result<Vec<String>> {
+    use std::io::Read;
+    use std::process::Stdio;
+    use std::sync::mpsc;
+    use std::thread;
+    use std::time::Duration;
+
     // `-c` (not `-lc`): a login shell would source the user's profile/bashrc,
     // whose startup output (e.g. `Agent pid NNNN` from ssh-agent) leaks into
     // stdout as fake suggestions and whose prompts (e.g. ssh-add passphrase)
     // block on captured stdin.
-    let output = Command::new("bash")
+    let mut child = Command::new("bash")
         .arg("-c")
         .arg(command)
         .current_dir(cwd)
-        .output()?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+
+    let mut stdout = child.stdout.take().expect("stdout is piped");
+    let mut stderr = child.stderr.take().expect("stderr is piped");
+
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        stdout.read_to_end(&mut out).ok();
+        stderr.read_to_end(&mut err).ok();
+        let _ = tx.send((out, err));
+    });
+
+    let (out_bytes, err_bytes) = match rx.recv_timeout(Duration::from_millis(timeout_ms)) {
+        Ok(pair) => pair,
+        Err(_) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(io::Error::other(format!(
+                "suggestion command timed out after {timeout_ms}ms: {command}"
+            )));
+        }
+    };
+
+    let status = child.wait()?;
+    if !status.success() {
+        let stderr = String::from_utf8_lossy(&err_bytes).trim().to_string();
         let message = if stderr.is_empty() {
             format!("suggestion command failed: {command}")
         } else {
@@ -573,7 +614,7 @@ pub(crate) fn command_suggestions(command: &str, cwd: &Path) -> io::Result<Vec<S
         return Err(io::Error::other(message));
     }
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stdout = String::from_utf8_lossy(&out_bytes);
     let mut values = Vec::new();
     for line in stdout.lines() {
         values.extend(

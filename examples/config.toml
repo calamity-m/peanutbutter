@@ -24,6 +24,14 @@ state_file = "/home/me/.local/state/peanutbutter/state.tsv"
 # The terminal may still clamp this lower depending on available rows.
 height = 18
 
+[suggestion_commands]
+# Maximum time (ms) a suggestion command may run before being killed.
+# The variable falls back to manual input on timeout.
+timeout_ms = 2000
+
+# Set to false to disable all suggestion command execution globally.
+allow_commands = true
+
 [search]
 # How much frecency influences the final ranking relative to fuzzy score.
 # Higher values make your usage history matter more.

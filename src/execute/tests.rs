@@ -233,11 +233,53 @@ fn built_in_file_and_directory_sources_list_cwd_entries() {
 #[test]
 fn command_suggestions_split_literal_backslash_n_sequences() {
     let dir = Path::new(".");
-    let values = command_suggestions("printf 'GET\\\\nPOST\\\\nPUT'", dir).unwrap();
+    let values = command_suggestions("printf 'GET\\\\nPOST\\\\nPUT'", dir, 2000).unwrap();
     assert_eq!(
         values,
         vec!["GET".to_string(), "POST".to_string(), "PUT".to_string()]
     );
+}
+
+#[test]
+fn command_suggestions_times_out_and_returns_error() {
+    let dir = Path::new(".");
+    let err = command_suggestions("sleep 10", dir, 100).unwrap_err();
+    assert!(
+        err.to_string().contains("timed out"),
+        "expected timeout error, got: {err}"
+    );
+}
+
+#[test]
+fn system_provider_returns_empty_when_commands_disabled() {
+    use crate::config::{SuggestionCommandsConfig, VariableInputConfig};
+    use crate::domain::{Variable, VariableSource};
+    use crate::execute::SuggestionProvider;
+    use std::path::Path;
+
+    let mut variable_inputs = std::collections::BTreeMap::new();
+    variable_inputs.insert(
+        "target".to_string(),
+        VariableInputConfig {
+            command: Some("echo hi".to_string()),
+            ..Default::default()
+        },
+    );
+    let provider = crate::execute::SystemSuggestionProvider::new(
+        variable_inputs,
+        SuggestionCommandsConfig {
+            allow_commands: false,
+            timeout_ms: 2000,
+        },
+    );
+    let variable = Variable {
+        name: "target".to_string(),
+        source: VariableSource::Free,
+    };
+    let suggestions = provider
+        .suggestions(&variable, Path::new("."), &Default::default())
+        .unwrap();
+    assert!(suggestions.is_empty());
 }
 
 #[test]
@@ -563,7 +605,7 @@ fn variable_flow_uses_config_defined_inputs() {
         0,
         crate::config::SearchConfig::default(),
         crate::config::Theme::default(),
-        SystemSuggestionProvider::new(configured),
+        SystemSuggestionProvider::new(configured, Default::default()),
     );
 
     let _ = app.handle_key(press(KeyCode::Enter));
@@ -607,7 +649,7 @@ fn variable_flow_uses_file_local_specs_over_config_by_field() {
         0,
         crate::config::SearchConfig::default(),
         crate::config::Theme::default(),
-        SystemSuggestionProvider::new(configured),
+        SystemSuggestionProvider::new(configured, Default::default()),
     );
 
     let _ = app.handle_key(press(KeyCode::Enter));
@@ -651,7 +693,7 @@ fn file_local_suggestions_override_config_suggestions() {
         0,
         crate::config::SearchConfig::default(),
         crate::config::Theme::default(),
-        SystemSuggestionProvider::new(configured),
+        SystemSuggestionProvider::new(configured, Default::default()),
     );
 
     let _ = app.handle_key(press(KeyCode::Enter));
@@ -686,7 +728,7 @@ fn file_local_suggestions_without_default_leave_input_empty() {
         0,
         crate::config::SearchConfig::default(),
         crate::config::Theme::default(),
-        SystemSuggestionProvider::new(Default::default()),
+        SystemSuggestionProvider::new(Default::default(), Default::default()),
     );
 
     let _ = app.handle_key(press(KeyCode::Enter));
@@ -729,7 +771,7 @@ fn inline_default_overrides_config_default() {
         0,
         crate::config::SearchConfig::default(),
         crate::config::Theme::default(),
-        SystemSuggestionProvider::new(configured),
+        SystemSuggestionProvider::new(configured, Default::default()),
     );
 
     let _ = app.handle_key(press(KeyCode::Enter));
@@ -768,7 +810,7 @@ fn inline_default_overrides_file_local_default() {
         0,
         crate::config::SearchConfig::default(),
         crate::config::Theme::default(),
-        SystemSuggestionProvider::new(Default::default()),
+        SystemSuggestionProvider::new(Default::default(), Default::default()),
     );
 
     let _ = app.handle_key(press(KeyCode::Enter));
@@ -802,7 +844,7 @@ fn file_local_command_spec_populates_suggestions() {
         0,
         crate::config::SearchConfig::default(),
         crate::config::Theme::default(),
-        SystemSuggestionProvider::new(Default::default()),
+        SystemSuggestionProvider::new(Default::default(), Default::default()),
     );
 
     let _ = app.handle_key(press(KeyCode::Enter));

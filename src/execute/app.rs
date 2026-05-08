@@ -1,5 +1,5 @@
 use crate::browse::{BrowseEntry, BrowseState, BrowseTree};
-use crate::config::{SearchConfig, Theme, VariableInputConfig};
+use crate::config::{SearchConfig, SuggestionCommandsConfig, Theme, VariableInputConfig};
 use crate::domain::{SnippetId, Variable, VariableSource, VariableSpec};
 use crate::frecency::FrecencyStore;
 use crate::fuzzy::FuzzyState;
@@ -52,11 +52,18 @@ pub trait SuggestionProvider {
 #[derive(Debug, Default, Clone)]
 pub struct SystemSuggestionProvider {
     variable_inputs: std::collections::BTreeMap<String, VariableInputConfig>,
+    suggestion_commands: SuggestionCommandsConfig,
 }
 
 impl SystemSuggestionProvider {
-    pub fn new(variable_inputs: std::collections::BTreeMap<String, VariableInputConfig>) -> Self {
-        Self { variable_inputs }
+    pub fn new(
+        variable_inputs: std::collections::BTreeMap<String, VariableInputConfig>,
+        suggestion_commands: SuggestionCommandsConfig,
+    ) -> Self {
+        Self {
+            variable_inputs,
+            suggestion_commands,
+        }
     }
 }
 
@@ -67,8 +74,14 @@ impl SuggestionProvider for SystemSuggestionProvider {
         cwd: &Path,
         local_variables: &std::collections::BTreeMap<String, VariableSpec>,
     ) -> io::Result<Vec<String>> {
+        let timeout_ms = self.suggestion_commands.timeout_ms;
         match &variable.source {
-            VariableSource::Command(cmd) => super::prompt::command_suggestions(cmd, cwd),
+            VariableSource::Command(cmd) => {
+                if !self.suggestion_commands.allow_commands {
+                    return Ok(Vec::new());
+                }
+                super::prompt::command_suggestions(cmd, cwd, timeout_ms)
+            }
             VariableSource::Default(_) => Ok(Vec::new()),
             VariableSource::Free => {
                 if let Some(config) = local_variables.get(&variable.name) {
@@ -76,7 +89,10 @@ impl SuggestionProvider for SystemSuggestionProvider {
                         return Ok(config.suggestions.clone());
                     }
                     if let Some(command) = &config.command {
-                        return super::prompt::command_suggestions(command, cwd);
+                        if !self.suggestion_commands.allow_commands {
+                            return Ok(Vec::new());
+                        }
+                        return super::prompt::command_suggestions(command, cwd, timeout_ms);
                     }
                 }
                 if let Some(config) = self.variable_inputs.get(&variable.name) {
@@ -84,7 +100,10 @@ impl SuggestionProvider for SystemSuggestionProvider {
                         return Ok(config.suggestions.clone());
                     }
                     if let Some(command) = &config.command {
-                        return super::prompt::command_suggestions(command, cwd);
+                        if !self.suggestion_commands.allow_commands {
+                            return Ok(Vec::new());
+                        }
+                        return super::prompt::command_suggestions(command, cwd, timeout_ms);
                     }
                 }
                 super::prompt::builtin_suggestions(&variable.name, cwd)
