@@ -851,6 +851,16 @@ mod tests {
     use std::path::PathBuf;
 
     fn snippet(name: &str, description: &str, body: &str, tags: &[&str]) -> IndexedSnippet {
+        snippet_with_language(name, description, body, tags, None)
+    }
+
+    fn snippet_with_language(
+        name: &str,
+        description: &str,
+        body: &str,
+        tags: &[&str],
+        language: Option<&str>,
+    ) -> IndexedSnippet {
         IndexedSnippet {
             path: PathBuf::from("demo.md"),
             snippet: Snippet {
@@ -859,7 +869,7 @@ mod tests {
                 description: description.to_string(),
                 body: body.to_string(),
                 variables: vec![],
-                language: None,
+                language: language.map(|l| l.to_string()),
             },
             relative_path: PathBuf::from("demo.md"),
             frontmatter: Frontmatter {
@@ -933,5 +943,40 @@ mod tests {
             .fg(ratatui::style::Color::Cyan)
             .patch(theme.fuzzy_highlight);
         assert!(home.iter().all(|styled| styled.style == expected));
+    }
+
+    #[test]
+    fn fuzzy_row_includes_language_after_separator() {
+        let theme = crate::config::Theme::default();
+        let mut scorer = FuzzyScorer::new();
+        let s = snippet_with_language("deploy", "desc", "kubectl apply", &[], Some("bash"));
+        let spans = fuzzy_snippet_row_spans(&theme, &s, None, &mut scorer, false);
+        let rendered: String = spans.iter().map(|span| span.content.as_ref()).collect();
+        assert!(
+            rendered.contains(" · bash"),
+            "expected language in row: {rendered}"
+        );
+    }
+
+    #[test]
+    fn preview_includes_lang_metadata_line() {
+        let theme = crate::config::Theme::default();
+        let mut scorer = FuzzyScorer::new();
+        let s = snippet_with_language("deploy", "desc", "kubectl apply", &[], Some("bash"));
+        let preview = render_snippet_preview_text(&s, 80, &theme, None, &mut scorer);
+        let rendered: String = preview
+            .lines
+            .iter()
+            .flat_map(|line| line.spans.iter().map(|span| span.content.as_ref()))
+            .collect::<Vec<_>>()
+            .join("");
+        assert!(
+            rendered.contains("lang"),
+            "expected lang label in preview: {rendered}"
+        );
+        assert!(
+            rendered.contains("bash"),
+            "expected language value in preview: {rendered}"
+        );
     }
 }
