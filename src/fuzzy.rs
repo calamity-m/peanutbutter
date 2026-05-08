@@ -128,6 +128,9 @@ pub fn score_snippet(
         );
     }
 
+    // language is not scored: interpreter dispatch and language-aware filtering
+    // are deferred to a future config mapping and are out of scope for this PR.
+
     if matched { Some(total) } else { None }
 }
 
@@ -231,6 +234,7 @@ mod tests {
                 description: String::new(),
                 body: body.to_string(),
                 variables: vec![],
+                language: None,
             },
             relative_path: PathBuf::from(rel),
             frontmatter: Frontmatter {

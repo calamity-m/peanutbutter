@@ -207,6 +207,7 @@ mod tests {
                 description: String::new(),
                 body: "b".to_string(),
                 variables: vec![],
+                language: None,
             }],
         };
         let index = SnippetIndex::from_files([file]);

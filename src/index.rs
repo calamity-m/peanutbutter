@@ -42,6 +42,9 @@ impl IndexedSnippet {
     pub fn tags(&self) -> &[String] {
         &self.frontmatter.tags
     }
+    pub fn language(&self) -> Option<&str> {
+        self.snippet.language.as_deref()
+    }
     pub fn relative_path_display(&self) -> String {
         self.relative_path.to_string_lossy().replace('\\', "/")
     }
@@ -164,6 +167,7 @@ mod tests {
                 description: "first".into(),
                 body: "echo a".into(),
                 variables: vec![],
+                language: None,
             }],
         };
         let file_b = SnippetFile {
@@ -176,6 +180,7 @@ mod tests {
                 description: "second".into(),
                 body: "echo b".into(),
                 variables: vec![],
+                language: None,
             }],
         };
         index.insert_file(file_a);
