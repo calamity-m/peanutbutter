@@ -59,6 +59,8 @@ pub struct ExecuteOptions {
     /// Snippet roots used to build the original index. These are reused when
     /// the TUI reloads snippets after editing.
     pub snippet_roots: Vec<PathBuf>,
+    /// Controls how suggestion commands are executed (timeout, allow/deny).
+    pub suggestion_commands: config::SuggestionCommandsConfig,
 }
 
 impl Default for ExecuteOptions {
@@ -71,6 +73,7 @@ impl Default for ExecuteOptions {
             theme: config::Theme::default(),
             variables: std::collections::BTreeMap::new(),
             snippet_roots: Vec::new(),
+            suggestion_commands: config::SuggestionCommandsConfig::default(),
         }
     }
 }

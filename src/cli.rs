@@ -106,6 +106,7 @@ where
         theme: app_config.theme.clone(),
         variables: app_config.variables.clone(),
         snippet_roots: paths.snippet_roots.clone(),
+        suggestion_commands: app_config.suggestion_commands.clone(),
         ..ExecuteOptions::default()
     };
     let outcome = runner(index, store.clone(), options)?;

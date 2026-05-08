@@ -35,6 +35,29 @@ pub struct AppConfig {
     pub variables: BTreeMap<String, VariableInputConfig>,
     /// Visual theme applied to the TUI.
     pub theme: Theme,
+    /// Controls how suggestion commands are executed.
+    pub suggestion_commands: SuggestionCommandsConfig,
+}
+
+/// Controls how suggestion commands (`<@name:cmd>` and `command =` entries) are
+/// executed. Applies globally to all suggestion commands in all snippets.
+#[derive(Debug, Clone)]
+pub struct SuggestionCommandsConfig {
+    /// How long (in milliseconds) a suggestion command may run before it is
+    /// killed and the variable falls back to manual input. Default: 2000.
+    pub timeout_ms: u64,
+    /// If `false`, no suggestion commands are executed at all; variables fall
+    /// back to their static suggestions or manual input. Default: `true`.
+    pub allow_commands: bool,
+}
+
+impl Default for SuggestionCommandsConfig {
+    fn default() -> Self {
+        Self {
+            timeout_ms: 2000,
+            allow_commands: true,
+        }
+    }
 }
 
 /// TUI layout parameters.
@@ -250,6 +273,10 @@ pub fn load() -> io::Result<AppConfig> {
         ui: UiConfig {
             height: file.ui.height.unwrap_or(20).max(1),
         },
+        suggestion_commands: SuggestionCommandsConfig {
+            timeout_ms: file.suggestion_commands.timeout_ms.unwrap_or(2000),
+            allow_commands: file.suggestion_commands.allow_commands.unwrap_or(true),
+        },
         search: SearchConfig {
             frecency_weight: file.search.frecency_weight.unwrap_or(250.0),
             fuzzy: FuzzyWeights {
@@ -293,6 +320,14 @@ struct FileConfig {
     variables: BTreeMap<String, VariableInputConfig>,
     #[serde(default)]
     theme: ThemeFileConfig,
+    #[serde(default)]
+    suggestion_commands: SuggestionCommandsFileConfig,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct SuggestionCommandsFileConfig {
+    timeout_ms: Option<u64>,
+    allow_commands: Option<bool>,
 }
 
 #[derive(Debug, Default, Deserialize)]

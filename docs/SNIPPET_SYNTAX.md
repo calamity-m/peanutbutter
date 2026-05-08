@@ -190,8 +190,24 @@ Suggestion commands are executed with non-login, non-interactive `bash -c` in
 the current working directory. Output is split into suggestions by real
 newlines and literal `\n` sequences. Blank suggestions are ignored.
 
-If a suggestion command fails, peanutbutter shows the error but still lets the
-user type a value manually.
+If a suggestion command fails or times out, peanutbutter shows the error but
+still lets the user type a value manually.
+
+#### Timeouts and opt-out
+
+Two `[suggestion_commands]` config options control command execution:
+
+```toml
+[suggestion_commands]
+# Maximum time a suggestion command may run (milliseconds). Default: 2000.
+# Commands that exceed this limit are killed; the variable falls back to
+# manual input.
+timeout_ms = 2000
+
+# Set to false to disable all suggestion command execution. Variables will
+# fall back to their static suggestions or manual input.
+allow_commands = true
+```
 
 ### Built-in Variable Names
 

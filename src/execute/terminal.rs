@@ -47,7 +47,10 @@ pub fn run_execute(
     frecency: FrecencyStore,
     options: ExecuteOptions,
 ) -> io::Result<Option<ExecutionOutcome>> {
-    let provider = SystemSuggestionProvider::new(options.variables.clone());
+    let provider = SystemSuggestionProvider::new(
+        options.variables.clone(),
+        options.suggestion_commands.clone(),
+    );
     run_execute_with_provider(index, frecency, options, provider)
 }
 
@@ -425,7 +428,7 @@ mod tests {
             0,
             config::SearchConfig::default(),
             config::Theme::default(),
-            SystemSuggestionProvider::new(Default::default()),
+            SystemSuggestionProvider::new(Default::default(), Default::default()),
         )
     }
 
@@ -437,7 +440,7 @@ mod tests {
             0,
             config::SearchConfig::default(),
             config::Theme::default(),
-            SystemSuggestionProvider::new(Default::default()),
+            SystemSuggestionProvider::new(Default::default(), Default::default()),
         )
     }
 
