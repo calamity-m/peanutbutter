@@ -61,6 +61,7 @@ fn snippet_file(rel: &str, name: &str, body: &str, variables: Vec<Variable>) -> 
             description: "desc".to_string(),
             body: body.to_string(),
             variables,
+            language: None,
         }],
     }
 }
@@ -76,6 +77,7 @@ fn snippet_file_with_slug(rel: &str, slug: &str, name: &str, body: &str) -> Snip
             description: "desc".to_string(),
             body: body.to_string(),
             variables: vec![],
+            language: None,
         }],
     }
 }
@@ -509,6 +511,7 @@ fn prompt_esc_in_browse_mode_preserves_browse_position() {
             description: "desc".to_string(),
             body: "git log <@x>".to_string(),
             variables,
+            language: None,
         }],
     };
     let index = SnippetIndex::from_files([file]);
@@ -1059,6 +1062,7 @@ fn browse_tab_resets_preview_scroll() {
             description: "desc".to_string(),
             body: "git log".to_string(),
             variables: vec![],
+            language: None,
         }],
     };
     let index = SnippetIndex::from_files([file]);
@@ -1099,6 +1103,7 @@ fn browse_entering_directory_resets_preview_scroll() {
             description: "desc".to_string(),
             body: "git log".to_string(),
             variables: vec![],
+            language: None,
         }],
     };
     let index = SnippetIndex::from_files([file]);

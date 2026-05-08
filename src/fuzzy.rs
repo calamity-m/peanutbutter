@@ -231,6 +231,7 @@ mod tests {
                 description: String::new(),
                 body: body.to_string(),
                 variables: vec![],
+                language: None,
             },
             relative_path: PathBuf::from(rel),
             frontmatter: Frontmatter {

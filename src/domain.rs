@@ -88,6 +88,8 @@ pub struct Snippet {
     pub body: String,
     /// Variables extracted from `body` in order of first appearance.
     pub variables: Vec<Variable>,
+    /// Language tag from the opening code fence (e.g. `"python"` for ` ```python `).
+    pub language: Option<String>,
 }
 
 /// A parsed Markdown file: its resolved paths, optional frontmatter, and all

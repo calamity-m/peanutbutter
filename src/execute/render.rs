@@ -576,6 +576,9 @@ fn fuzzy_snippet_row_spans(
         base,
         theme.fuzzy_highlight,
     ));
+    if let Some(lang) = snippet.language() {
+        spans.push(Span::styled(format!(" · {lang}"), theme.chrome));
+    }
     spans.push(Span::styled("]".to_string(), base));
     spans
 }
@@ -610,6 +613,14 @@ fn render_snippet_preview_text(
         ),
         theme,
     ));
+
+    if let Some(lang) = snippet.language() {
+        text.lines.push(metadata_line(
+            "lang",
+            vec![Span::raw(lang.to_string())],
+            theme,
+        ));
+    }
 
     if !snippet.frontmatter.tags.is_empty() {
         let mut tag_spans = Vec::new();
@@ -848,6 +859,7 @@ mod tests {
                 description: description.to_string(),
                 body: body.to_string(),
                 variables: vec![],
+                language: None,
             },
             relative_path: PathBuf::from("demo.md"),
             frontmatter: Frontmatter {

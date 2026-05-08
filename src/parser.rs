@@ -218,6 +218,7 @@ enum State {
         heading: String,
         description: Vec<String>,
         fence: String,
+        language: Option<String>,
         body: Vec<String>,
     },
 }
@@ -259,13 +260,14 @@ fn parse_snippets(lines: &[&str], relative_path: &Path) -> Vec<Snippet> {
                         heading: h,
                         description: Vec::new(),
                     };
-                } else if let Some(fence) = parse_fence_open(line) {
+                } else if let Some((fence, language)) = parse_fence_open(line) {
                     let heading = std::mem::take(heading);
                     let description = std::mem::take(description);
                     state = State::InCode {
                         heading,
                         description,
                         fence,
+                        language,
                         body: Vec::new(),
                     };
                 } else {
@@ -276,17 +278,20 @@ fn parse_snippets(lines: &[&str], relative_path: &Path) -> Vec<Snippet> {
                 heading,
                 description,
                 fence,
+                language,
                 body,
             } => {
                 if is_fence_close(line, fence) {
                     let heading = std::mem::take(heading);
                     let description = std::mem::take(description);
+                    let language = std::mem::take(language);
                     let body = std::mem::take(body);
                     out.push(build_snippet(
                         relative_path,
                         heading,
                         description,
                         body,
+                        language,
                         &mut seen_slugs,
                     ));
                     state = State::Scanning;
@@ -327,7 +332,7 @@ fn parse_snippet_line_ranges(
                 if let Some(next_heading) = parse_snippet_heading(line) {
                     *heading = next_heading;
                     *start_line = abs_idx;
-                } else if let Some(fence) = parse_fence_open(line) {
+                } else if let Some((fence, _)) = parse_fence_open(line) {
                     let heading = std::mem::take(heading);
                     let start_line = *start_line;
                     state = RangeState::InCode {
@@ -372,13 +377,23 @@ fn parse_snippet_heading(line: &str) -> Option<String> {
     Some(text.to_string())
 }
 
-fn parse_fence_open(line: &str) -> Option<String> {
+/// Returns `(fence, language)` where `language` is the text after the backticks, if any.
+fn parse_fence_open(line: &str) -> Option<(String, Option<String>)> {
     let trimmed = line.trim_start();
     if !trimmed.starts_with("```") {
         return None;
     }
     let ticks: String = trimmed.chars().take_while(|c| *c == '`').collect();
-    if ticks.len() >= 3 { Some(ticks) } else { None }
+    if ticks.len() < 3 {
+        return None;
+    }
+    let lang = trimmed[ticks.len()..].trim();
+    let language = if lang.is_empty() {
+        None
+    } else {
+        Some(lang.to_string())
+    };
+    Some((ticks, language))
 }
 
 fn is_fence_close(line: &str, fence: &str) -> bool {
@@ -394,6 +409,7 @@ fn build_snippet(
     heading: String,
     description: Vec<String>,
     body: Vec<String>,
+    language: Option<String>,
     seen_slugs: &mut std::collections::HashMap<String, usize>,
 ) -> Snippet {
     let description = description.join("\n").trim().to_string();
@@ -410,6 +426,7 @@ fn build_snippet(
         description,
         body,
         variables,
+        language,
     }
 }
 
@@ -629,6 +646,20 @@ variables:
         let snippets = parse_snippets(&lines, &rel("x.md"));
         assert_eq!(snippets.len(), 2);
         assert_ne!(snippets[0].id, snippets[1].id);
+    }
+
+    #[test]
+    fn language_tag_is_parsed_from_fence() {
+        let content = "## Hello\n\n```python\nprint('hi')\n```\n";
+        let snippets = parse_snippets(&content.lines().collect::<Vec<_>>(), &rel("x.md"));
+        assert_eq!(snippets[0].language.as_deref(), Some("python"));
+    }
+
+    #[test]
+    fn no_language_tag_produces_none() {
+        let content = "## Hello\n\n```\necho hi\n```\n";
+        let snippets = parse_snippets(&content.lines().collect::<Vec<_>>(), &rel("x.md"));
+        assert_eq!(snippets[0].language, None);
     }
 
     #[test]
