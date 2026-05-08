@@ -3,10 +3,11 @@ use crate::config::{SearchConfig, SuggestionCommandsConfig, Theme, VariableInput
 use crate::domain::{SnippetId, Variable, VariableSource, VariableSpec};
 use crate::frecency::FrecencyStore;
 use crate::fuzzy::FuzzyState;
-use crate::index::{IndexedSnippet, SnippetIndex};
+use crate::index::{IndexedSnippet, SnippetIndex, TagKey};
 use crate::search;
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::widgets::ListState;
+use std::collections::BTreeMap;
 use std::io;
 use std::path::{Path, PathBuf};
 
@@ -15,13 +16,170 @@ use super::prompt::{
 };
 use super::{ExecutionOutcome, render_command};
 
-/// Which navigation style is currently active in the select screen.
+/// Navigation mode currently active in the select screen.
+///
+/// `Ctrl+T` rotates through fuzzy search, browse, and tags mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NavigationMode {
     /// Fuzzy search: typing filters and ranks snippets by query.
     Fuzzy,
     /// Directory tree browser: navigate by folder hierarchy with tab-completion.
     Browse,
+    /// Tag browser: filter tags, then drill into snippets for a selected tag.
+    Tags,
+}
+
+/// State for the tag-based picker view.
+///
+/// The tag view keeps its own filter buffer so it does not inherit fuzzy-search
+/// ranking or cursor behavior. `drill` records whether the user is looking at
+/// the tag list or the snippets for one tag.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct TagsState {
+    /// Case-sensitive tag-list filter.
+    pub filter: String,
+    /// Cursor position inside `filter`.
+    pub cursor: usize,
+    /// Highlighted row in the tag-list phase.
+    pub list_selection: Option<usize>,
+    /// Active drilled tag, or `None` while showing the tag list.
+    pub drill: Option<TagKey>,
+    /// Case-insensitive snippet-name filter while drilled into one tag.
+    pub drill_filter: String,
+    /// Cursor position inside `drill_filter`.
+    pub drill_cursor: usize,
+    /// Highlighted row in the drilled snippet-list phase.
+    pub drill_selection: Option<usize>,
+}
+
+impl TagsState {
+    pub fn new() -> Self {
+        Self {
+            filter: String::new(),
+            cursor: 0,
+            list_selection: Some(0),
+            drill: None,
+            drill_filter: String::new(),
+            drill_cursor: 0,
+            drill_selection: Some(0),
+        }
+    }
+
+    pub fn type_char(&mut self, c: char) {
+        self.filter.insert(self.cursor, c);
+        self.cursor += c.len_utf8();
+        self.list_selection = Some(0);
+    }
+
+    pub fn backspace(&mut self) -> bool {
+        if self.cursor == 0 {
+            return false;
+        }
+        let prev = self.filter[..self.cursor]
+            .char_indices()
+            .next_back()
+            .map(|(i, _)| i)
+            .unwrap_or(0);
+        self.filter.remove(prev);
+        self.cursor = prev;
+        self.list_selection = Some(0);
+        true
+    }
+
+    pub fn cursor_left(&mut self) {
+        if self.cursor == 0 {
+            return;
+        }
+        self.cursor = self.filter[..self.cursor]
+            .char_indices()
+            .next_back()
+            .map(|(i, _)| i)
+            .unwrap_or(0);
+    }
+
+    pub fn cursor_right(&mut self) {
+        if self.cursor >= self.filter.len() {
+            return;
+        }
+        let c = self.filter[self.cursor..].chars().next().unwrap();
+        self.cursor += c.len_utf8();
+    }
+
+    pub fn move_cursor(&mut self, delta: i32, visible_len: usize) {
+        if visible_len == 0 {
+            self.list_selection = None;
+            return;
+        }
+        let current = self.list_selection.unwrap_or(0) as i32;
+        let next = (current + delta).clamp(0, visible_len as i32 - 1);
+        self.list_selection = Some(next as usize);
+    }
+
+    pub fn type_drill_char(&mut self, c: char) {
+        self.drill_filter.insert(self.drill_cursor, c);
+        self.drill_cursor += c.len_utf8();
+        self.drill_selection = Some(0);
+    }
+
+    pub fn drill_backspace(&mut self) -> bool {
+        if self.drill_cursor == 0 {
+            return false;
+        }
+        let prev = self.drill_filter[..self.drill_cursor]
+            .char_indices()
+            .next_back()
+            .map(|(i, _)| i)
+            .unwrap_or(0);
+        self.drill_filter.remove(prev);
+        self.drill_cursor = prev;
+        self.drill_selection = Some(0);
+        true
+    }
+
+    pub fn drill_cursor_left(&mut self) {
+        if self.drill_cursor == 0 {
+            return;
+        }
+        self.drill_cursor = self.drill_filter[..self.drill_cursor]
+            .char_indices()
+            .next_back()
+            .map(|(i, _)| i)
+            .unwrap_or(0);
+    }
+
+    pub fn drill_cursor_right(&mut self) {
+        if self.drill_cursor >= self.drill_filter.len() {
+            return;
+        }
+        let c = self.drill_filter[self.drill_cursor..]
+            .chars()
+            .next()
+            .unwrap();
+        self.drill_cursor += c.len_utf8();
+    }
+
+    /// Display-column offset of the cursor within the tag filter.
+    pub fn cursor_col(&self) -> usize {
+        self.filter[..self.cursor].chars().count()
+    }
+
+    /// Display-column offset of the cursor within the drilled snippet filter.
+    pub fn drill_cursor_col(&self) -> usize {
+        self.drill_filter[..self.drill_cursor].chars().count()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TagListEntry {
+    pub key: TagKey,
+    pub label: String,
+    pub count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TagSnippetEntry {
+    pub id: SnippetId,
+    pub name: String,
 }
 
 /// Pluggable backend that supplies suggestions and defaults for a variable.
@@ -132,9 +290,9 @@ impl SuggestionProvider for SystemSuggestionProvider {
 }
 
 #[derive(Debug)]
-/// The two top-level TUI screens.
+/// The top-level TUI screens.
 pub(crate) enum Screen {
-    /// The snippet picker (fuzzy search or browse tree).
+    /// The snippet picker (fuzzy search, browse tree, or tags view).
     Select,
     /// Variable-filling dialog for the snippet identified by `PromptState`.
     Prompt(PromptState),
@@ -148,6 +306,7 @@ pub struct ExecutionApp<P = SystemSuggestionProvider> {
     pub(crate) index: SnippetIndex,
     pub(crate) frecency: FrecencyStore,
     pub(crate) tree: BrowseTree,
+    pub(crate) tag_index: BTreeMap<TagKey, Vec<SnippetId>>,
     pub(crate) cwd: PathBuf,
     pub(crate) now: u64,
     pub(crate) provider: P,
@@ -155,10 +314,12 @@ pub struct ExecutionApp<P = SystemSuggestionProvider> {
     pub(crate) nav_mode: NavigationMode,
     pub fuzzy: FuzzyState,
     pub browse: BrowseState,
+    pub tags: TagsState,
     pub(crate) status: Option<String>,
     pub(crate) preview_scroll: u16,
     pub(crate) fuzzy_list: ListState,
     pub(crate) browse_list: ListState,
+    pub(crate) tags_list: ListState,
     pub(crate) search_config: SearchConfig,
     pub(crate) theme: Theme,
 }
@@ -188,6 +349,7 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
     ) -> Self {
         Self {
             tree: BrowseTree::from_index(&index),
+            tag_index: index.tag_index(),
             index,
             frecency,
             cwd,
@@ -197,10 +359,12 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
             nav_mode: NavigationMode::Fuzzy,
             fuzzy: FuzzyState::new(),
             browse: BrowseState::new(),
+            tags: TagsState::new(),
             status: None,
             preview_scroll: 0,
             fuzzy_list: ListState::default(),
             browse_list: ListState::default(),
+            tags_list: ListState::default(),
             search_config,
             theme,
         }
@@ -221,6 +385,7 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
             Screen::Select => match self.nav_mode {
                 NavigationMode::Fuzzy => self.selected_fuzzy_snippet(),
                 NavigationMode::Browse => self.selected_browse_snippet(),
+                NavigationMode::Tags => self.selected_tag_snippet(),
             },
             Screen::Prompt(prompt) => self.index.get(&prompt.snippet_id),
         }
@@ -258,6 +423,16 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
         preferred_id: Option<&SnippetId>,
     ) -> bool {
         self.tree = BrowseTree::from_index(&index);
+        self.tag_index = index.tag_index();
+        if self
+            .tags
+            .drill
+            .as_ref()
+            .is_some_and(|tag| !self.tag_index.contains_key(tag))
+        {
+            self.tags.drill = None;
+            self.tags.drill_selection = Some(0);
+        }
         self.index = index;
         self.screen = Screen::Select;
 
@@ -268,6 +443,7 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
         match self.nav_mode {
             NavigationMode::Fuzzy => self.restore_fuzzy_selection(preferred_id),
             NavigationMode::Browse => self.restore_browse_selection(preferred_id),
+            NavigationMode::Tags => self.restore_tags_selection(),
         }
         preferred_found
     }
@@ -323,7 +499,9 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
     }
 
     fn handle_select_key(&mut self, key: KeyEvent) -> AppEvent {
-        if matches!(key.code, KeyCode::Esc) {
+        if matches!(key.code, KeyCode::Esc)
+            && !(matches!(self.nav_mode, NavigationMode::Tags) && self.tags.drill.is_some())
+        {
             self.status = Some("cancelled".to_string());
             return AppEvent::Cancelled;
         }
@@ -333,7 +511,8 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
         {
             self.nav_mode = match self.nav_mode {
                 NavigationMode::Fuzzy => NavigationMode::Browse,
-                NavigationMode::Browse => NavigationMode::Fuzzy,
+                NavigationMode::Browse => NavigationMode::Tags,
+                NavigationMode::Tags => NavigationMode::Fuzzy,
             };
             self.preview_scroll = 0;
             self.status = None;
@@ -361,6 +540,7 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
         match self.nav_mode {
             NavigationMode::Fuzzy => self.handle_fuzzy_key(key),
             NavigationMode::Browse => self.handle_browse_key(key),
+            NavigationMode::Tags => self.handle_tags_key(key),
         }
     }
 
@@ -456,6 +636,106 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
         AppEvent::Continue
     }
 
+    fn handle_tags_key(&mut self, key: KeyEvent) -> AppEvent {
+        if self.tags.drill.is_some() {
+            let visible = self.visible_tag_snippets();
+            match key.code {
+                KeyCode::Esc => {
+                    self.tags.drill = None;
+                    self.preview_scroll = 0;
+                }
+                KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    self.tags.type_drill_char(c);
+                    self.preview_scroll = 0;
+                }
+                KeyCode::Backspace => {
+                    if !self.tags.drill_backspace() {
+                        self.tags.drill = None;
+                    }
+                    self.preview_scroll = 0;
+                }
+                KeyCode::Left => self.tags.drill_cursor_left(),
+                KeyCode::Right => self.tags.drill_cursor_right(),
+                KeyCode::Up => {
+                    move_selection(&mut self.tags.drill_selection, 1, visible.len());
+                    self.preview_scroll = 0;
+                }
+                KeyCode::Down => {
+                    move_selection(&mut self.tags.drill_selection, -1, visible.len());
+                    self.preview_scroll = 0;
+                }
+                KeyCode::PageUp => {
+                    if !visible.is_empty() {
+                        self.tags.drill_selection = Some(visible.len() - 1);
+                    }
+                    self.preview_scroll = 0;
+                }
+                KeyCode::PageDown => {
+                    if !visible.is_empty() {
+                        self.tags.drill_selection = Some(0);
+                    }
+                    self.preview_scroll = 0;
+                }
+                KeyCode::Enter => {
+                    if let Some(snippet) = self.selected_tag_snippet() {
+                        let id = snippet.id().clone();
+                        self.status = None;
+                        return self.start_prompt_or_complete(id);
+                    }
+                }
+                _ => {}
+            }
+            return AppEvent::Continue;
+        }
+
+        let visible = self.visible_tags();
+        match key.code {
+            KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.tags.type_char(c);
+                self.preview_scroll = 0;
+            }
+            KeyCode::Backspace => {
+                self.tags.backspace();
+                self.preview_scroll = 0;
+            }
+            KeyCode::Left => self.tags.cursor_left(),
+            KeyCode::Right => self.tags.cursor_right(),
+            KeyCode::Up => {
+                self.tags.move_cursor(1, visible.len());
+                self.preview_scroll = 0;
+            }
+            KeyCode::Down => {
+                self.tags.move_cursor(-1, visible.len());
+                self.preview_scroll = 0;
+            }
+            KeyCode::PageUp => {
+                if !visible.is_empty() {
+                    self.tags.list_selection = Some(visible.len() - 1);
+                }
+                self.preview_scroll = 0;
+            }
+            KeyCode::PageDown => {
+                if !visible.is_empty() {
+                    self.tags.list_selection = Some(0);
+                }
+                self.preview_scroll = 0;
+            }
+            KeyCode::Enter => {
+                let selected = self.tags.list_selection.unwrap_or(0);
+                if let Some(entry) = visible.get(selected) {
+                    self.tags.drill = Some(entry.key.clone());
+                    self.tags.drill_filter.clear();
+                    self.tags.drill_cursor = 0;
+                    self.tags.drill_selection = Some(0);
+                    self.preview_scroll = 0;
+                    self.status = None;
+                }
+            }
+            _ => {}
+        }
+        AppEvent::Continue
+    }
+
     /// Transition to the prompt screen, or complete immediately if the snippet
     /// has no variables. Deduplicates variables before creating the prompt so
     /// the user isn't asked for the same variable name twice.
@@ -505,6 +785,54 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
         }
     }
 
+    pub(crate) fn selected_tag_snippet(&self) -> Option<&IndexedSnippet> {
+        let idx = self.tags.drill_selection.unwrap_or(0);
+        let entry = self.visible_tag_snippets().get(idx)?.clone();
+        self.index.get(&entry.id)
+    }
+
+    pub(crate) fn visible_tags(&self) -> Vec<TagListEntry> {
+        self.tag_index
+            .iter()
+            .filter_map(|(key, ids)| {
+                let label = tag_label(key);
+                if tag_matches_filter(key, &self.tags.filter) {
+                    Some(TagListEntry {
+                        key: key.clone(),
+                        label: label.to_string(),
+                        count: ids.len(),
+                    })
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    pub(crate) fn visible_tag_snippets(&self) -> Vec<TagSnippetEntry> {
+        let Some(tag) = self.tags.drill.as_ref() else {
+            return Vec::new();
+        };
+        let Some(ids) = self.tag_index.get(tag) else {
+            return Vec::new();
+        };
+        ids.iter()
+            .filter_map(|id| {
+                self.index.get(id).map(|snippet| TagSnippetEntry {
+                    id: id.clone(),
+                    name: snippet.name().to_string(),
+                })
+            })
+            .filter(|entry| {
+                self.tags.drill_filter.is_empty()
+                    || entry
+                        .name
+                        .to_lowercase()
+                        .contains(&self.tags.drill_filter.to_lowercase())
+            })
+            .collect()
+    }
+
     fn selected_snippet_id(&self) -> Option<SnippetId> {
         self.selected_snippet().map(|snippet| snippet.id().clone())
     }
@@ -546,4 +874,49 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
         let current = self.browse.selection.unwrap_or(0).min(visible.len() - 1);
         self.browse.selection = Some(current);
     }
+
+    fn restore_tags_selection(&mut self) {
+        if self.tags.drill.is_some() {
+            let visible_len = self.visible_tag_snippets().len();
+            if visible_len == 0 {
+                self.tags.drill_selection = None;
+                return;
+            }
+            let current = self.tags.drill_selection.unwrap_or(0).min(visible_len - 1);
+            self.tags.drill_selection = Some(current);
+            return;
+        }
+
+        let visible_len = self.visible_tags().len();
+        if visible_len == 0 {
+            self.tags.list_selection = None;
+            return;
+        }
+        let current = self.tags.list_selection.unwrap_or(0).min(visible_len - 1);
+        self.tags.list_selection = Some(current);
+    }
+}
+
+pub(crate) fn tag_label(key: &TagKey) -> &str {
+    match key {
+        TagKey::Tag(tag) => tag,
+        TagKey::Untagged => "(untagged)",
+    }
+}
+
+fn tag_matches_filter(key: &TagKey, filter: &str) -> bool {
+    match key {
+        TagKey::Tag(tag) => filter.is_empty() || tag.contains(filter),
+        TagKey::Untagged => filter.is_empty() || tag_label(key).contains(filter),
+    }
+}
+
+fn move_selection(selection: &mut Option<usize>, delta: i32, visible_len: usize) {
+    if visible_len == 0 {
+        *selection = None;
+        return;
+    }
+    let current = selection.unwrap_or(0) as i32;
+    let next = (current + delta).clamp(0, visible_len as i32 - 1);
+    *selection = Some(next as usize);
 }
