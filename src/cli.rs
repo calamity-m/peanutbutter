@@ -44,6 +44,18 @@ pub enum Command {
         #[arg(default_value = "C+b")]
         binding: String,
     },
+    /// Garbage collect orphaned frecency events.
+    Gc {
+        /// Report changes without modifying the frecency store.
+        #[arg(long)]
+        dry_run: bool,
+        /// Remove orphaned events that are not reattached.
+        #[arg(long)]
+        purge: bool,
+        /// Use compact output suitable for scripts.
+        #[arg(short, long)]
+        quiet: bool,
+    },
     /// Internal bash completion helper for `edit`.
     #[command(hide = true)]
     CompleteEdit { current: Option<String> },
@@ -511,6 +523,16 @@ mod tests {
                 .command,
             Some(Command::CompleteEdit {
                 current: Some("nested/".to_string())
+            })
+        );
+        assert_eq!(
+            Cli::try_parse_from(["peanutbutter", "gc", "--dry-run", "--purge", "-q"])
+                .unwrap()
+                .command,
+            Some(Command::Gc {
+                dry_run: true,
+                purge: true,
+                quiet: true,
             })
         );
     }

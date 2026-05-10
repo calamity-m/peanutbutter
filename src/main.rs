@@ -70,6 +70,23 @@ fn main() {
             }
         }
         cli::Command::Edit { path } => cli::run_edit_command(&paths, path.as_deref()).map(|_| ()),
+        cli::Command::Gc {
+            dry_run,
+            purge,
+            quiet,
+        } => {
+            let mut stdout = io::stdout();
+            peanutbutter::gc::run(
+                &paths,
+                peanutbutter::gc::GcOptions {
+                    dry_run,
+                    purge,
+                    quiet,
+                },
+                &mut stdout,
+            )
+            .map(|_| ())
+        }
         cli::Command::CompleteEdit { current } => {
             match cli::complete_edit(&paths, current.as_deref().unwrap_or("")) {
                 Ok(candidates) => {
