@@ -564,10 +564,53 @@ fn preview_skin() -> termimad::MadSkin {
 
 fn render_markdown_text(markdown: &str, width: usize) -> Text<'static> {
     let skin = preview_skin();
-    let fmt = termimad::FmtText::from(&skin, markdown, Some(width.max(3)));
+    let markdown = markdown_links_for_terminal(markdown);
+    let fmt = termimad::FmtText::from(&skin, &markdown, Some(width.max(3)));
     let ansi = fmt.to_string();
     ansi.into_text()
         .unwrap_or_else(|_| Text::from(ansi.clone()))
+}
+
+fn markdown_links_for_terminal(markdown: &str) -> String {
+    let mut out = String::with_capacity(markdown.len());
+    let mut rest = markdown;
+
+    while let Some(open) = rest.find('[') {
+        out.push_str(&rest[..open]);
+        let label_start = open + 1;
+        let Some(close_offset) = rest[label_start..].find(']') else {
+            out.push_str(&rest[open..]);
+            return out;
+        };
+        let close = label_start + close_offset;
+        let url_start = close + 2;
+        if !rest[close..].starts_with("](") {
+            out.push_str(&rest[open..=close]);
+            rest = &rest[close + 1..];
+            continue;
+        }
+        let Some(url_end_offset) = rest[url_start..].find(')') else {
+            out.push_str(&rest[open..]);
+            return out;
+        };
+        let url_end = url_start + url_end_offset;
+        let label = &rest[label_start..close];
+        let url = &rest[url_start..url_end];
+        if label.is_empty() || url.is_empty() {
+            out.push_str(&rest[open..=url_end]);
+        } else if label == url {
+            out.push_str(label);
+        } else {
+            out.push_str(label);
+            out.push_str(" (");
+            out.push_str(url);
+            out.push(')');
+        }
+        rest = &rest[url_end + 1..];
+    }
+
+    out.push_str(rest);
+    out
 }
 
 fn picker_preview_text(
@@ -1079,6 +1122,62 @@ mod tests {
                 .iter()
                 .all(|styled| styled.style == theme.fuzzy_highlight)
         );
+    }
+
+    #[test]
+    fn preview_renders_markdown_description() {
+        let theme = crate::config::Theme::default();
+        let mut scorer = FuzzyScorer::new();
+        let preview = render_snippet_preview_text(
+            &snippet(
+                "Demo",
+                "### Setup\n\n- **Install** [Docker](https://example.com)\n- Run `pb`",
+                "echo hi",
+                &[],
+            ),
+            80,
+            &theme,
+            None,
+            &mut scorer,
+        );
+        let rendered = text_plain(&preview);
+
+        assert!(rendered.contains("Setup"));
+        assert!(rendered.contains("Install"));
+        assert!(rendered.contains("Docker"));
+        assert!(!rendered.contains("### Setup"));
+        assert!(!rendered.contains("**Install**"));
+        assert!(!rendered.contains("[Docker](https://example.com)"));
+    }
+
+    #[test]
+    fn preview_preserves_plain_text_description() {
+        let theme = crate::config::Theme::default();
+        let mut scorer = FuzzyScorer::new();
+        let preview = render_snippet_preview_text(
+            &snippet("Demo", "plain text description", "echo hi", &[]),
+            80,
+            &theme,
+            None,
+            &mut scorer,
+        );
+
+        assert!(text_plain(&preview).contains("plain text description"));
+    }
+
+    #[test]
+    fn preview_does_not_render_body_as_markdown() {
+        let theme = crate::config::Theme::default();
+        let mut scorer = FuzzyScorer::new();
+        let preview = render_snippet_preview_text(
+            &snippet("Demo", "**description**", "echo **literal**", &[]),
+            80,
+            &theme,
+            None,
+            &mut scorer,
+        );
+
+        assert!(text_plain(&preview).contains("echo **literal**"));
     }
 
     #[test]
