@@ -199,6 +199,9 @@ If a suggestion command fails or times out, peanutbutter shows the error but
 still lets the user type a value manually. `pb lint` also executes suggestion
 commands to verify them, using the configured timeout; when command execution is
 disabled, lint reports skipped command-backed variables as warnings instead.
+Specific lint findings can be suppressed in config with `[lint.<code>]` tables;
+for example, `[lint.suggestion-command-failed] ignore_command = "*rg*"` ignores
+expected `rg` failures for that lint.
 
 #### Timeouts and opt-out
 

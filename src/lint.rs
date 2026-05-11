@@ -1,6 +1,6 @@
 //! Read-only snippet linting.
 
-use crate::config::{AppConfig, Paths, SuggestionCommandsConfig, VariableInputConfig};
+use crate::config::{AppConfig, LintConfig, Paths, SuggestionCommandsConfig, VariableInputConfig};
 use crate::domain::{SnippetFile, SnippetId, VariableSource, VariableSpec};
 use crate::{discovery, parser};
 use serde::Serialize;
@@ -75,6 +75,10 @@ pub struct LintFinding {
     /// Optional longer context.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
+    #[serde(skip)]
+    suppress_path: Option<String>,
+    #[serde(skip)]
+    suppress_command: Option<String>,
 }
 
 /// Result of a lint run.
@@ -163,6 +167,8 @@ pub fn run<W: Write>(
     let index =
         crate::index::SnippetIndex::from_files(files.iter().map(|file| file.parsed.clone()));
     findings.extend(lint_gc(&config.paths, &index)?);
+    attach_suppress_paths(&mut findings, &files);
+    findings.retain(|finding| !is_suppressed(finding, &config.lint));
     sort_findings(&mut findings);
     let result = LintResult { findings };
     if options.json {
@@ -496,15 +502,18 @@ fn lint_suggestion_commands(
                     } else {
                         CODE_SUGGESTION_COMMAND_FAILED
                     };
-                    out.push(finding(
-                        LintSeverity::Error,
-                        code,
-                        file.path.clone(),
-                        None,
-                        Some(snippet.id.clone()),
-                        format!("suggestion command for variable '{name}' failed"),
-                        Some(msg),
-                    ));
+                    out.push(
+                        finding(
+                            LintSeverity::Error,
+                            code,
+                            file.path.clone(),
+                            None,
+                            Some(snippet.id.clone()),
+                            format!("suggestion command for variable '{name}' failed"),
+                            Some(msg),
+                        )
+                        .with_suppress_command(command.clone()),
+                    );
                 }
             }
         }
@@ -552,21 +561,24 @@ fn lint_static_inline_commands(file: &FileContext) -> Vec<LintFinding> {
                 continue;
             };
             if looks_static_command(command) {
-                out.push(finding(
-                    LintSeverity::Warning,
-                    CODE_STATIC_INLINE_COMMAND,
-                    file.path.clone(),
-                    None,
-                    Some(snippet.id.clone()),
-                    format!(
-                        "inline command for variable '{}' looks like a static suggestion list",
-                        variable.name
-                    ),
-                    Some(
-                        "prefer frontmatter variables.<name>.suggestions for static lists"
-                            .to_string(),
-                    ),
-                ));
+                out.push(
+                    finding(
+                        LintSeverity::Warning,
+                        CODE_STATIC_INLINE_COMMAND,
+                        file.path.clone(),
+                        None,
+                        Some(snippet.id.clone()),
+                        format!(
+                            "inline command for variable '{}' looks like a static suggestion list",
+                            variable.name
+                        ),
+                        Some(
+                            "prefer frontmatter variables.<name>.suggestions for static lists"
+                                .to_string(),
+                        ),
+                    )
+                    .with_suppress_command(command.clone()),
+                );
             }
         }
     }
@@ -721,6 +733,67 @@ fn finding(
         snippet_id: snippet_id.map(|id| id.to_string()),
         message,
         detail,
+        suppress_path: None,
+        suppress_command: None,
+    }
+}
+
+fn attach_suppress_paths(findings: &mut [LintFinding], files: &[FileContext]) {
+    for finding in findings {
+        if finding.suppress_path.is_some() {
+            continue;
+        }
+        if let Some(file) = files.iter().find(|file| file.path == finding.path) {
+            finding.suppress_path = Some(
+                file.parsed
+                    .relative_path
+                    .to_string_lossy()
+                    .replace('\\', "/"),
+            );
+        }
+    }
+}
+
+impl LintFinding {
+    fn with_suppress_command(mut self, command: String) -> Self {
+        self.suppress_command = Some(command);
+        self
+    }
+}
+
+fn is_suppressed(finding: &LintFinding, config: &LintConfig) -> bool {
+    let key = finding.code.strip_prefix("lint/").unwrap_or(finding.code);
+    let Some(rule) = config.get(key) else {
+        return false;
+    };
+    rule.disable
+        || finding.suppress_path.as_deref().is_some_and(|path| {
+            rule.ignore_file
+                .iter()
+                .any(|pattern| glob_matches(pattern, path))
+        })
+        || finding.suppress_command.as_deref().is_some_and(|command| {
+            rule.ignore_command
+                .iter()
+                .any(|pattern| glob_matches(pattern, command))
+        })
+}
+
+fn glob_matches(pattern: &str, value: &str) -> bool {
+    glob_matches_bytes(pattern.as_bytes(), value.as_bytes())
+}
+
+fn glob_matches_bytes(pattern: &[u8], value: &[u8]) -> bool {
+    match (pattern, value) {
+        ([], []) => true,
+        ([], _) => false,
+        ([b'*', rest @ ..], _) => {
+            glob_matches_bytes(rest, value)
+                || (!value.is_empty() && glob_matches_bytes(pattern, &value[1..]))
+        }
+        ([b'?', rest @ ..], [_, value_rest @ ..]) => glob_matches_bytes(rest, value_rest),
+        ([p, rest @ ..], [v, value_rest @ ..]) if p == v => glob_matches_bytes(rest, value_rest),
+        _ => false,
     }
 }
 
@@ -802,7 +875,9 @@ fn suggestion_source(spec: &VariableSpec) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{FrecencyConfig, FuzzyWeights, SearchConfig, Theme, UiConfig};
+    use crate::config::{
+        FrecencyConfig, FuzzyWeights, LintRuleConfig, SearchConfig, Theme, UiConfig,
+    };
     use std::sync::atomic::{AtomicU64, Ordering};
 
     fn temp_dir(prefix: &str) -> PathBuf {
@@ -832,6 +907,7 @@ mod tests {
             },
             variables: BTreeMap::new(),
             theme: Theme::default(),
+            lint: BTreeMap::new(),
             suggestion_commands: SuggestionCommandsConfig {
                 timeout_ms: 50,
                 allow_commands: true,
@@ -951,6 +1027,108 @@ mod tests {
         assert!(!result.findings.iter().any(|finding| {
             finding.code == CODE_UNUSED_VARIABLE && finding.message.contains("'used'")
         }));
+    }
+
+    #[test]
+    fn lint_config_can_disable_lint() {
+        let root = temp_dir("disable");
+        fs::write(
+            root.join("snippets.md"),
+            "## Demo\n\n```bash\necho <@name>\n```\n",
+        )
+        .unwrap();
+        let mut cfg = config(root);
+        cfg.lint.insert(
+            "undeclared-variable".to_string(),
+            LintRuleConfig {
+                disable: true,
+                ..LintRuleConfig::default()
+            },
+        );
+        let mut out = Vec::new();
+        let result = run(
+            &cfg,
+            LintOptions {
+                strict: true,
+                json: false,
+            },
+            &mut out,
+        )
+        .unwrap();
+        assert!(
+            !result
+                .findings
+                .iter()
+                .any(|finding| finding.code == CODE_UNDECLARED_VARIABLE)
+        );
+    }
+
+    #[test]
+    fn lint_config_can_ignore_relative_file_glob() {
+        let root = temp_dir("ignore-file");
+        fs::write(
+            root.join("test-snippets.md"),
+            "## Demo\n\n```bash\necho <@name>\n```\n",
+        )
+        .unwrap();
+        let mut cfg = config(root);
+        cfg.lint.insert(
+            "undeclared-variable".to_string(),
+            LintRuleConfig {
+                ignore_file: vec!["test*".to_string()],
+                ..LintRuleConfig::default()
+            },
+        );
+        let mut out = Vec::new();
+        let result = run(
+            &cfg,
+            LintOptions {
+                strict: true,
+                json: false,
+            },
+            &mut out,
+        )
+        .unwrap();
+        assert!(
+            !result
+                .findings
+                .iter()
+                .any(|finding| finding.code == CODE_UNDECLARED_VARIABLE)
+        );
+    }
+
+    #[test]
+    fn lint_config_can_ignore_command_glob() {
+        let root = temp_dir("ignore-command");
+        fs::write(
+            root.join("snippets.md"),
+            "## Demo\n\n```bash\necho <@file:rg --files '*.nope'>\n```\n",
+        )
+        .unwrap();
+        let mut cfg = config(root);
+        cfg.lint.insert(
+            "suggestion-command-failed".to_string(),
+            LintRuleConfig {
+                ignore_command: vec!["*rg*".to_string()],
+                ..LintRuleConfig::default()
+            },
+        );
+        let mut out = Vec::new();
+        let result = run(
+            &cfg,
+            LintOptions {
+                strict: false,
+                json: false,
+            },
+            &mut out,
+        )
+        .unwrap();
+        assert!(
+            !result
+                .findings
+                .iter()
+                .any(|finding| finding.code == CODE_SUGGESTION_COMMAND_FAILED)
+        );
     }
 
     #[test]

@@ -160,6 +160,8 @@ This deliverable updates user-facing docs so snippet authors understand how to r
 
 ## Issues
 
+- **2026-05-11 — agent:pi** — Added post-testing lint suppression scope: `[lint.<code>]` config supports `disable`, relative-path `ignore_file` globs, and command-text `ignore_command` globs.
+
 - **2026-05-11 — agent:pi** — Adjusted variable linting after design review: undeclared variables are now strict warnings only, and normal lint reports unused frontmatter/config variable definitions.
 
 - **2026-05-11 — agent:pi** — Implemented `pb lint` end-to-end: CLI flags/output model, normal and strict checks, GC dry-run orphan collection, docs, and verification with `cargo fmt --check`, `cargo test`, and `cargo clippy -- -D warnings -A dead_code`.
