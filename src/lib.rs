@@ -14,6 +14,7 @@
 //! | [`discovery`] | Recursive `.md` file finder |
 //! | [`index`] | In-memory snippet index |
 //! | [`frecency`] | Usage history and recency/location scoring |
+//! | [`lint`] | Read-only snippet authoring checks |
 //! | [`gc`] | Frecency garbage collection |
 //! | [`fuzzy`] | nucleo-backed fuzzy matching |
 //! | [`search`] | Combined fuzzy + frecency ranking |
@@ -34,6 +35,7 @@ pub mod frecency;
 pub mod fuzzy;
 pub mod gc;
 pub mod index;
+pub mod lint;
 pub mod parser;
 pub mod search;
 

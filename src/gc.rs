@@ -18,6 +18,17 @@ pub struct GcOptions {
     pub quiet: bool,
 }
 
+/// One orphaned frecency id discovered without mutating the store.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GcOrphan {
+    /// Orphaned snippet id from the frecency store.
+    pub id: SnippetId,
+    /// Number of events using this orphaned id.
+    pub events: usize,
+    /// Best current snippet id that GC would offer for reattachment, if any.
+    pub candidate_id: Option<SnippetId>,
+}
+
 /// Summary of a garbage-collection run over the frecency store.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GcResult {
@@ -52,13 +63,7 @@ pub fn run_with<R: BufRead, W: Write>(
 ) -> io::Result<GcResult> {
     let index = crate::index::load_from_roots(&paths.snippet_roots)?;
     let mut store = FrecencyStore::load(&paths.state_file)?;
-    let known_ids: HashSet<_> = index.iter().map(|entry| entry.id().clone()).collect();
-    let mut orphan_counts: BTreeMap<SnippetId, usize> = BTreeMap::new();
-    for event in store.events() {
-        if !known_ids.contains(&event.id) {
-            *orphan_counts.entry(event.id.clone()).or_default() += 1;
-        }
-    }
+    let orphan_counts = orphan_counts(&index, &store);
 
     let orphan_events = orphan_counts.values().sum();
     print_header(
@@ -145,6 +150,41 @@ pub fn run_with<R: BufRead, W: Write>(
         backup_path,
         saved,
     })
+}
+
+/// Collect orphaned frecency ids and likely reattachment candidates without
+/// prompting, purging, saving, or writing formatted output.
+pub fn collect_orphans(paths: &Paths) -> io::Result<Vec<GcOrphan>> {
+    let index = crate::index::load_from_roots(&paths.snippet_roots)?;
+    collect_orphans_with_index(paths, &index)
+}
+
+/// Collect orphaned frecency ids using an already-loaded snippet index.
+pub fn collect_orphans_with_index(
+    paths: &Paths,
+    index: &SnippetIndex,
+) -> io::Result<Vec<GcOrphan>> {
+    let store = FrecencyStore::load(&paths.state_file)?;
+    let orphan_counts = orphan_counts(index, &store);
+    Ok(orphan_counts
+        .into_iter()
+        .map(|(id, events)| GcOrphan {
+            candidate_id: best_candidate(&id, index).map(|candidate| candidate.id().clone()),
+            id,
+            events,
+        })
+        .collect())
+}
+
+fn orphan_counts(index: &SnippetIndex, store: &FrecencyStore) -> BTreeMap<SnippetId, usize> {
+    let known_ids: HashSet<_> = index.iter().map(|entry| entry.id().clone()).collect();
+    let mut orphan_counts: BTreeMap<SnippetId, usize> = BTreeMap::new();
+    for event in store.events() {
+        if !known_ids.contains(&event.id) {
+            *orphan_counts.entry(event.id.clone()).or_default() += 1;
+        }
+    }
+    orphan_counts
 }
 
 fn handle_purge<R: BufRead, W: Write>(

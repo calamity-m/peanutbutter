@@ -44,6 +44,15 @@ pub enum Command {
         #[arg(default_value = "C+b")]
         binding: String,
     },
+    /// Check snippet files for authoring problems.
+    Lint {
+        /// Include stricter style and structure checks.
+        #[arg(long)]
+        strict: bool,
+        /// Emit JSON for scripts instead of human-readable text.
+        #[arg(long)]
+        json: bool,
+    },
     /// Garbage collect orphaned frecency events.
     Gc {
         /// Report changes without modifying the frecency store.
@@ -533,6 +542,15 @@ mod tests {
                 dry_run: true,
                 purge: true,
                 quiet: true,
+            })
+        );
+        assert_eq!(
+            Cli::try_parse_from(["peanutbutter", "lint", "--strict", "--json"])
+                .unwrap()
+                .command,
+            Some(Command::Lint {
+                strict: true,
+                json: true,
             })
         );
     }
