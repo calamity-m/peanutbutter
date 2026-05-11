@@ -1,6 +1,7 @@
 use crate::BINARY_NAME;
 use crate::config::FrecencyConfig;
 use crate::domain::SnippetId;
+use std::collections::HashSet;
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Component, Path, PathBuf};
@@ -79,6 +80,48 @@ impl FrecencyStore {
             writeln!(f, "{}\t{}\t{}", e.timestamp, e.id, e.cwd.display())?;
         }
         Ok(())
+    }
+
+    /// Copy the current persisted store to a timestamped sibling backup file.
+    ///
+    /// Returns `Ok(None)` when the state file does not exist yet.
+    pub fn backup(path: &Path, timestamp: u64) -> io::Result<Option<PathBuf>> {
+        if !path.exists() {
+            return Ok(None);
+        }
+        let backup_path = path.with_file_name(format!(
+            "{}.bak.{timestamp}",
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("frecency-state")
+        ));
+        fs::copy(path, &backup_path)?;
+        Ok(Some(backup_path))
+    }
+
+    /// Rewrite all events for `from` so they point at `to` instead.
+    /// Returns the number of events changed.
+    pub fn reattach(&mut self, from: &SnippetId, to: &SnippetId) -> usize {
+        let mut changed = 0;
+        for event in &mut self.events {
+            if &event.id == from {
+                event.id = to.clone();
+                changed += 1;
+            }
+        }
+        changed
+    }
+
+    /// Remove all events whose ids are included in `ids`.
+    /// Returns the number of events removed.
+    pub fn purge_ids<'a, I>(&mut self, ids: I) -> usize
+    where
+        I: IntoIterator<Item = &'a SnippetId>,
+    {
+        let ids: HashSet<SnippetId> = ids.into_iter().cloned().collect();
+        let before = self.events.len();
+        self.events.retain(|event| !ids.contains(&event.id));
+        before - self.events.len()
     }
 
     pub fn record(&mut self, id: SnippetId, cwd: PathBuf, timestamp: u64) {
