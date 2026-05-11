@@ -10,7 +10,12 @@ fn main() {
         Ok(config) => config,
         Err(err) => {
             eprintln!("{BINARY_NAME}: {err}");
-            std::process::exit(1);
+            let code = if std::env::args().any(|arg| arg == "lint") {
+                2
+            } else {
+                1
+            };
+            std::process::exit(code);
         }
     };
     let paths = app_config.paths.clone();
@@ -70,6 +75,26 @@ fn main() {
             }
         }
         cli::Command::Edit { path } => cli::run_edit_command(&paths, path.as_deref()).map(|_| ()),
+        cli::Command::Lint { strict, json } => {
+            let mut stdout = io::stdout();
+            match peanutbutter::lint::run(
+                &app_config,
+                peanutbutter::lint::LintOptions { strict, json },
+                &mut stdout,
+            ) {
+                Ok(result) => {
+                    let _ = stdout.flush();
+                    if result.has_findings() {
+                        std::process::exit(1);
+                    }
+                    Ok(())
+                }
+                Err(err) => {
+                    eprintln!("{BINARY_NAME}: {err}");
+                    std::process::exit(2);
+                }
+            }
+        }
         cli::Command::Gc {
             dry_run,
             purge,

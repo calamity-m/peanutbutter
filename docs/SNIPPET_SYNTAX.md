@@ -58,8 +58,11 @@ These specs apply only to snippets in the same markdown file. They do not
 apply to other files.
 
 Malformed or unsupported frontmatter variable specs are ignored during normal
-execution. A future `pb check` command is expected to validate them more
-strictly.
+execution. Run `pb lint` to validate supported frontmatter syntax and variable
+expectations before opening the picker. Normal lint warns about variable specs
+that no snippet references. `pb lint --strict` additionally warns about style
+issues such as undeclared manual placeholders and confusing file-local variable
+overrides.
 
 ## Snippets
 
@@ -148,7 +151,9 @@ grep <@pattern> <@file>
 ```
 
 Prompts the user for a value. No inline default or inline suggestion command is
-attached to the placeholder.
+attached to the placeholder. This is valid for values that need human context;
+normal `pb lint` does not require every free-form placeholder to have a matching
+frontmatter or config definition.
 
 Example:
 
@@ -191,7 +196,12 @@ the current working directory. Output is split into suggestions by real
 newlines and literal `\n` sequences. Blank suggestions are ignored.
 
 If a suggestion command fails or times out, peanutbutter shows the error but
-still lets the user type a value manually.
+still lets the user type a value manually. `pb lint` also executes suggestion
+commands to verify them, using the configured timeout; when command execution is
+disabled, lint reports skipped command-backed variables as warnings instead.
+Specific lint findings can be suppressed in config with `[lint.<code>]` tables;
+for example, `[lint.suggestion-command-failed] ignore_command = "*rg*"` ignores
+expected `rg` failures for that lint.
 
 #### Timeouts and opt-out
 

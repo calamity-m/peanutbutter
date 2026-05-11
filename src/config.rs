@@ -37,6 +37,25 @@ pub struct AppConfig {
     pub theme: Theme,
     /// Controls how suggestion commands are executed.
     pub suggestion_commands: SuggestionCommandsConfig,
+    /// Per-lint suppression and disable rules.
+    pub lint: LintConfig,
+}
+
+/// Per-lint suppression rules keyed by lint code without the `lint/` prefix.
+pub type LintConfig = BTreeMap<String, LintRuleConfig>;
+
+/// Suppression options for a single lint code.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct LintRuleConfig {
+    /// Disable this lint entirely.
+    pub disable: bool,
+    /// Glob patterns matched against snippet paths relative to their root.
+    #[serde(deserialize_with = "string_or_vec")]
+    pub ignore_file: Vec<String>,
+    /// Glob patterns matched against suggestion command text for command lints.
+    #[serde(deserialize_with = "string_or_vec")]
+    pub ignore_command: Vec<String>,
 }
 
 /// Controls how suggestion commands (`<@name:cmd>` and `command =` entries) are
@@ -295,6 +314,7 @@ pub fn load() -> io::Result<AppConfig> {
         },
         variables: file.variables,
         theme: Theme::from_raw(file.theme)?,
+        lint: file.lint,
     })
 }
 
@@ -322,6 +342,8 @@ struct FileConfig {
     theme: ThemeFileConfig,
     #[serde(default)]
     suggestion_commands: SuggestionCommandsFileConfig,
+    #[serde(default)]
+    lint: LintConfig,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -377,6 +399,24 @@ struct ThemeFileConfig {
     prompt_active_fg: Option<String>,
     prompt_active_bg: Option<String>,
     error_fg: Option<String>,
+}
+
+fn string_or_vec<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum StringOrVec {
+        String(String),
+        Vec(Vec<String>),
+    }
+
+    Ok(match Option::<StringOrVec>::deserialize(deserializer)? {
+        Some(StringOrVec::String(value)) => vec![value],
+        Some(StringOrVec::Vec(values)) => values,
+        None => Vec::new(),
+    })
 }
 
 fn load_file_config(path: &PathBuf) -> io::Result<FileConfig> {
@@ -558,6 +598,21 @@ command = "find . -type f"
         assert_eq!(variable.default, None);
         assert!(variable.suggestions.is_empty());
         assert_eq!(variable.command.as_deref(), Some("find . -type f"));
+    }
+
+    #[test]
+    fn lint_rule_config_deserializes_string_and_list_patterns() {
+        let raw = r#"
+[lint.suggestion-command-failed]
+ignore_command = "*rg*"
+ignore_file = ["test*", "fixtures/*"]
+disable = true
+"#;
+        let parsed: FileConfig = toml::from_str(raw).unwrap();
+        let rule = parsed.lint.get("suggestion-command-failed").unwrap();
+        assert!(rule.disable);
+        assert_eq!(rule.ignore_command, vec!["*rg*"]);
+        assert_eq!(rule.ignore_file, vec!["test*", "fixtures/*"]);
     }
 
     #[test]

@@ -557,11 +557,7 @@ fn read_dir_entries(cwd: &Path, want_files: bool) -> io::Result<Vec<String>> {
 ///
 /// `timeout_ms` caps how long the command may run; processes that exceed it
 /// are killed and an error is returned so the caller can fall back gracefully.
-pub(crate) fn command_suggestions(
-    command: &str,
-    cwd: &Path,
-    timeout_ms: u64,
-) -> io::Result<Vec<String>> {
+pub fn command_suggestions(command: &str, cwd: &Path, timeout_ms: u64) -> io::Result<Vec<String>> {
     use std::io::Read;
     use std::process::Stdio;
     use std::sync::mpsc;

@@ -129,6 +129,14 @@ Notes:
 - Suggestion commands (both inline `<@name:cmd>` and `[variables.name] command = "..."`) run under non-login, non-interactive `bash -c`. They inherit `$PATH` from peanutbutter's parent process but do **not** source `~/.bash_profile` or `~/.bashrc`, so they can't use shell aliases or functions defined there. This is deliberate: a login shell's startup output (e.g. `Agent pid NNNN` from ssh-agent) would otherwise leak into the suggestion list, and any interactive prompt it triggers (e.g. an ssh-add passphrase) would hang the TUI.
 - `suggestion_commands.timeout_ms` caps how long any suggestion command may run (default `2000` ms); commands that exceed it are killed and the variable falls back to manual input
 - `suggestion_commands.allow_commands` set to `false` disables all suggestion command execution globally — variables fall back to static suggestions or manual input (useful when importing untrusted snippet collections)
+- `lint.<code>` config can disable or suppress specific lint findings. Use the lint code without the `lint/` prefix, e.g. `[lint.suggestion-command-failed]`. `disable = true` drops that lint entirely, `ignore_file` matches snippet paths relative to their snippet root, and `ignore_command` matches command text for command-backed lint findings. `ignore_file` and `ignore_command` accept either one glob string or a list of glob strings.
+
+```toml
+[lint.suggestion-command-failed]
+ignore_command = "*rg*"
+ignore_file = ["test*", "fixtures/*"]
+disable = false
+```
 
 ## Peanutbutter CLI
 
@@ -136,6 +144,34 @@ Notes:
 2. `peanutbutter zsh [C+b]` — emit zsh integration script (eval it in `~/.zshrc`)
 3. `peanutbutter fish [C+b]` — emit fish integration script (source it in `config.fish`)
 4. `peanutbutter edit ...` — edit a snippet file in `$EDITOR`/`$VISUAL`
-5. `peanutbutter execute` — run the inline TUI; output can be piped, e.g. `peanutbutter execute | grep foo`
+5. `peanutbutter lint [--strict] [--json]` — check configured snippet roots for authoring problems
+6. `peanutbutter execute` — run the inline TUI; output can be piped, e.g. `peanutbutter execute | grep foo`
 
 All three shell integrations install a `pb` alias and wire up `pb edit <TAB>` completion.
+
+`pb lint` is read-only. It reports broken frontmatter, unused frontmatter/config variables, duplicate snippet slugs, suggestion-command failures, dry-run frecency GC orphans, and obvious static inline suggestion commands. Bare manual placeholders like `<@value>` are valid in normal mode. `--strict` adds style/structure checks such as undeclared manual placeholders, unbalanced fences, missing code-fence language tags, and confusing file-local variable overrides. Pretty output is written to stdout by default; `--json` writes a parseable object with stable `findings[].code` fields. Exit codes are `0` for no findings, `1` for lint findings, and `2` for operational failures that prevent lint from running.
+
+Important caveat: lint executes suggestion commands to verify them, using the same non-login `bash -c` behavior and configured timeout as runtime. If `suggestion_commands.allow_commands = false`, lint skips those commands and reports warning findings instead. Frecency GC checks are dry-run only and never reattach, purge, save, or write backups.
+
+Pretty output example:
+
+```text
+/path/to/snippets.md
+  warning:3 lint/unused-variable: frontmatter variable 'env' is not referenced by any snippet in this file
+```
+
+JSON output example:
+
+```json
+{
+  "findings": [
+    {
+      "severity": "warning",
+      "code": "lint/unused-variable",
+      "path": "/path/to/snippets.md",
+      "line": 3,
+      "message": "frontmatter variable 'env' is not referenced by any snippet in this file"
+    }
+  ]
+}
+```

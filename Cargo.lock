@@ -1029,6 +1029,7 @@ dependencies = [
  "nucleo-matcher",
  "ratatui",
  "serde",
+ "serde_json",
  "termimad",
  "toml",
 ]
