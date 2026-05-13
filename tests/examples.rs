@@ -1,8 +1,34 @@
+use peanutbutter::config::Paths;
 use peanutbutter::discovery::discover_markdown_files;
+use peanutbutter::frecency::FrecencyStore;
 use peanutbutter::parser::parse_file;
+use peanutbutter::stats::{Sort, StatsOptions};
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+fn temp_dir_stats(prefix: &str) -> PathBuf {
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    let path = std::env::temp_dir().join(format!(
+        "pb-examples-stats-{prefix}-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    let _ = fs::remove_dir_all(&path);
+    fs::create_dir_all(&path).unwrap();
+    path
+}
+
+fn stats_test_paths(root: &std::path::Path) -> Paths {
+    Paths {
+        snippet_roots: vec![root.to_path_buf()],
+        state_file: root.join("state.tsv"),
+        config_file: root.join("config.toml"),
+    }
+}
+
+const STATS_NOW: u64 = 1_715_600_000;
 
 fn examples_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples")
@@ -198,6 +224,128 @@ fn every_example_file_produces_at_least_one_snippet() {
     for (path, names) in &by_file {
         assert!(!names.is_empty(), "expected at least one snippet in {path}");
     }
+}
+
+#[test]
+fn stats_missing_state_file_prints_no_history_note() {
+    let root = temp_dir_stats("no-state");
+    fs::write(root.join("snip.md"), "## Echo\n\n```\necho\n```\n").unwrap();
+    let paths = stats_test_paths(&root);
+    // state file does not exist
+
+    let mut out = Vec::new();
+    peanutbutter::stats::run_with(
+        &paths,
+        StatsOptions {
+            top_n: 10,
+            sort: Sort::Stale,
+            json: false,
+        },
+        STATS_NOW,
+        false,
+        &mut out,
+    )
+    .unwrap();
+    let s = String::from_utf8(out).unwrap();
+    assert!(s.contains("No frecency history yet"), "got: {s}");
+}
+
+#[test]
+fn stats_empty_state_file_shows_report() {
+    let root = temp_dir_stats("empty-state");
+    fs::write(root.join("snip.md"), "## Echo\n\n```\necho\n```\n").unwrap();
+    let paths = stats_test_paths(&root);
+    fs::write(&paths.state_file, "").unwrap();
+
+    let mut out = Vec::new();
+    peanutbutter::stats::run_with(
+        &paths,
+        StatsOptions {
+            top_n: 10,
+            sort: Sort::Stale,
+            json: false,
+        },
+        STATS_NOW,
+        false,
+        &mut out,
+    )
+    .unwrap();
+    let s = String::from_utf8(out).unwrap();
+    assert!(!s.contains("No frecency history yet"), "got: {s}");
+    assert!(s.contains("Never Used") || s.contains("Echo"), "got: {s}");
+}
+
+#[test]
+fn stats_with_events_shows_most_used() {
+    let root = temp_dir_stats("with-events");
+    // slugify("Echo") = "echo"
+    fs::write(root.join("snip.md"), "## Echo\n\n```\necho\n```\n").unwrap();
+    let paths = stats_test_paths(&root);
+    let mut store = FrecencyStore::new();
+    for i in 0..5u64 {
+        store.record(
+            peanutbutter::domain::SnippetId::new("snip.md", "echo"),
+            std::path::PathBuf::from("/repo"),
+            STATS_NOW - i * 3600,
+        );
+    }
+    store.save(&paths.state_file).unwrap();
+
+    let mut out = Vec::new();
+    peanutbutter::stats::run_with(
+        &paths,
+        StatsOptions {
+            top_n: 10,
+            sort: Sort::Stale,
+            json: false,
+        },
+        STATS_NOW,
+        false,
+        &mut out,
+    )
+    .unwrap();
+    let s = String::from_utf8(out).unwrap();
+    assert!(s.contains("Most Used"), "got: {s}");
+    assert!(s.contains("Echo"), "got: {s}");
+}
+
+#[test]
+fn stats_json_produces_valid_json_with_all_keys() {
+    let root = temp_dir_stats("json");
+    fs::write(root.join("a.md"), "## A\n\n```\necho a\n```\n").unwrap();
+    fs::write(root.join("b.md"), "## B\n\n```\necho b\n```\n").unwrap();
+    let paths = stats_test_paths(&root);
+    let mut store = FrecencyStore::new();
+    store.record(
+        peanutbutter::domain::SnippetId::new("a.md", "a"),
+        std::path::PathBuf::from("/repo"),
+        STATS_NOW,
+    );
+    store.save(&paths.state_file).unwrap();
+
+    let mut out = Vec::new();
+    peanutbutter::stats::run_with(
+        &paths,
+        StatsOptions {
+            top_n: 10,
+            sort: Sort::Stale,
+            json: true,
+        },
+        STATS_NOW,
+        false,
+        &mut out,
+    )
+    .unwrap();
+    let s = String::from_utf8(out).unwrap();
+    let v: serde_json::Value = serde_json::from_str(s.trim()).expect("valid JSON");
+    assert!(v["most_used"].is_array());
+    assert!(v["least_used"].is_array());
+    assert!(v["never_used"].is_array());
+    assert!(v["recency"].is_object());
+    assert!(v["directory_affinity"].is_array());
+    assert!(v["orphaned_event_count"].is_number());
+    // b.md#b is never-used
+    assert!(!v["never_used"].as_array().unwrap().is_empty());
 }
 
 #[test]

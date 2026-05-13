@@ -3,6 +3,7 @@ use crate::editor::{self, EditorTarget};
 use crate::execute::{self, ExecuteOptions, ExecutionOutcome};
 use crate::frecency::FrecencyStore;
 use crate::index::SnippetIndex;
+use crate::stats;
 use crate::{BASH_ALIAS_NAME, BINARY_NAME};
 use clap::{Parser, Subcommand};
 use std::env;
@@ -64,6 +65,18 @@ pub enum Command {
         /// Use compact output suitable for scripts.
         #[arg(short, long)]
         quiet: bool,
+    },
+    /// Show usage statistics from frecency history.
+    Stats {
+        /// How many snippets to show in the most-used and least-used lists.
+        #[arg(long, default_value_t = 10)]
+        top: usize,
+        /// Sort order for the least-used list.
+        #[arg(long, value_enum, default_value_t = stats::Sort::Stale)]
+        sort: stats::Sort,
+        /// Emit JSON instead of human-readable text.
+        #[arg(long)]
+        json: bool,
     },
     /// Internal bash completion helper for `edit`.
     #[command(hide = true)]
