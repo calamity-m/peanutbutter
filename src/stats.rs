@@ -125,7 +125,7 @@ pub fn run_with<W: Write>(
     if options.json {
         write_json(writer, &report)
     } else {
-        write_human(writer, &report, color, now)
+        write_human(writer, &report, options.sort, color, now)
     }
 }
 
@@ -331,7 +331,7 @@ fn box_bottom() -> String {
 
 /// Wrap content in `│  ...  │` padded to BOX_WIDTH.
 fn box_row(content: &str) -> String {
-    let inner = BOX_WIDTH - 4; // 2 for "│ " and 2 for " │"
+    let inner = BOX_WIDTH - 6; // "│  " + content + "  │" = 3 + content + 3
     let truncated: String = content.chars().take(inner).collect();
     let pad = inner.saturating_sub(truncated.chars().count());
     format!("│  {}{}  │", truncated, " ".repeat(pad))
@@ -340,14 +340,19 @@ fn box_row(content: &str) -> String {
 fn write_human<W: Write>(
     writer: &mut W,
     report: &StatsReport,
+    sort: Sort,
     color: bool,
     now: u64,
 ) -> io::Result<()> {
+    let least_used_title = match sort {
+        Sort::Stale => "Least Used (stale)",
+        Sort::Count => "Least Used (fewest)",
+    };
     // Most Used
     write_ranked_section(writer, "Most Used", &report.most_used, color, now)?;
 
     // Least Used
-    write_ranked_section(writer, "Least Used (stale)", &report.least_used, color, now)?;
+    write_ranked_section(writer, least_used_title, &report.least_used, color, now)?;
 
     // Never Used
     if !report.never_used.is_empty() {
@@ -412,13 +417,7 @@ fn write_ranked_section<W: Write>(
                 badge
             );
             let row = box_row(&content);
-            if color {
-                // We write the row plain then inline styling is hard; just write plain box row
-                // and apply count color only within the formatted string.
-                writeln!(writer, "{row}")?;
-            } else {
-                writeln!(writer, "{row}")?;
-            }
+            writeln!(writer, "{row}")?;
         }
     }
 
