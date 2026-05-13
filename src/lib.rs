@@ -16,6 +16,7 @@
 //! | [`frecency`] | Usage history and recency/location scoring |
 //! | [`lint`] | Read-only snippet authoring checks |
 //! | [`gc`] | Frecency garbage collection |
+//! | [`stats`] | Usage statistics from frecency history |
 //! | [`fuzzy`] | nucleo-backed fuzzy matching |
 //! | [`search`] | Combined fuzzy + frecency ranking |
 //! | [`browse`] | Directory-tree navigation state |
@@ -38,6 +39,7 @@ pub mod index;
 pub mod lint;
 pub mod parser;
 pub mod search;
+pub mod stats;
 
 /// The binary name used in help text and warning messages.
 pub const BINARY_NAME: &str = "peanutbutter";

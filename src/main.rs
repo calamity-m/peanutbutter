@@ -112,6 +112,18 @@ fn main() {
             )
             .map(|_| ())
         }
+        cli::Command::Stats { top, sort, json } => {
+            let mut stdout = io::stdout();
+            peanutbutter::stats::run(
+                &paths,
+                peanutbutter::stats::StatsOptions {
+                    top_n: top,
+                    sort,
+                    json,
+                },
+                &mut stdout,
+            )
+        }
         cli::Command::CompleteEdit { current } => {
             match cli::complete_edit(&paths, current.as_deref().unwrap_or("")) {
                 Ok(candidates) => {
