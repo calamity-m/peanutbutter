@@ -172,7 +172,7 @@ fn compute_report(
             .unwrap_or_else(|| id.to_string());
         let mut cwds: Vec<(PathBuf, usize)> =
             summary.cwds.iter().map(|(p, &c)| (p.clone(), c)).collect();
-        cwds.sort_by(|a, b| b.1.cmp(&a.1));
+        cwds.sort_by_key(|b| std::cmp::Reverse(b.1));
         SnippetStat {
             id: id.clone(),
             name,
@@ -183,13 +183,13 @@ fn compute_report(
     };
 
     let mut most_used: Vec<SnippetStat> = known.iter().map(|(id, s)| build_stat(id, s)).collect();
-    most_used.sort_by(|a, b| b.count.cmp(&a.count));
+    most_used.sort_by_key(|b| std::cmp::Reverse(b.count));
     most_used.truncate(options.top_n);
 
     let mut least_used: Vec<SnippetStat> = known.iter().map(|(id, s)| build_stat(id, s)).collect();
     match options.sort {
-        Sort::Stale => least_used.sort_by(|a, b| a.last_seen.cmp(&b.last_seen)),
-        Sort::Count => least_used.sort_by(|a, b| a.count.cmp(&b.count)),
+        Sort::Stale => least_used.sort_by_key(|a| a.last_seen),
+        Sort::Count => least_used.sort_by_key(|a| a.count),
     }
     least_used.truncate(options.top_n);
 
@@ -208,7 +208,7 @@ fn compute_report(
         .filter(|(_, s)| !s.cwds.is_empty())
         .map(|(id, s)| build_stat(id, s))
         .collect();
-    directory_affinity.sort_by(|a, b| b.count.cmp(&a.count));
+    directory_affinity.sort_by_key(|b| std::cmp::Reverse(b.count));
 
     StatsReport {
         most_used,

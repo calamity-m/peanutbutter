@@ -82,8 +82,8 @@ Do not comment what the code already says plainly.
 **Prefer pre-commit hooks over repeated "do X after changes" reminders.**
 
 This repo uses [`prek`](https://github.com/calam1/prek) (configured in `prek.toml`). Run `prek install` once per checkout to activate hooks. Configured hooks:
-- **pre-commit**: `cargo fmt --check`, `cargo build`, `cargo test`, `cargo clippy -- -D warnings -A dead_code`
-- **pre-push to main**: `cargo clippy -- -D warnings` (dead_code included)
+- **pre-commit**: `cargo fmt --check`, `cargo build`, `cargo test`, `cargo clippy -- -D warnings`
+- **pre-push to main**: `cargo clippy -- -D warnings`
 
 If the user continually asks to run the same check → suggest adding it to `prek.toml` as a pre-commit hook.
 

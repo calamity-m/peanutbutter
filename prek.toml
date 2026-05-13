@@ -35,8 +35,8 @@ stages = ["pre-commit"]
 
 [[repos.hooks]]
 id = "cargo-clippy"
-name = "cargo clippy (dead_code ignored)"
-entry = "cargo clippy -- -D warnings -A dead_code"
+name = "cargo clippy"
+entry = "cargo clippy -- -D warnings"
 language = "system"
 pass_filenames = false
 always_run = true
