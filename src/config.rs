@@ -182,8 +182,8 @@ impl Default for FrecencyConfig {
 pub type VariableInputConfig = crate::domain::VariableSpec;
 
 /// Visual theme: a set of ratatui [`Style`] values covering every distinct UI
-/// role. Build via [`Theme::default`] or [`Theme::from_raw`] (the TOML path).
-#[derive(Debug, Clone)]
+/// role. Build via [`Theme::default`] or one of the named constructors.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Theme {
     /// Muted style for decorative chrome (counters, separators, help text).
     pub chrome: Style,
@@ -233,52 +233,142 @@ impl Default for Theme {
 }
 
 impl Theme {
-    fn from_raw(raw: ThemeFileConfig) -> io::Result<Self> {
-        let mut theme = Theme::default();
-
-        if let Some(color) = raw.muted {
-            let color = parse_color(&color)?;
-            theme.chrome = theme.chrome.fg(color);
-            theme.placeholder = theme.placeholder.fg(color);
-        }
-
-        if let Some(color) = raw.accent {
-            let color = parse_color(&color)?;
-            theme.fuzzy_highlight = theme.fuzzy_highlight.fg(color);
-            theme.selected_marker = theme.selected_marker.fg(color);
-        }
-
-        if let Some(color) = raw.selected_bg {
-            let color = parse_color(&color)?;
-            theme.selected_marker = theme.selected_marker.bg(color);
-            theme.selected_item = theme.selected_item.bg(color);
-            theme.error = theme.error.bg(color);
-        }
-
-        if let Some(color) = raw.selected_fg {
-            theme.selected_item = theme.selected_item.fg(parse_color(&color)?);
-        }
-
-        if let Some(color) = raw.prompt_active_fg {
-            theme.active_prompt = theme.active_prompt.fg(parse_color(&color)?);
-        }
-
-        if let Some(color) = raw.prompt_active_bg {
-            theme.active_prompt = theme.active_prompt.bg(parse_color(&color)?);
-        }
-
-        if let Some(color) = raw.error_fg {
-            theme.error = theme.error.fg(parse_color(&color)?);
-        }
-
-        Ok(theme)
+    /// Return the stable names of themes built into the binary.
+    pub fn built_in_names() -> &'static [&'static str] {
+        &["default", "gruvbox", "catppuccin", "nord", "monochrome"]
     }
+
+    /// Build the named `gruvbox` theme.
+    pub fn gruvbox() -> Self {
+        Self::from_palette(ThemePalette {
+            accent: Color::Rgb(0xd7, 0x99, 0x21),
+            muted: Color::Rgb(0x8e, 0xc0, 0x7c),
+            selected_bg: Color::Rgb(0x3c, 0x38, 0x36),
+            selected_fg: Color::Rgb(0xfb, 0xf1, 0xc7),
+            prompt_fg: Color::Rgb(0x28, 0x28, 0x28),
+            prompt_bg: Color::Rgb(0xfa, 0xbd, 0x2f),
+            error_fg: Color::Rgb(0xfb, 0x49, 0x34),
+        })
+    }
+
+    /// Build the named `catppuccin` theme.
+    pub fn catppuccin() -> Self {
+        Self::from_palette(ThemePalette {
+            accent: Color::Rgb(0xf5, 0xc2, 0xe7),
+            muted: Color::Rgb(0x6c, 0x70, 0x86),
+            selected_bg: Color::Rgb(0x31, 0x34, 0x4a),
+            selected_fg: Color::Rgb(0xcd, 0xd6, 0xf4),
+            prompt_fg: Color::Rgb(0x1e, 0x1e, 0x2e),
+            prompt_bg: Color::Rgb(0x89, 0xb4, 0xfa),
+            error_fg: Color::Rgb(0xf3, 0x8b, 0xa8),
+        })
+    }
+
+    /// Build the named `nord` theme.
+    pub fn nord() -> Self {
+        Self::from_palette(ThemePalette {
+            accent: Color::Rgb(0x88, 0xc0, 0xd0),
+            muted: Color::Rgb(0x81, 0xa1, 0xc1),
+            selected_bg: Color::Rgb(0x3b, 0x42, 0x52),
+            selected_fg: Color::Rgb(0xec, 0xef, 0xf4),
+            prompt_fg: Color::Rgb(0x2e, 0x34, 0x40),
+            prompt_bg: Color::Rgb(0xa3, 0xbe, 0x8c),
+            error_fg: Color::Rgb(0xbf, 0x61, 0x6a),
+        })
+    }
+
+    /// Build the named `monochrome` theme with no foreground colours.
+    pub fn monochrome() -> Self {
+        Self {
+            chrome: Style::default().add_modifier(Modifier::DIM),
+            emphasis: Style::default().add_modifier(Modifier::BOLD),
+            fuzzy_highlight: Style::default().add_modifier(Modifier::BOLD),
+            selected_marker: Style::default().add_modifier(Modifier::REVERSED),
+            selected_item: Style::default().add_modifier(Modifier::BOLD | Modifier::REVERSED),
+            placeholder: Style::default().add_modifier(Modifier::DIM),
+            active_prompt: Style::default().add_modifier(Modifier::BOLD | Modifier::REVERSED),
+            divider: Style::default().add_modifier(Modifier::DIM),
+            border: Style::default().add_modifier(Modifier::DIM),
+            error: Style::default().add_modifier(Modifier::BOLD | Modifier::REVERSED),
+        }
+    }
+
+    fn named(name: &str) -> io::Result<Self> {
+        match name {
+            "default" => Ok(Theme::default()),
+            "gruvbox" => Ok(Theme::gruvbox()),
+            "catppuccin" => Ok(Theme::catppuccin()),
+            "nord" => Ok(Theme::nord()),
+            "monochrome" => Ok(Theme::monochrome()),
+            other => Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "unknown theme {other}; expected one of: {}",
+                    Theme::built_in_names().join(", ")
+                ),
+            )),
+        }
+    }
+
+    fn from_palette(palette: ThemePalette) -> Self {
+        Self {
+            chrome: Style::default()
+                .fg(palette.muted)
+                .add_modifier(Modifier::DIM),
+            emphasis: Style::default().add_modifier(Modifier::BOLD),
+            fuzzy_highlight: Style::default()
+                .fg(palette.accent)
+                .add_modifier(Modifier::BOLD),
+            selected_marker: Style::default().fg(palette.accent).bg(palette.selected_bg),
+            selected_item: Style::default()
+                .fg(palette.selected_fg)
+                .bg(palette.selected_bg)
+                .add_modifier(Modifier::BOLD),
+            placeholder: Style::default()
+                .fg(palette.muted)
+                .add_modifier(Modifier::DIM),
+            active_prompt: Style::default()
+                .fg(palette.prompt_fg)
+                .bg(palette.prompt_bg)
+                .add_modifier(Modifier::BOLD),
+            divider: Style::default().fg(palette.muted),
+            border: Style::default().fg(palette.muted),
+            error: Style::default()
+                .fg(palette.error_fg)
+                .bg(palette.selected_bg),
+        }
+    }
+
+    fn from_raw(raw: &ThemeFileConfig, cli_theme: Option<&str>) -> io::Result<Self> {
+        if let Some(name) = cli_theme {
+            return raw.base_theme(name);
+        }
+
+        let name = raw.name.as_deref().unwrap_or("default");
+        let theme = raw.base_theme(name)?;
+        raw.colors.apply(theme)
+    }
+}
+
+struct ThemePalette {
+    accent: Color,
+    muted: Color,
+    selected_bg: Color,
+    selected_fg: Color,
+    prompt_fg: Color,
+    prompt_bg: Color,
+    error_fg: Color,
 }
 
 /// Load [`AppConfig`] from `$XDG_CONFIG_HOME/peanutbutter/config.toml` (or
 /// `$PB_CONFIG_FILE`). Missing files are silently treated as empty; parse
 /// errors are returned as `InvalidData` errors.
 pub fn load() -> io::Result<AppConfig> {
+    load_with_theme_override(None)
+}
+
+/// Load [`AppConfig`] and use `theme_name` as the theme base when provided.
+pub fn load_with_theme_override(theme_name: Option<&str>) -> io::Result<AppConfig> {
     let config_file = resolve_config_file();
     let file = load_file_config(&config_file)?;
     let paths = Paths {
@@ -313,9 +403,23 @@ pub fn load() -> io::Result<AppConfig> {
             },
         },
         variables: file.variables,
-        theme: Theme::from_raw(file.theme)?,
+        theme: Theme::from_raw(&file.theme, theme_name)?,
         lint: file.lint,
     })
+}
+
+/// Return names that shell completion should offer for the `--theme` flag.
+pub fn theme_completion_names() -> io::Result<Vec<String>> {
+    let config_file = resolve_config_file();
+    let file = load_file_config(&config_file)?;
+    let mut names = Theme::built_in_names()
+        .iter()
+        .map(|name| (*name).to_string())
+        .collect::<Vec<_>>();
+    if file.theme.custom.is_some() {
+        names.push("custom".to_string());
+    }
+    Ok(names)
 }
 
 /// Return the resolved [`Paths`] from the config file, or compute defaults if
@@ -392,13 +496,113 @@ struct FrecencyFileConfig {
 
 #[derive(Debug, Default, Deserialize)]
 struct ThemeFileConfig {
+    name: Option<String>,
+    #[serde(flatten)]
+    colors: ThemeColorConfig,
+    custom: Option<ThemeColorConfig>,
+}
+
+impl ThemeFileConfig {
+    fn base_theme(&self, name: &str) -> io::Result<Theme> {
+        if name == "custom" {
+            let Some(custom) = &self.custom else {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "theme name 'custom' requires a [theme.custom] block",
+                ));
+            };
+            return custom.to_theme();
+        }
+        Theme::named(name)
+    }
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct ThemeColorConfig {
     accent: Option<String>,
     muted: Option<String>,
     selected_bg: Option<String>,
     selected_fg: Option<String>,
     prompt_active_fg: Option<String>,
     prompt_active_bg: Option<String>,
+    prompt_fg: Option<String>,
+    prompt_bg: Option<String>,
     error_fg: Option<String>,
+}
+
+impl ThemeColorConfig {
+    fn apply(&self, mut theme: Theme) -> io::Result<Theme> {
+        if let Some(color) = &self.muted {
+            let color = parse_color(color)?;
+            theme.chrome = theme.chrome.fg(color);
+            theme.placeholder = theme.placeholder.fg(color);
+        }
+
+        if let Some(color) = &self.accent {
+            let color = parse_color(color)?;
+            theme.fuzzy_highlight = theme.fuzzy_highlight.fg(color);
+            theme.selected_marker = theme.selected_marker.fg(color);
+        }
+
+        if let Some(color) = &self.selected_bg {
+            let color = parse_color(color)?;
+            theme.selected_marker = theme.selected_marker.bg(color);
+            theme.selected_item = theme.selected_item.bg(color);
+            theme.error = theme.error.bg(color);
+        }
+
+        if let Some(color) = &self.selected_fg {
+            theme.selected_item = theme.selected_item.fg(parse_color(color)?);
+        }
+
+        if let Some(color) = self.prompt_fg() {
+            theme.active_prompt = theme.active_prompt.fg(parse_color(color)?);
+        }
+
+        if let Some(color) = self.prompt_bg() {
+            theme.active_prompt = theme.active_prompt.bg(parse_color(color)?);
+        }
+
+        if let Some(color) = &self.error_fg {
+            theme.error = theme.error.fg(parse_color(color)?);
+        }
+
+        Ok(theme)
+    }
+
+    fn to_theme(&self) -> io::Result<Theme> {
+        Ok(Theme::from_palette(ThemePalette {
+            accent: self.required_color("accent", &self.accent)?,
+            muted: self.required_color("muted", &self.muted)?,
+            selected_bg: self.required_color("selected_bg", &self.selected_bg)?,
+            selected_fg: self.required_color("selected_fg", &self.selected_fg)?,
+            prompt_fg: self.required_color("prompt_fg", &self.prompt_fg().map(str::to_string))?,
+            prompt_bg: self.required_color("prompt_bg", &self.prompt_bg().map(str::to_string))?,
+            error_fg: self.required_color("error_fg", &self.error_fg)?,
+        }))
+    }
+
+    fn prompt_fg(&self) -> Option<&str> {
+        self.prompt_fg
+            .as_deref()
+            .or(self.prompt_active_fg.as_deref())
+    }
+
+    fn prompt_bg(&self) -> Option<&str> {
+        self.prompt_bg
+            .as_deref()
+            .or(self.prompt_active_bg.as_deref())
+    }
+
+    fn required_color(&self, name: &str, value: &Option<String>) -> io::Result<Color> {
+        let value = value.as_deref().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("custom theme missing required color {name}"),
+            )
+        })?;
+        parse_color(value)
+    }
 }
 
 fn string_or_vec<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
@@ -552,20 +756,78 @@ mod tests {
 
     #[test]
     fn theme_accepts_named_and_hex_colors() {
-        let theme = Theme::from_raw(ThemeFileConfig {
-            accent: Some("#112233".to_string()),
-            muted: Some("dark_gray".to_string()),
-            selected_bg: Some("blue".to_string()),
-            selected_fg: Some("white".to_string()),
-            prompt_active_fg: Some("yellow".to_string()),
-            prompt_active_bg: Some("#445566".to_string()),
-            error_fg: Some("red".to_string()),
-        })
+        let theme = Theme::from_raw(
+            &ThemeFileConfig {
+                colors: ThemeColorConfig {
+                    accent: Some("#112233".to_string()),
+                    muted: Some("dark_gray".to_string()),
+                    selected_bg: Some("blue".to_string()),
+                    selected_fg: Some("white".to_string()),
+                    prompt_active_fg: Some("yellow".to_string()),
+                    prompt_active_bg: Some("#445566".to_string()),
+                    error_fg: Some("red".to_string()),
+                    ..ThemeColorConfig::default()
+                },
+                ..ThemeFileConfig::default()
+            },
+            None,
+        )
         .unwrap();
 
         assert_eq!(theme.selected_marker.fg, Some(Color::Rgb(0x11, 0x22, 0x33)));
         assert_eq!(theme.selected_item.bg, Some(Color::Blue));
         assert_eq!(theme.active_prompt.bg, Some(Color::Rgb(0x44, 0x55, 0x66)));
+    }
+
+    #[test]
+    fn theme_name_selects_builtin_and_cli_skips_overrides() {
+        let raw = ThemeFileConfig {
+            name: Some("gruvbox".to_string()),
+            colors: ThemeColorConfig {
+                accent: Some("red".to_string()),
+                ..ThemeColorConfig::default()
+            },
+            ..ThemeFileConfig::default()
+        };
+
+        let config_theme = Theme::from_raw(&raw, None).unwrap();
+        let cli_theme = Theme::from_raw(&raw, Some("nord")).unwrap();
+
+        assert_eq!(config_theme.selected_marker.fg, Some(Color::Red));
+        assert_eq!(cli_theme, Theme::nord());
+    }
+
+    #[test]
+    fn custom_theme_requires_complete_custom_block() {
+        let raw = r##"
+[theme]
+name = "custom"
+accent = "red"
+
+[theme.custom]
+accent = "#c678dd"
+muted = "#5c6370"
+selected_bg = "#3e4451"
+selected_fg = "#abb2bf"
+prompt_fg = "#282c34"
+prompt_bg = "#61afef"
+error_fg = "#e06c75"
+"##;
+        let parsed: FileConfig = toml::from_str(raw).unwrap();
+        let theme = Theme::from_raw(&parsed.theme, None).unwrap();
+
+        assert_eq!(theme.selected_marker.fg, Some(Color::Red));
+        assert_eq!(theme.active_prompt.bg, Some(Color::Rgb(0x61, 0xaf, 0xef)));
+    }
+
+    #[test]
+    fn unknown_theme_name_is_clear_error() {
+        let raw = ThemeFileConfig {
+            name: Some("wat".to_string()),
+            ..ThemeFileConfig::default()
+        };
+        let err = Theme::from_raw(&raw, None).unwrap_err();
+        assert!(err.to_string().contains("unknown theme wat"));
     }
 
     #[test]

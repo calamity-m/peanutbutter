@@ -5,8 +5,22 @@ use peanutbutter::completions;
 use peanutbutter::config;
 use std::io::{self, Write};
 
+fn raw_theme_arg() -> Option<String> {
+    let mut args = std::env::args().skip(1);
+    while let Some(arg) = args.next() {
+        if arg == "--theme" {
+            return args.next();
+        }
+        if let Some(value) = arg.strip_prefix("--theme=") {
+            return Some(value.to_string());
+        }
+    }
+    None
+}
+
 fn main() {
-    let app_config = match config::load() {
+    let raw_theme = raw_theme_arg();
+    let app_config = match config::load_with_theme_override(raw_theme.as_deref()) {
         Ok(config) => config,
         Err(err) => {
             eprintln!("{BINARY_NAME}: {err}");
@@ -22,20 +36,25 @@ fn main() {
     let mut clap_command = cli::Cli::command().after_help(cli::after_help(&paths));
     let matches = clap_command.clone().get_matches();
     let cli = cli::Cli::from_arg_matches(&matches).unwrap_or_else(|err| err.exit());
-    let Some(command) = cli.command else {
-        clap_command.print_help().unwrap_or_else(|err| {
-            eprintln!("{BINARY_NAME}: {err}");
-            std::process::exit(1);
-        });
-        println!();
-        std::process::exit(0);
+    let theme_name = cli.theme.as_deref();
+    let command = match cli.command {
+        Some(command) => command,
+        None if theme_name.is_some() => cli::Command::Execute,
+        None => {
+            clap_command.print_help().unwrap_or_else(|err| {
+                eprintln!("{BINARY_NAME}: {err}");
+                std::process::exit(1);
+            });
+            println!();
+            std::process::exit(0);
+        }
     };
     let is_execute = matches!(&command, cli::Command::Execute);
 
     let result = match command {
         cli::Command::Execute => {
             let mut stdout = io::stdout();
-            let result = cli::run_execute_command(&paths, &mut stdout);
+            let result = cli::run_execute_command(&paths, &mut stdout, theme_name);
             let _ = stdout.flush();
             match result {
                 Ok(result) => {
@@ -135,6 +154,18 @@ fn main() {
                 Err(err) => Err(err),
             }
         }
+        cli::Command::CompleteTheme { current } => match config::theme_completion_names() {
+            Ok(candidates) => {
+                let current = current.unwrap_or_default();
+                for candidate in candidates {
+                    if candidate.starts_with(&current) {
+                        println!("{candidate}");
+                    }
+                }
+                Ok(())
+            }
+            Err(err) => Err(err),
+        },
     };
 
     if let Err(err) = result {
