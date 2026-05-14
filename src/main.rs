@@ -120,6 +120,19 @@ fn main() {
             }
         }
         cli::Command::Edit { path } => cli::run_edit_command(&paths, path.as_deref()).map(|_| ()),
+        cli::Command::New { name, command } => match cli::run_new_command(
+            &paths,
+            &app_config.theme,
+            app_config.ui.height,
+            name,
+            command,
+        ) {
+            Ok(()) => Ok(()),
+            Err(err) => {
+                print_error(err);
+                std::process::exit(2);
+            }
+        },
         cli::Command::Lint { strict, json } => {
             let mut stdout = io::stdout();
             match peanutbutter::lint::run(

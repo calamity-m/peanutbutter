@@ -25,6 +25,8 @@
 //! | [`execute`] | Interactive TUI (ratatui, crossterm) |
 
 pub mod browse;
+pub mod capture;
+pub mod capture_heuristics;
 pub mod cli;
 pub mod completions;
 pub mod config;
@@ -40,6 +42,7 @@ pub mod lint;
 pub mod parser;
 pub mod search;
 pub mod stats;
+pub mod tui_chrome;
 
 /// The binary name used in help text and warning messages.
 pub const BINARY_NAME: &str = "peanutbutter";

@@ -66,6 +66,10 @@ overrides.
 
 ## Snippets
 
+Snippets can be authored manually in any markdown editor, or generated from a
+recently-run shell command via `pb new` — see the README's
+[`pb new` walkthrough](../README.md#pb-new-walkthrough) for the capture flow.
+
 A snippet is defined by:
 
 1. A level-two markdown heading (`##`).

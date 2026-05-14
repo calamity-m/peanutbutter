@@ -55,6 +55,47 @@ I personally hate having to interact with snippet/cheatsheet tools, I want the e
 
 - In the picker, `Ctrl+E` opens the selected snippet in `$VISUAL` or `$EDITOR` at its heading line. When the editor exits, peanutbutter reloads snippets and returns to the picker.
 - You can add snippets via the cli - `pb edit <tab-complete>`.
+- After running a command you want to save, run `pb new [name]` — it harvests the last 50 entries from the shell's in-memory history, lets you pick one, suggests which arguments should become variables, and appends a snippet to `<first-root>/snippets.md`.
+
+### `pb new` walkthrough
+
+```text
+$ ssh root@10.0.0.4 'systemctl restart nginx'
+$ pb new deploy
+┌─ pb new: pick a command ───────────────────────────────┐
+│ ▸ ssh root@10.0.0.4 'systemctl restart nginx'          │
+│   docker run -e API_TOKEN=xyz... my/image              │
+│   ...                                                  │
+└────────────────────────────────────────────────────────┘
+↑↓/jk move   enter pick   type to filter   esc cancel
+
+┌─ pb new ───────────────────────────────────────────────┐
+│ Name: deploy                                           │
+│ Preview:                                               │
+│   ssh root@<@host> '<@value>'                          │
+│ Tokens:                                                │
+│   ▸ [x] 10.0.0.4                → host                 │
+│     [x] systemctl restart nginx → value                │
+└────────────────────────────────────────────────────────┘
+space toggle   e rename   n name   enter accept   b back   esc cancel
+```
+
+`pb new` requires the shell integration to be sourced (`eval "$(peanutbutter bash C+b)"` or its zsh/fish equivalent) — that's what populates the history list. You can skip the history step entirely by passing a command after `--`:
+
+```bash
+pb new deploy -- ssh root@host 'systemctl restart nginx'
+```
+
+#### Privacy
+
+`pb new` reads the parent shell's in-memory history list (not `$HISTFILE`). Anything you accept in the confirm screen is written verbatim into the target snippet file. Heuristics try to flag likely secrets (`--token=...`, `--password=...`, `Authorization: Bearer ...`, long base64-shaped tokens) and select them on by default so you notice; a warning fires if you accept a snippet with a flagged secret still literal. Even so: avoid typing real secrets on the command line.
+
+#### v1 limits
+
+- Writes to `<first snippet root>/snippets.md` only.
+- History capture is line-oriented; multi-line commands (heredocs, backslash continuations) only round-trip cleanly when supplied via `--`.
+- History payload is byte-capped (~64 KiB) before exec; very large entries may be dropped oldest-first.
+- Two concurrent `pb new` runs racing on the same file are last-writer-wins.
 
 :shrug: maybe this is pointless but oh well.
 
