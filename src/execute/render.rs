@@ -154,7 +154,8 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
                             let count = child.map(|c| c.recursive_count).unwrap_or(0);
                             let is_file = child.is_some_and(|c| c.children.is_empty());
                             if is_file {
-                                format!("{name} ({count})")
+                                let stem = name.strip_suffix(".md").unwrap_or(name);
+                                format!("{stem} ({count})")
                             } else {
                                 format!("{name}/ ({count})")
                             }
