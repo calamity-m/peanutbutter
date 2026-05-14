@@ -1,9 +1,11 @@
 use clap::{CommandFactory, FromArgMatches};
+use owo_colors::OwoColorize;
 use peanutbutter::BINARY_NAME;
 use peanutbutter::cli;
 use peanutbutter::completions;
 use peanutbutter::config;
-use std::io::{self, Write};
+use std::fmt;
+use std::io::{self, IsTerminal, Write};
 
 fn raw_theme_arg() -> Option<String> {
     let mut args = std::env::args().skip(1);
@@ -18,12 +20,36 @@ fn raw_theme_arg() -> Option<String> {
     None
 }
 
+fn format_error_message(message: &str, color: bool) -> String {
+    if !color {
+        return message.to_string();
+    }
+
+    let Some((prefix, names)) = message.split_once("expected one of: ") else {
+        return message.to_string();
+    };
+    let names = names
+        .split(", ")
+        .map(|name| name.bold().cyan().to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("{prefix}expected one of: {names}")
+}
+
+fn print_error(err: impl fmt::Display) {
+    let color = std::env::var_os("NO_COLOR").is_none() && io::stderr().is_terminal();
+    eprintln!(
+        "{BINARY_NAME}: {}",
+        format_error_message(&err.to_string(), color)
+    );
+}
+
 fn main() {
     let raw_theme = raw_theme_arg();
     let app_config = match config::load_with_theme_override(raw_theme.as_deref()) {
         Ok(config) => config,
         Err(err) => {
-            eprintln!("{BINARY_NAME}: {err}");
+            print_error(err);
             let code = if std::env::args().any(|arg| arg == "lint") {
                 2
             } else {
@@ -42,7 +68,7 @@ fn main() {
         None if theme_name.is_some() => cli::Command::Execute,
         None => {
             clap_command.print_help().unwrap_or_else(|err| {
-                eprintln!("{BINARY_NAME}: {err}");
+                print_error(err);
                 std::process::exit(1);
             });
             println!();
@@ -109,7 +135,7 @@ fn main() {
                     Ok(())
                 }
                 Err(err) => {
-                    eprintln!("{BINARY_NAME}: {err}");
+                    print_error(err);
                     std::process::exit(2);
                 }
             }
@@ -169,10 +195,28 @@ fn main() {
     };
 
     if let Err(err) = result {
-        eprintln!("{BINARY_NAME}: {err}");
+        print_error(err);
         if is_execute {
             eprintln!("{BINARY_NAME}: execute failed");
         }
         std::process::exit(1);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn format_error_message_colours_theme_names_only_when_enabled() {
+        let raw = "unknown theme invalid; expected one of: default, gruvbox";
+
+        assert_eq!(format_error_message(raw, false), raw);
+        let colored = format_error_message(raw, true);
+
+        assert!(colored.contains("unknown theme invalid; expected one of: "));
+        assert!(colored.contains("\u{1b}["));
+        assert!(colored.contains("default"));
+        assert!(colored.contains("gruvbox"));
     }
 }
