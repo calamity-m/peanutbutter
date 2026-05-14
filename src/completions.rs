@@ -27,7 +27,17 @@ pub fn bash_integration_script(binding: &str, executable: &Path) -> io::Result<S
     let executable = shell_quote(&executable.to_string_lossy());
     Ok(format!(
         r#"\builtin unalias {BASH_ALIAS_NAME} &>/dev/null || \builtin true
-\builtin alias {BASH_ALIAS_NAME}='{BINARY_NAME}'
+__pb_dispatch() {{
+  if [[ "$1" == "new" ]]; then
+    local __pb_hist
+    __pb_hist=$(fc -lnr 1 50 2>/dev/null | sed 's/^\t//' | grep -Ev '^[[:space:]]*(pb|peanutbutter)([[:space:]]|$)' | awk 'BEGIN{{total=0; max=65536}} {{len=length($0)+1; if (total+len>max) exit; total+=len; print}}' | tr '\n' '\037')
+    PEANUTBUTTER_HISTORY="$__pb_hist" command {BINARY_NAME} "$@"
+  else
+    command {BINARY_NAME} "$@"
+  fi
+}}
+{BASH_ALIAS_NAME}() {{ __pb_dispatch "$@"; }}
+{BINARY_NAME}() {{ __pb_dispatch "$@"; }}
 __pb_insert_command() {{
   local __pb_cmd
   __pb_cmd=$({executable} execute)
@@ -61,7 +71,7 @@ __pb_complete() {{
     done < <({executable} complete-edit "$cur")
     return 0
   fi
-  COMPREPLY=( $(compgen -W "--theme bash edit execute zsh fish lint gc stats" -- "$cur") )
+  COMPREPLY=( $(compgen -W "--theme bash edit execute zsh fish lint gc new stats" -- "$cur") )
 }}
 complete -o nospace -F __pb_complete {BINARY_NAME} {BASH_ALIAS_NAME}
 "#
@@ -84,7 +94,17 @@ pub fn zsh_integration_script(binding: &str, executable: &Path) -> io::Result<St
     let executable = shell_quote(&executable.to_string_lossy());
     Ok(format!(
         r#"\builtin unalias {BASH_ALIAS_NAME} 2>/dev/null; \builtin true
-\builtin alias {BASH_ALIAS_NAME}='{BINARY_NAME}'
+__pb_dispatch() {{
+  if [[ "$1" == "new" ]]; then
+    local __pb_hist
+    __pb_hist=$(fc -lnr -50 2>/dev/null | sed 's/^\t//' | grep -Ev '^[[:space:]]*(pb|peanutbutter)([[:space:]]|$)' | awk 'BEGIN{{total=0; max=65536}} {{len=length($0)+1; if (total+len>max) exit; total+=len; print}}' | tr '\n' '\037')
+    PEANUTBUTTER_HISTORY="$__pb_hist" command {BINARY_NAME} "$@"
+  else
+    command {BINARY_NAME} "$@"
+  fi
+}}
+{BASH_ALIAS_NAME}() {{ __pb_dispatch "$@"; }}
+{BINARY_NAME}() {{ __pb_dispatch "$@"; }}
 __pb_insert_command() {{
   local __pb_cmd
   __pb_cmd=$({executable} execute)
@@ -113,7 +133,7 @@ _pb_complete() {{
     candidates=( ${{(f)"$({executable} complete-edit "${{words[CURRENT]}}")"}} )
     compadd -S '' -- "${{candidates[@]}}"
   else
-    compadd -- --theme bash edit execute zsh fish lint gc stats
+    compadd -- --theme bash edit execute zsh fish lint gc new stats
   fi
 }}
 compdef _pb_complete {BINARY_NAME} {BASH_ALIAS_NAME}
@@ -152,9 +172,23 @@ function __pb_complete_theme
   {executable} complete-theme (commandline -ct)
 end
 bind {binding} __pb_insert_command
-alias {BASH_ALIAS_NAME}='{BINARY_NAME}'
+function __pb_dispatch
+  if test (count $argv) -gt 0; and test $argv[1] = "new"
+    set -l __pb_hist (history --max=50 | string match -vr '^\s*(pb|peanutbutter)(\s|$)' | string join \x1f)
+    set -lx PEANUTBUTTER_HISTORY $__pb_hist
+    command {BINARY_NAME} $argv
+  else
+    command {BINARY_NAME} $argv
+  end
+end
+function {BASH_ALIAS_NAME}
+  __pb_dispatch $argv
+end
+function {BINARY_NAME}
+  __pb_dispatch $argv
+end
 complete -c {BINARY_NAME} -f -l theme -a '(__pb_complete_theme)'
-complete -c {BINARY_NAME} -f -n 'not __fish_seen_subcommand_from bash edit execute zsh fish lint gc stats' -a 'bash edit execute zsh fish lint gc stats'
+complete -c {BINARY_NAME} -f -n 'not __fish_seen_subcommand_from bash edit execute zsh fish lint gc new stats' -a 'bash edit execute zsh fish lint gc new stats'
 complete -c {BINARY_NAME} -f -n '__fish_seen_subcommand_from edit' -a '(__pb_complete_edit)'
 complete -c {BASH_ALIAS_NAME} -w {BINARY_NAME}
 "#
@@ -204,7 +238,10 @@ mod tests {
     fn bash_script_uses_readline_bind_and_executable_path() {
         let script = bash_integration_script("C+b", Path::new("/tmp/peanutbutter")).unwrap();
         assert!(script.contains("\\builtin unalias pb &>/dev/null || \\builtin true"));
-        assert!(script.contains("\\builtin alias pb='peanutbutter'"));
+        assert!(script.contains("pb() {"));
+        assert!(script.contains("if [[ \"$1\" == \"new\" ]]"));
+        assert!(script.contains("PEANUTBUTTER_HISTORY="));
+        assert!(script.contains("command peanutbutter \"$@\""));
         assert!(script.contains("bind -x '\"\\C-b\":__pb_insert_command'"));
         assert!(script.contains("'/tmp/peanutbutter' execute"));
         assert!(script.contains("READLINE_LINE=\"${READLINE_LINE}\""));
@@ -222,7 +259,7 @@ mod tests {
     #[test]
     fn bash_script_completion_word_list_includes_all_shells() {
         let script = bash_integration_script("C+b", Path::new("/tmp/peanutbutter")).unwrap();
-        assert!(script.contains("bash edit execute zsh fish"));
+        assert!(script.contains("bash edit execute zsh fish lint gc new stats"));
         assert!(script.contains("complete-theme \"$cur\""));
         assert!(script.contains("--theme"));
     }
@@ -251,7 +288,9 @@ mod tests {
     #[test]
     fn zsh_script_emits_pb_alias_and_compdef() {
         let script = zsh_integration_script("C+b", Path::new("/tmp/peanutbutter")).unwrap();
-        assert!(script.contains("\\builtin alias pb='peanutbutter'"));
+        assert!(script.contains("pb() {"));
+        assert!(script.contains("PEANUTBUTTER_HISTORY="));
+        assert!(script.contains("command peanutbutter \"$@\""));
         assert!(script.contains("compdef _pb_complete peanutbutter pb"));
         assert!(script.contains("'/tmp/peanutbutter' complete-edit"));
         assert!(script.contains("'/tmp/peanutbutter' complete-theme"));
@@ -280,7 +319,9 @@ mod tests {
     #[test]
     fn fish_script_emits_pb_alias_and_completions() {
         let script = fish_integration_script("C+b", Path::new("/tmp/peanutbutter")).unwrap();
-        assert!(script.contains("alias pb='peanutbutter'"));
+        assert!(script.contains("function pb"));
+        assert!(script.contains("PEANUTBUTTER_HISTORY"));
+        assert!(script.contains("command peanutbutter $argv"));
         assert!(script.contains("complete -c peanutbutter"));
         assert!(script.contains("complete -c pb -w peanutbutter"));
         // complete-edit is called from a helper function to avoid single-quote nesting
@@ -288,6 +329,39 @@ mod tests {
         assert!(script.contains("'/tmp/peanutbutter' complete-edit"));
         assert!(script.contains("__pb_complete_theme"));
         assert!(script.contains("complete -c peanutbutter -f -l theme"));
+    }
+
+    #[test]
+    fn bash_pb_function_harvests_history_for_new() {
+        let script = bash_integration_script("C+b", Path::new("/tmp/peanutbutter")).unwrap();
+        assert!(script.contains("__pb_dispatch()"));
+        assert!(script.contains("pb() { __pb_dispatch \"$@\"; }"));
+        assert!(script.contains("peanutbutter() { __pb_dispatch \"$@\"; }"));
+        assert!(script.contains("$1\" == \"new\""));
+        assert!(script.contains("fc -lnr 1 50"));
+        assert!(script.contains("PEANUTBUTTER_HISTORY="));
+        assert!(script.contains("\\037"));
+    }
+
+    #[test]
+    fn zsh_pb_function_harvests_history_for_new() {
+        let script = zsh_integration_script("C+b", Path::new("/tmp/peanutbutter")).unwrap();
+        assert!(script.contains("__pb_dispatch()"));
+        assert!(script.contains("pb() { __pb_dispatch \"$@\"; }"));
+        assert!(script.contains("peanutbutter() { __pb_dispatch \"$@\"; }"));
+        assert!(script.contains("$1\" == \"new\""));
+        assert!(script.contains("fc -lnr -50"));
+        assert!(script.contains("PEANUTBUTTER_HISTORY="));
+    }
+
+    #[test]
+    fn fish_pb_function_harvests_history_for_new() {
+        let script = fish_integration_script("C+b", Path::new("/tmp/peanutbutter")).unwrap();
+        assert!(script.contains("function __pb_dispatch"));
+        assert!(script.contains("function pb"));
+        assert!(script.contains("function peanutbutter"));
+        assert!(script.contains("history --max=50"));
+        assert!(script.contains("PEANUTBUTTER_HISTORY"));
     }
 
     #[test]

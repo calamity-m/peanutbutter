@@ -33,6 +33,18 @@ pub enum Command {
     Execute,
     /// Open `$EDITOR` on the given snippet file (or the default file).
     Edit { path: Option<PathBuf> },
+    /// Capture a recently-run shell command and append it as a new snippet.
+    ///
+    /// Reads `$PEANUTBUTTER_HISTORY` (populated by the shell integration) and
+    /// shows a TUI picker, then a token-confirmation screen. Pass `-- <cmd...>`
+    /// to skip the picker and supply the command directly.
+    New {
+        /// Optional snippet name. If omitted, the TUI prompts for one.
+        name: Option<String>,
+        /// Explicit command to capture, after `--`. Bypasses the history picker.
+        #[arg(last = true)]
+        command: Vec<String>,
+    },
     /// Emit shell integration code for the given readline binding.
     Bash {
         #[arg(default_value = "C+b")]
@@ -172,6 +184,274 @@ where
         emitted: true,
         persist_warning,
     })
+}
+
+/// Capture a recently-run command and append it as a new snippet to
+/// `<first-root>/snippets.md`. See [`Command::New`].
+pub fn run_new_command(
+    paths: &Paths,
+    theme: &crate::config::Theme,
+    viewport_height: u16,
+    name_opt: Option<String>,
+    explicit_argv: Vec<String>,
+) -> io::Result<()> {
+    let target_root = paths
+        .snippet_roots
+        .first()
+        .ok_or_else(|| io::Error::other("no snippet roots configured"))?;
+    let target = target_root.join("snippets.md");
+
+    let explicit_command = if explicit_argv.is_empty() {
+        None
+    } else {
+        Some(shell_quote_argv(&explicit_argv))
+    };
+
+    let history = if explicit_command.is_some() {
+        None
+    } else {
+        let raw = env::var("PEANUTBUTTER_HISTORY").unwrap_or_default();
+        let entries: Vec<String> = raw
+            .split('\u{1F}')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+        if entries.is_empty() {
+            return Err(io::Error::other(
+                "pb new: no shell history available. Source the shell integration \
+                 (e.g. eval \"$(peanutbutter bash C+b)\") and re-run, or bypass with: \
+                 pb new <name> -- <command...>",
+            ));
+        }
+        Some(entries)
+    };
+
+    let outcome = crate::capture::run_capture(crate::capture::CaptureRun {
+        history,
+        explicit_command,
+        name_opt,
+        theme,
+        viewport_height,
+        target_display: target.display().to_string(),
+    })?;
+
+    let (name, raw, accepted, first_token) = match outcome {
+        crate::capture::CaptureOutcome::Cancelled => return Ok(()),
+        crate::capture::CaptureOutcome::Accepted {
+            name,
+            raw,
+            accepted,
+            first_token,
+        } => (name, raw, accepted, first_token),
+    };
+
+    let accepted = bump_against_frontmatter(&target, accepted)?;
+    let body = crate::capture_heuristics::render_with_placeholders(&raw, &accepted);
+    let lang = guess_language(first_token.as_deref());
+    let final_name = bump_until_unique(&target, &name)?;
+    let target_written = append_snippet(&target, &final_name, &body, &lang)?;
+    println!(
+        "wrote 1 snippet \"{final_name}\" to {}",
+        target_written.display()
+    );
+    Ok(())
+}
+
+#[cfg(test)]
+pub(crate) fn test_shell_quote_argv(argv: &[String]) -> String {
+    shell_quote_argv(argv)
+}
+
+#[cfg(test)]
+pub(crate) fn test_guess_language(first_token: Option<&str>) -> String {
+    guess_language(first_token)
+}
+
+#[cfg(test)]
+pub(crate) fn test_bump_until_unique(target: &Path, base: &str) -> io::Result<String> {
+    bump_until_unique(target, base)
+}
+
+#[cfg(test)]
+pub(crate) fn test_append_snippet(
+    target: &Path,
+    name: &str,
+    body: &str,
+    lang: &str,
+) -> io::Result<PathBuf> {
+    append_snippet(target, name, body, lang)
+}
+
+#[cfg(test)]
+pub(crate) fn test_bump_against_frontmatter(
+    target: &Path,
+    accepted: Vec<(crate::capture_heuristics::Span, String)>,
+) -> io::Result<Vec<(crate::capture_heuristics::Span, String)>> {
+    bump_against_frontmatter(target, accepted)
+}
+
+fn shell_quote_argv(argv: &[String]) -> String {
+    argv.iter()
+        .map(|a| {
+            if a.chars()
+                .all(|c| c.is_ascii_alphanumeric() || "-_./=:@,".contains(c))
+                && !a.is_empty()
+            {
+                a.clone()
+            } else {
+                format!("'{}'", a.replace('\'', "'\\''"))
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn guess_language(first_token: Option<&str>) -> String {
+    let known_shells = [
+        "bash",
+        "sh",
+        "zsh",
+        "fish",
+        "ssh",
+        "docker",
+        "kubectl",
+        "git",
+        "curl",
+        "wget",
+        "make",
+        "npm",
+        "yarn",
+        "pnpm",
+        "cargo",
+        "go",
+        "rustc",
+        "python",
+        "python3",
+        "node",
+        "deno",
+        "rg",
+        "ls",
+        "cat",
+        "echo",
+        "mv",
+        "cp",
+        "rm",
+        "find",
+        "grep",
+        "sed",
+        "awk",
+        "tar",
+        "ssh-copy-id",
+        "scp",
+        "rsync",
+    ];
+    let token = match first_token {
+        Some(t) => Path::new(t)
+            .file_name()
+            .and_then(|f| f.to_str())
+            .unwrap_or(t),
+        None => return "sh".to_string(),
+    };
+    if known_shells.contains(&token) {
+        "bash".to_string()
+    } else {
+        "sh".to_string()
+    }
+}
+
+fn bump_against_frontmatter(
+    target: &Path,
+    accepted: Vec<(crate::capture_heuristics::Span, String)>,
+) -> io::Result<Vec<(crate::capture_heuristics::Span, String)>> {
+    if !target.exists() {
+        return Ok(accepted);
+    }
+    let content = fs::read_to_string(target)?;
+    let parsed =
+        crate::parser::parse_file(target, target.parent().unwrap_or(Path::new(".")), &content);
+    let reserved: std::collections::HashSet<String> =
+        parsed.frontmatter.variables.keys().cloned().collect();
+    if reserved.is_empty() {
+        return Ok(accepted);
+    }
+    let mut seen: std::collections::HashMap<String, usize> = Default::default();
+    let mut out = Vec::with_capacity(accepted.len());
+    for (span, name) in accepted {
+        let mut candidate = name.clone();
+        if reserved.contains(&candidate) {
+            let mut n = 2;
+            loop {
+                let attempt = format!("{name}{n}");
+                if !reserved.contains(&attempt) {
+                    candidate = attempt;
+                    break;
+                }
+                n += 1;
+            }
+        }
+        let final_name = crate::capture_heuristics::bump_name(&candidate, &mut seen);
+        out.push((span, final_name));
+    }
+    Ok(out)
+}
+
+fn bump_until_unique(target: &Path, base: &str) -> io::Result<String> {
+    if !target.exists() {
+        return Ok(base.to_string());
+    }
+    let content = fs::read_to_string(target)?;
+    let existing_names: std::collections::HashSet<String> =
+        crate::parser::parse_file(target, target.parent().unwrap_or(Path::new(".")), &content)
+            .snippets
+            .into_iter()
+            .map(|s| s.name)
+            .collect();
+
+    if !existing_names.contains(base) {
+        return Ok(base.to_string());
+    }
+    let mut n = 2;
+    loop {
+        let candidate = format!("{base} ({n})");
+        if !existing_names.contains(&candidate) {
+            return Ok(candidate);
+        }
+        n += 1;
+    }
+}
+
+fn append_snippet(target: &Path, name: &str, body: &str, lang: &str) -> io::Result<PathBuf> {
+    if let Some(parent) = target.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let existing = if target.exists() {
+        fs::read_to_string(target)?
+    } else {
+        String::new()
+    };
+
+    let mut next = existing.clone();
+    if !next.is_empty() && !next.ends_with('\n') {
+        next.push('\n');
+    }
+    if !next.is_empty() && !next.ends_with("\n\n") {
+        next.push('\n');
+    }
+    next.push_str("## ");
+    next.push_str(name);
+    next.push_str("\n\n```");
+    next.push_str(lang);
+    next.push('\n');
+    next.push_str(body);
+    if !body.ends_with('\n') {
+        next.push('\n');
+    }
+    next.push_str("```\n");
+
+    let tmp = target.with_extension("md.tmp");
+    fs::write(&tmp, next)?;
+    fs::rename(&tmp, target)?;
+    Ok(target.to_path_buf())
 }
 
 /// Resolve the target snippet file and open it in `$EDITOR` / `$VISUAL`.
@@ -873,6 +1153,127 @@ mod tests {
         let saved = FrecencyStore::load(&paths.state_file).unwrap();
         assert_eq!(saved.events().len(), 1);
         assert_eq!(saved.events()[0].id.as_str(), "snippets.md#echo");
+    }
+
+    #[test]
+    fn new_command_writer_creates_file_and_passes_lint() {
+        let root = temp_dir("new-write-lint");
+        let target = root.join("snippets.md");
+        let written = super::test_append_snippet(&target, "demo", "echo <@name>", "bash").unwrap();
+        assert_eq!(written, target);
+        let content = fs::read_to_string(&target).unwrap();
+        assert!(content.contains("## demo"));
+        assert!(content.contains("```bash"));
+        assert!(content.contains("echo <@name>"));
+
+        // Run lint over the file and assert no findings.
+        let paths = test_paths(&root);
+        let app_config = crate::config::AppConfig {
+            paths,
+            ui: Default::default(),
+            search: crate::config::SearchConfig::default(),
+            variables: Default::default(),
+            theme: crate::config::Theme::default(),
+            suggestion_commands: Default::default(),
+            lint: Default::default(),
+        };
+        let mut buf = Vec::new();
+        let result = crate::lint::run(
+            &app_config,
+            crate::lint::LintOptions {
+                strict: false,
+                json: false,
+            },
+            &mut buf,
+        )
+        .unwrap();
+        assert!(
+            !result.has_findings(),
+            "lint findings: {}",
+            String::from_utf8_lossy(&buf)
+        );
+    }
+
+    #[test]
+    fn new_command_writer_collision_bumps_heading_suffix() {
+        let root = temp_dir("new-write-collision");
+        let target = root.join("snippets.md");
+        fs::write(&target, "## demo\n\n```bash\necho a\n```\n").unwrap();
+        let first = super::test_bump_until_unique(&target, "demo").unwrap();
+        assert_eq!(first, "demo (2)");
+        super::test_append_snippet(&target, &first, "echo b", "bash").unwrap();
+        let second = super::test_bump_until_unique(&target, "demo").unwrap();
+        assert_eq!(second, "demo (3)");
+    }
+
+    #[test]
+    fn new_command_bumps_against_frontmatter_variable_keys() {
+        let root = temp_dir("new-frontmatter");
+        let target = root.join("snippets.md");
+        fs::write(
+            &target,
+            "---\nvariables:\n  host:\n    default: localhost\n---\n",
+        )
+        .unwrap();
+        let accepted = vec![(
+            crate::capture_heuristics::Span { start: 0, end: 3 },
+            "host".to_string(),
+        )];
+        let bumped = super::test_bump_against_frontmatter(&target, accepted).unwrap();
+        assert_eq!(bumped[0].1, "host2");
+    }
+
+    #[test]
+    fn new_command_guess_language_falls_back_to_sh() {
+        assert_eq!(super::test_guess_language(Some("ssh")), "bash");
+        assert_eq!(super::test_guess_language(Some("/usr/bin/git")), "bash");
+        assert_eq!(super::test_guess_language(Some("randomtool")), "sh");
+        assert_eq!(super::test_guess_language(None), "sh");
+    }
+
+    #[test]
+    fn new_command_shell_quote_argv_round_trips_simple_args() {
+        let q = super::test_shell_quote_argv(&["echo".to_string(), "hello world".to_string()]);
+        assert_eq!(q, "echo 'hello world'");
+    }
+
+    #[test]
+    fn new_command_full_pipeline_writes_lint_clean_snippet() {
+        let root = temp_dir("new-pipeline");
+        let target = root.join("snippets.md");
+        let raw = "ssh root@10.0.0.4 'systemctl restart nginx'";
+        let cands = crate::capture_heuristics::detect_variables(raw);
+        let accepted: Vec<_> = cands
+            .iter()
+            .map(|c| (c.span, c.suggested_name.clone()))
+            .collect();
+        let body = crate::capture_heuristics::render_with_placeholders(raw, &accepted);
+        super::test_append_snippet(&target, "deploy", &body, "bash").unwrap();
+        let paths = test_paths(&root);
+        let app_config = crate::config::AppConfig {
+            paths,
+            ui: Default::default(),
+            search: crate::config::SearchConfig::default(),
+            variables: Default::default(),
+            theme: crate::config::Theme::default(),
+            suggestion_commands: Default::default(),
+            lint: Default::default(),
+        };
+        let mut buf = Vec::new();
+        let result = crate::lint::run(
+            &app_config,
+            crate::lint::LintOptions {
+                strict: false,
+                json: false,
+            },
+            &mut buf,
+        )
+        .unwrap();
+        assert!(
+            !result.has_findings(),
+            "lint findings: {}",
+            String::from_utf8_lossy(&buf)
+        );
     }
 
     #[test]
