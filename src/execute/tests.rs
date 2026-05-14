@@ -333,6 +333,32 @@ fn ctrl_e_from_browse_requests_edit_for_selected_snippet() {
 }
 
 #[test]
+fn esc_in_browse_climbs_path_when_nested() {
+    let mut app = app_with_body("echo hi", vec![], TestProvider::default());
+    app.nav_mode = NavigationMode::Browse;
+    app.browse.path = vec!["git".to_string(), "commits.md".to_string()];
+    app.browse.input = "foo".to_string();
+    app.browse.selection = Some(2);
+
+    let event = app.handle_key(press(KeyCode::Esc));
+
+    assert!(matches!(event, AppEvent::Continue));
+    assert_eq!(app.browse.path, vec!["git".to_string()]);
+    assert_eq!(app.browse.input, "");
+    assert_eq!(app.browse.selection, Some(0));
+}
+
+#[test]
+fn esc_in_browse_at_root_cancels() {
+    let mut app = app_with_body("echo hi", vec![], TestProvider::default());
+    app.nav_mode = NavigationMode::Browse;
+    app.browse.path = Vec::new();
+
+    let event = app.handle_key(press(KeyCode::Esc));
+    assert!(matches!(event, AppEvent::Cancelled));
+}
+
+#[test]
 fn ctrl_e_from_browse_directory_does_not_request_edit() {
     let mut app = app_with_body("echo hi", vec![], TestProvider::default());
     app.nav_mode = NavigationMode::Browse;

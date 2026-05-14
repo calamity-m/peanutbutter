@@ -499,11 +499,23 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
     }
 
     fn handle_select_key(&mut self, key: KeyEvent) -> AppEvent {
-        if matches!(key.code, KeyCode::Esc)
-            && !(matches!(self.nav_mode, NavigationMode::Tags) && self.tags.drill.is_some())
-        {
-            self.status = Some("cancelled".to_string());
-            return AppEvent::Cancelled;
+        if matches!(key.code, KeyCode::Esc) {
+            // Tag-drill handles esc in its own key handler (climbs out of drill).
+            if matches!(self.nav_mode, NavigationMode::Tags) && self.tags.drill.is_some() {
+                // fall through to mode-specific handler
+            } else if matches!(self.nav_mode, NavigationMode::Browse)
+                && !self.browse.path.is_empty()
+            {
+                self.browse.path.pop();
+                self.browse.input.clear();
+                self.browse.selection = Some(0);
+                self.preview_scroll = 0;
+                self.status = None;
+                return AppEvent::Continue;
+            } else {
+                self.status = Some("cancelled".to_string());
+                return AppEvent::Cancelled;
+            }
         }
 
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('t')
