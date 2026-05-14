@@ -19,6 +19,9 @@ const DEFAULT_EDIT_PATH: &str = "snippets.md";
 #[command(name = BINARY_NAME, about = "terminal snippet manager")]
 #[command(version)]
 pub struct Cli {
+    /// Built-in or custom theme name to use for the interactive TUI.
+    #[arg(long, global = true, value_name = "NAME")]
+    pub theme: Option<String>,
     #[command(subcommand)]
     pub command: Option<Command>,
 }
@@ -78,9 +81,12 @@ pub enum Command {
         #[arg(long)]
         json: bool,
     },
-    /// Internal bash completion helper for `edit`.
+    /// Internal shell completion helper for `edit`.
     #[command(hide = true)]
     CompleteEdit { current: Option<String> },
+    /// Internal shell completion helper for `--theme`.
+    #[command(hide = true)]
+    CompleteTheme { current: Option<String> },
 }
 
 /// Result returned by [`run_execute_command`].
@@ -114,8 +120,9 @@ pub fn after_help(paths: &Paths) -> String {
 pub fn run_execute_command<W: Write>(
     paths: &Paths,
     writer: &mut W,
+    theme_name: Option<&str>,
 ) -> io::Result<ExecuteCommandResult> {
-    run_execute_command_with(paths, writer, execute::run_execute)
+    run_execute_command_with(paths, writer, theme_name, execute::run_execute)
 }
 
 /// Testable variant of [`run_execute_command`] that accepts a custom `runner`
@@ -123,6 +130,7 @@ pub fn run_execute_command<W: Write>(
 pub fn run_execute_command_with<W, F>(
     paths: &Paths,
     writer: &mut W,
+    theme_name: Option<&str>,
     runner: F,
 ) -> io::Result<ExecuteCommandResult>
 where
@@ -132,7 +140,7 @@ where
     let index = crate::index::load_from_roots(&paths.snippet_roots)?;
     let mut store = FrecencyStore::load(&paths.state_file)?;
     let cwd = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let app_config = crate::config::load()?;
+    let app_config = crate::config::load_with_theme_override(theme_name)?;
     let options = ExecuteOptions {
         cwd: cwd.clone(),
         viewport_height: app_config.ui.height,
@@ -507,7 +515,22 @@ mod tests {
     fn clap_recognizes_expected_commands() {
         assert_eq!(
             Cli::try_parse_from(["peanutbutter"]).unwrap(),
-            Cli { command: None }
+            Cli {
+                theme: None,
+                command: None,
+            }
+        );
+        assert_eq!(
+            Cli::try_parse_from(["peanutbutter", "--theme", "nord"])
+                .unwrap()
+                .theme,
+            Some("nord".to_string())
+        );
+        assert_eq!(
+            Cli::try_parse_from(["peanutbutter", "execute", "--theme", "gruvbox"])
+                .unwrap()
+                .theme,
+            Some("gruvbox".to_string())
         );
         assert_eq!(
             Cli::try_parse_from(["peanutbutter", "execute"])
@@ -835,13 +858,14 @@ mod tests {
         let paths = test_paths(&root);
 
         let mut out = Vec::new();
-        let result = run_execute_command_with(&paths, &mut out, |_index, _store, _options| {
-            Ok(Some(ExecutionOutcome {
-                snippet_id: SnippetId::new("snippets.md", "echo"),
-                command: "echo hi".to_string(),
-            }))
-        })
-        .unwrap();
+        let result =
+            run_execute_command_with(&paths, &mut out, None, |_index, _store, _options| {
+                Ok(Some(ExecutionOutcome {
+                    snippet_id: SnippetId::new("snippets.md", "echo"),
+                    command: "echo hi".to_string(),
+                }))
+            })
+            .unwrap();
 
         assert!(result.emitted);
         assert!(result.persist_warning.is_none());
@@ -869,13 +893,14 @@ mod tests {
         fs::write(root.join("snippets.md"), "## Echo\n\n```\necho hi\n```\n").unwrap();
         let paths = test_paths(&root);
         let mut writer = FailingWriter;
-        let err = run_execute_command_with(&paths, &mut writer, |_index, _store, _options| {
-            Ok(Some(ExecutionOutcome {
-                snippet_id: SnippetId::new("snippets.md", "echo"),
-                command: "echo hi".to_string(),
-            }))
-        })
-        .unwrap_err();
+        let err =
+            run_execute_command_with(&paths, &mut writer, None, |_index, _store, _options| {
+                Ok(Some(ExecutionOutcome {
+                    snippet_id: SnippetId::new("snippets.md", "echo"),
+                    command: "echo hi".to_string(),
+                }))
+            })
+            .unwrap_err();
         assert_eq!(err.to_string(), "nope");
         let saved = FrecencyStore::load(&paths.state_file).unwrap();
         assert!(saved.events().is_empty());

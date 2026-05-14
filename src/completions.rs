@@ -45,9 +45,14 @@ __pb_insert_command() {{
 }}
 bind -x '"{binding}":__pb_insert_command'
 __pb_complete() {{
-  local cur subcommand
+  local cur prev subcommand
   cur="${{COMP_WORDS[COMP_CWORD]}}"
+  prev="${{COMP_WORDS[COMP_CWORD-1]}}"
   subcommand="${{COMP_WORDS[1]}}"
+  if [[ "$prev" == "--theme" ]]; then
+    COMPREPLY=( $(compgen -W "$({executable} complete-theme "$cur")" -- "$cur") )
+    return 0
+  fi
   if [[ "$subcommand" == "edit" ]]; then
     COMPREPLY=()
     local candidate
@@ -56,7 +61,7 @@ __pb_complete() {{
     done < <({executable} complete-edit "$cur")
     return 0
   fi
-  COMPREPLY=( $(compgen -W "bash edit execute zsh fish" -- "$cur") )
+  COMPREPLY=( $(compgen -W "--theme bash edit execute zsh fish lint gc stats" -- "$cur") )
 }}
 complete -o nospace -F __pb_complete {BINARY_NAME} {BASH_ALIAS_NAME}
 "#
@@ -99,12 +104,16 @@ __pb_insert_command() {{
 zle -N __pb_insert_command
 bindkey "{binding}" __pb_insert_command
 _pb_complete() {{
-  if [[ "${{words[2]}}" == "edit" ]]; then
+  if [[ "${{words[CURRENT-1]}}" == "--theme" ]]; then
+    local -a candidates
+    candidates=( ${{(f)"$({executable} complete-theme "${{words[CURRENT]}}")"}} )
+    compadd -- "${{candidates[@]}}"
+  elif [[ "${{words[2]}}" == "edit" ]]; then
     local -a candidates
     candidates=( ${{(f)"$({executable} complete-edit "${{words[CURRENT]}}")"}} )
     compadd -S '' -- "${{candidates[@]}}"
   else
-    compadd -- bash edit execute zsh fish
+    compadd -- --theme bash edit execute zsh fish lint gc stats
   fi
 }}
 compdef _pb_complete {BINARY_NAME} {BASH_ALIAS_NAME}
@@ -139,9 +148,13 @@ end
 function __pb_complete_edit
   {executable} complete-edit (commandline -ct)
 end
+function __pb_complete_theme
+  {executable} complete-theme (commandline -ct)
+end
 bind {binding} __pb_insert_command
 alias {BASH_ALIAS_NAME}='{BINARY_NAME}'
-complete -c {BINARY_NAME} -f -n 'not __fish_seen_subcommand_from bash edit execute zsh fish' -a 'bash edit execute zsh fish'
+complete -c {BINARY_NAME} -f -l theme -a '(__pb_complete_theme)'
+complete -c {BINARY_NAME} -f -n 'not __fish_seen_subcommand_from bash edit execute zsh fish lint gc stats' -a 'bash edit execute zsh fish lint gc stats'
 complete -c {BINARY_NAME} -f -n '__fish_seen_subcommand_from edit' -a '(__pb_complete_edit)'
 complete -c {BASH_ALIAS_NAME} -w {BINARY_NAME}
 "#
@@ -210,6 +223,8 @@ mod tests {
     fn bash_script_completion_word_list_includes_all_shells() {
         let script = bash_integration_script("C+b", Path::new("/tmp/peanutbutter")).unwrap();
         assert!(script.contains("bash edit execute zsh fish"));
+        assert!(script.contains("complete-theme \"$cur\""));
+        assert!(script.contains("--theme"));
     }
 
     #[test]
@@ -239,6 +254,7 @@ mod tests {
         assert!(script.contains("\\builtin alias pb='peanutbutter'"));
         assert!(script.contains("compdef _pb_complete peanutbutter pb"));
         assert!(script.contains("'/tmp/peanutbutter' complete-edit"));
+        assert!(script.contains("'/tmp/peanutbutter' complete-theme"));
     }
 
     #[test]
@@ -270,6 +286,8 @@ mod tests {
         // complete-edit is called from a helper function to avoid single-quote nesting
         assert!(script.contains("__pb_complete_edit"));
         assert!(script.contains("'/tmp/peanutbutter' complete-edit"));
+        assert!(script.contains("__pb_complete_theme"));
+        assert!(script.contains("complete -c peanutbutter -f -l theme"));
     }
 
     #[test]

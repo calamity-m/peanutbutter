@@ -123,7 +123,7 @@ Notes:
 - `search.frecency_weight` controls how much frecency influences the combined search ordering
 - `search.frecency.*` tunes the time/location/frequency balance for ranking
 - `search.fuzzy.*` tunes how much each snippet field contributes to fuzzy matching
-- `theme.*` currently controls the main selection and prompt colors; colors accept common names like `red`, `dark_gray`, `white`, or `#RRGGBB`
+- `theme.name` selects a built-in theme (`default`, `gruvbox`, `catppuccin`, `nord`, or `monochrome`); `theme.*` color values override that base and accept common names like `red`, `dark_gray`, `white`, or `#RRGGBB`. Use `--theme <name>` to select a clean named theme from the CLI.
 - `variables.<name>` defines reusable inputs for free-form placeholders like `<@http_method>` or `<@kube_context>`
 - A configured variable can provide either `suggestions = [...]` or `command = "..."`, and may also provide `default = "..."`
 - Suggestion commands (both inline `<@name:cmd>` and `[variables.name] command = "..."`) run under non-login, non-interactive `bash -c`. They inherit `$PATH` from peanutbutter's parent process but do **not** source `~/.bash_profile` or `~/.bashrc`, so they can't use shell aliases or functions defined there. This is deliberate: a login shell's startup output (e.g. `Agent pid NNNN` from ssh-agent) would otherwise leak into the suggestion list, and any interactive prompt it triggers (e.g. an ssh-add passphrase) would hang the TUI.
@@ -145,9 +145,9 @@ disable = false
 3. `peanutbutter fish [C+b]` — emit fish integration script (source it in `config.fish`)
 4. `peanutbutter edit ...` — edit a snippet file in `$EDITOR`/`$VISUAL`
 5. `peanutbutter lint [--strict] [--json]` — check configured snippet roots for authoring problems
-6. `peanutbutter execute` — run the inline TUI; output can be piped, e.g. `peanutbutter execute | grep foo`
+6. `peanutbutter execute [--theme <name>]` — run the inline TUI; output can be piped, e.g. `peanutbutter execute | grep foo`
 
-All three shell integrations install a `pb` alias and wire up `pb edit <TAB>` completion.
+All three shell integrations install a `pb` alias and wire up `pb edit <TAB>` plus `--theme <TAB>` completion.
 
 `pb lint` is read-only. It reports broken frontmatter, unused frontmatter/config variables, duplicate snippet slugs, suggestion-command failures, dry-run frecency GC orphans, and obvious static inline suggestion commands. Bare manual placeholders like `<@value>` are valid in normal mode. `--strict` adds style/structure checks such as undeclared manual placeholders, unbalanced fences, missing code-fence language tags, and confusing file-local variable overrides. Pretty output is written to stdout by default; `--json` writes a parseable object with stable `findings[].code` fields. Exit codes are `0` for no findings, `1` for lint findings, and `2` for operational failures that prevent lint from running.
 

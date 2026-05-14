@@ -76,6 +76,12 @@ path = 10
 body = 8
 
 [theme]
+# Select a built-in base theme:
+#   default, gruvbox, catppuccin, nord, monochrome
+# A CLI flag like `peanutbutter execute --theme nord` overrides this name and
+# skips the per-color overrides below.
+name = "default"
+
 # Colors accept common names like:
 #   red, blue, white, dark_gray
 # Or #RRGGBB hex values.
@@ -98,6 +104,17 @@ prompt_active_bg = "#f4d35e"
 
 # Error foreground.
 error_fg = "red"
+
+# To define a complete inline custom theme, set `name = "custom"` above and
+# provide every required base color in `[theme.custom]`:
+# [theme.custom]
+# accent = "#c678dd"
+# muted = "#5c6370"
+# selected_bg = "#3e4451"
+# selected_fg = "#abb2bf"
+# prompt_fg = "#282c34"
+# prompt_bg = "#61afef"
+# error_fg = "#e06c75"
 
 # Reusable predefined variable inputs.
 #
