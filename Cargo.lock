@@ -1026,7 +1026,7 @@ dependencies = [
 
 [[package]]
 name = "peanutbutter"
-version = "0.8.2"
+version = "0.9.0"
 dependencies = [
  "ansi-to-tui",
  "clap",
