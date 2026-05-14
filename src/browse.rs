@@ -16,6 +16,9 @@ pub struct BrowseSnippet {
 pub struct DirNode {
     pub children: BTreeMap<String, DirNode>,
     pub snippets: Vec<BrowseSnippet>,
+    /// Total snippets contained at or beneath this node. Precomputed once at
+    /// tree construction so render-time lookups stay O(1).
+    pub recursive_count: usize,
 }
 
 /// The full browse tree: a root `DirNode` whose shape mirrors the directory
@@ -39,6 +42,7 @@ impl BrowseTree {
             });
         }
         sort_snippets(&mut root);
+        compute_recursive_counts(&mut root);
         BrowseTree { root }
     }
 
@@ -70,6 +74,15 @@ fn ensure_dir<'a>(root: &'a mut DirNode, path: &[String]) -> &'a mut DirNode {
         cur = cur.children.entry(p.clone()).or_default();
     }
     cur
+}
+
+fn compute_recursive_counts(node: &mut DirNode) -> usize {
+    let mut total = node.snippets.len();
+    for child in node.children.values_mut() {
+        total += compute_recursive_counts(child);
+    }
+    node.recursive_count = total;
+    total
 }
 
 fn sort_snippets(node: &mut DirNode) {
@@ -301,6 +314,37 @@ mod tests {
             docker.snippets.is_empty(),
             "snippets now live under the docker.md file node, not the directory"
         );
+    }
+
+    #[test]
+    fn recursive_count_sums_descendants_and_matches_file_snippet_count() {
+        let tree = example_tree();
+        // File node count equals its snippet count.
+        let file = tree
+            .get(&["nested".into(), "docker".into(), "docker.md".into()])
+            .expect("docker.md");
+        assert_eq!(file.recursive_count, file.snippets.len());
+        assert!(file.recursive_count > 0);
+        // Directory count equals sum of descendants.
+        let docker = tree.get(&["nested".into(), "docker".into()]).unwrap();
+        let descendant_total: usize = docker
+            .children
+            .values()
+            .map(|c| c.recursive_count)
+            .sum::<usize>()
+            + docker.snippets.len();
+        assert_eq!(docker.recursive_count, descendant_total);
+        assert!(docker.recursive_count >= file.recursive_count);
+        // Root totals all snippets in tree.
+        let mut walk_total = 0usize;
+        fn walk(n: &DirNode, total: &mut usize) {
+            *total += n.snippets.len();
+            for c in n.children.values() {
+                walk(c, total);
+            }
+        }
+        walk(tree.root(), &mut walk_total);
+        assert_eq!(tree.root().recursive_count, walk_total);
     }
 
     #[test]
