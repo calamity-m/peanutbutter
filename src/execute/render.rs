@@ -146,9 +146,19 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
                 let padding = (main[0].height as usize).saturating_sub(total);
                 let mut items: Vec<ListItem<'_>> =
                     (0..padding).map(|_| ListItem::new("")).collect();
+                let current_dir = self.tree.get(&self.browse.path);
                 items.extend(browse_visible.iter().enumerate().rev().map(|(idx, entry)| {
                     let label = match entry {
-                        BrowseEntry::Directory(name) => format!("{name}/"),
+                        BrowseEntry::Directory(name) => {
+                            let child = current_dir.and_then(|d| d.children.get(name));
+                            let count = child.map(|c| c.recursive_count).unwrap_or(0);
+                            let is_file = child.is_some_and(|c| c.children.is_empty());
+                            if is_file {
+                                format!("{name} ({count})")
+                            } else {
+                                format!("{name}/ ({count})")
+                            }
+                        }
                         BrowseEntry::Snippet(snippet) => snippet.name.clone(),
                     };
                     ListItem::new(snippet_list_line(
