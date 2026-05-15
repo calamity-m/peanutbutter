@@ -1123,7 +1123,7 @@ mod tests {
         fs::write(
             &editor,
             format!(
-                "@echo off\r\n<nul set /p=%%~1 > \"{}\"\r\n",
+                "@echo off\r\n> \"{}\" echo|set /p dummy=%%~1\r\n",
                 editor_log.display()
             ),
         )
