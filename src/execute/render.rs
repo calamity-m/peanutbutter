@@ -17,6 +17,11 @@ use super::app::{ExecutionApp, NavigationMode, Screen, SuggestionProvider, tag_l
 use super::highlight::highlight_shell;
 use super::prompt::{PromptState, cursor_in_template, render_command_text, unique_variables};
 
+struct HighlightPattern {
+    field: Option<search::QueryField>,
+    pattern: Pattern,
+}
+
 enum PickerPreview<'a> {
     Snippet(&'a IndexedSnippet),
     Markdown(String),
@@ -51,9 +56,8 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
             &self.search_config,
         );
         let highlight_pattern = matches!(self.nav_mode, NavigationMode::Fuzzy)
-            .then(|| self.fuzzy.query.trim())
-            .filter(|query| !query.is_empty())
-            .map(build_pattern);
+            .then(|| compile_highlight_patterns(&self.fuzzy.query))
+            .unwrap_or_default();
         let mut highlighter = FuzzyScorer::new();
         let browse_visible = self.browse.visible(&self.tree);
         let tags_visible = self.visible_tags();
@@ -122,7 +126,7 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
                     let content = fuzzy_snippet_row_spans(
                         &self.theme,
                         hit.snippet,
-                        highlight_pattern.as_ref(),
+                        &highlight_pattern,
                         &mut highlighter,
                         idx == selected,
                     );
@@ -225,7 +229,7 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
         let preview_text = picker_preview_text(
             preview,
             inner.width as usize,
-            highlight_pattern.as_ref(),
+            &highlight_pattern,
             &mut highlighter,
             &self.theme,
         );
@@ -627,17 +631,27 @@ fn markdown_links_for_terminal(markdown: &str) -> String {
 fn picker_preview_text(
     preview: PickerPreview<'_>,
     width: usize,
-    pattern: Option<&Pattern>,
+    patterns: &[HighlightPattern],
     scorer: &mut FuzzyScorer,
     theme: &crate::config::Theme,
 ) -> Text<'static> {
     match preview {
         PickerPreview::Snippet(snippet) => {
-            render_snippet_preview_text(snippet, width, theme, pattern, scorer)
+            render_snippet_preview_text(snippet, width, theme, patterns, scorer)
         }
         PickerPreview::Markdown(markdown) => render_markdown_text(&markdown, width),
         PickerPreview::Empty => Text::from("No selection"),
     }
+}
+
+fn compile_highlight_patterns(query: &str) -> Vec<HighlightPattern> {
+    search::highlight_terms(query)
+        .into_iter()
+        .map(|term| HighlightPattern {
+            field: term.field,
+            pattern: build_pattern(&term.value),
+        })
+        .collect()
 }
 
 fn container_preview_markdown(name: &str, path: &[String], node: &DirNode) -> String {
@@ -766,7 +780,7 @@ fn clamp_list_offset(state: &mut ratatui::widgets::ListState, items_len: usize, 
 fn fuzzy_snippet_row_spans(
     theme: &crate::config::Theme,
     snippet: &IndexedSnippet,
-    pattern: Option<&Pattern>,
+    patterns: &[HighlightPattern],
     scorer: &mut FuzzyScorer,
     selected: bool,
 ) -> Vec<Span<'static>> {
@@ -777,7 +791,12 @@ fn fuzzy_snippet_row_spans(
     };
     let mut spans = highlighted_spans(
         snippet.name(),
-        &match_positions(scorer, pattern, snippet.name()),
+        &match_positions(
+            scorer,
+            patterns,
+            Some(search::QueryField::Name),
+            snippet.name(),
+        ),
         base,
         theme.fuzzy_highlight,
     );
@@ -785,7 +804,7 @@ fn fuzzy_snippet_row_spans(
     let path = snippet.relative_path_display();
     spans.extend(highlighted_spans(
         &path,
-        &match_positions(scorer, pattern, &path),
+        &match_positions(scorer, patterns, Some(search::QueryField::Path), &path),
         base,
         theme.fuzzy_highlight,
     ));
@@ -800,7 +819,7 @@ fn render_snippet_preview_text(
     snippet: &IndexedSnippet,
     width: usize,
     theme: &crate::config::Theme,
-    pattern: Option<&Pattern>,
+    patterns: &[HighlightPattern],
     scorer: &mut FuzzyScorer,
 ) -> Text<'static> {
     let mut text = Text::default();
@@ -808,7 +827,12 @@ fn render_snippet_preview_text(
     let mut title = vec![Span::styled("▍ ".to_string(), theme.fuzzy_highlight)];
     title.extend(highlighted_spans(
         snippet.name(),
-        &match_positions(scorer, pattern, snippet.name()),
+        &match_positions(
+            scorer,
+            patterns,
+            Some(search::QueryField::Name),
+            snippet.name(),
+        ),
         theme.emphasis,
         theme.fuzzy_highlight,
     ));
@@ -820,7 +844,7 @@ fn render_snippet_preview_text(
         "path",
         highlighted_spans(
             &path,
-            &match_positions(scorer, pattern, &path),
+            &match_positions(scorer, patterns, Some(search::QueryField::Path), &path),
             Style::default(),
             theme.fuzzy_highlight,
         ),
@@ -844,7 +868,7 @@ fn render_snippet_preview_text(
             tag_spans.push(Span::raw("`"));
             tag_spans.extend(highlighted_spans(
                 tag,
-                &match_positions(scorer, pattern, tag),
+                &match_positions(scorer, patterns, Some(search::QueryField::Tag), tag),
                 Style::default(),
                 theme.fuzzy_highlight,
             ));
@@ -877,7 +901,7 @@ fn render_snippet_preview_text(
         let description_display = text_plain(&description_text);
         text.extend(highlight_text(
             description_text,
-            &match_positions(scorer, pattern, &description_display),
+            &match_positions(scorer, patterns, None, &description_display),
             theme.fuzzy_highlight,
         ));
         text.lines.push(Line::default());
@@ -887,7 +911,12 @@ fn render_snippet_preview_text(
     let body_text = highlight_shell(snippet.body());
     text.extend(highlight_text(
         body_text,
-        &match_positions(scorer, pattern, snippet.body()),
+        &match_positions(
+            scorer,
+            patterns,
+            Some(search::QueryField::Body),
+            snippet.body(),
+        ),
         theme.fuzzy_highlight,
     ));
     text
@@ -913,12 +942,22 @@ fn divider_line(theme: &crate::config::Theme) -> Line<'static> {
 
 fn match_positions(
     scorer: &mut FuzzyScorer,
-    pattern: Option<&Pattern>,
+    patterns: &[HighlightPattern],
+    field: Option<search::QueryField>,
     haystack: &str,
 ) -> Vec<usize> {
-    pattern
-        .and_then(|pattern| scorer.indices(pattern, haystack))
-        .unwrap_or_default()
+    let mut indices = Vec::new();
+    for pattern in patterns {
+        if pattern.field.is_some() && pattern.field != field {
+            continue;
+        }
+        if let Some(mut matched) = scorer.indices(&pattern.pattern, haystack) {
+            indices.append(&mut matched);
+        }
+    }
+    indices.sort_unstable();
+    indices.dedup();
+    indices
 }
 
 fn highlighted_spans(
@@ -1094,15 +1133,41 @@ mod tests {
         }
     }
 
+    fn substr_styles(chars: &[StyledChar], needle: &str) -> Vec<Style> {
+        let rendered: String = chars.iter().map(|styled| styled.ch).collect();
+        let byte_idx = rendered.find(needle).expect("substring in rendered text");
+        let idx = rendered[..byte_idx].chars().count();
+        chars[idx..idx + needle.chars().count()]
+            .iter()
+            .map(|styled| styled.style)
+            .collect()
+    }
+
+    fn assert_substr_style(chars: &[StyledChar], needle: &str, expected: Style) {
+        let styles = substr_styles(chars, needle);
+        assert!(
+            styles.iter().all(|style| *style == expected),
+            "expected {needle:?} to use {expected:?}, got {styles:?}"
+        );
+    }
+
+    fn assert_substr_not_style(chars: &[StyledChar], needle: &str, unexpected: Style) {
+        let styles = substr_styles(chars, needle);
+        assert!(
+            styles.iter().all(|style| *style != unexpected),
+            "expected {needle:?} not to use {unexpected:?}"
+        );
+    }
+
     #[test]
     fn fuzzy_row_highlights_name_and_path_matches() {
         let theme = crate::config::Theme::default();
         let mut scorer = FuzzyScorer::new();
-        let pattern = build_pattern("dock");
+        let patterns = compile_highlight_patterns("dock");
         let spans = fuzzy_snippet_row_spans(
             &theme,
             &snippet("docker run", "desc", "echo hi", &[]),
-            Some(&pattern),
+            &patterns,
             &mut scorer,
             false,
         );
@@ -1115,12 +1180,12 @@ mod tests {
     fn preview_highlights_markdown_description_text() {
         let theme = crate::config::Theme::default();
         let mut scorer = FuzzyScorer::new();
-        let pattern = build_pattern("docker");
+        let patterns = compile_highlight_patterns("docker");
         let preview = render_snippet_preview_text(
             &snippet("Demo", "docker setup", "echo hi", &["ops"]),
             80,
             &theme,
-            Some(&pattern),
+            &patterns,
             &mut scorer,
         );
         let chars = text_to_styled_chars(&preview);
@@ -1132,6 +1197,83 @@ mod tests {
             docker
                 .iter()
                 .all(|styled| styled.style == theme.fuzzy_highlight)
+        );
+    }
+
+    #[test]
+    fn preview_highlights_single_operator_value_in_name() {
+        let theme = crate::config::Theme::default();
+        let mut scorer = FuzzyScorer::new();
+        let patterns = compile_highlight_patterns("name:prompt");
+        let preview = render_snippet_preview_text(
+            &snippet("prompt helper", "desc", "echo hi", &[]),
+            80,
+            &theme,
+            &patterns,
+            &mut scorer,
+        );
+        let chars = text_to_styled_chars(&preview);
+        let rendered: String = chars.iter().map(|styled| styled.ch).collect();
+        let byte_idx = rendered.find("prompt").expect("name in preview");
+        let idx = rendered[..byte_idx].chars().count();
+        let prompt: Vec<_> = chars[idx..idx + "prompt".chars().count()].iter().collect();
+        assert!(
+            prompt
+                .iter()
+                .all(|styled| styled.style == theme.emphasis.patch(theme.fuzzy_highlight))
+        );
+    }
+
+    #[test]
+    fn preview_highlights_each_operator_in_its_field() {
+        let theme = crate::config::Theme::default();
+        let mut scorer = FuzzyScorer::new();
+        let patterns = compile_highlight_patterns(
+            "name:NameNeedle path:demo tag:TagNeedle snippet:BodyNeedle",
+        );
+        let preview = render_snippet_preview_text(
+            &snippet(
+                "NameNeedle helper",
+                "DescriptionNeedle",
+                "echo BodyNeedle",
+                &["TagNeedle"],
+            ),
+            80,
+            &theme,
+            &patterns,
+            &mut scorer,
+        );
+        let chars = text_to_styled_chars(&preview);
+
+        assert_substr_style(
+            &chars,
+            "NameNeedle",
+            theme.emphasis.patch(theme.fuzzy_highlight),
+        );
+        assert_substr_style(&chars, "demo", theme.fuzzy_highlight);
+        assert_substr_style(&chars, "TagNeedle", theme.fuzzy_highlight);
+        assert_substr_style(&chars, "BodyNeedle", theme.fuzzy_highlight);
+        assert_substr_not_style(&chars, "DescriptionNeedle", theme.fuzzy_highlight);
+    }
+
+    #[test]
+    fn preview_does_not_apply_field_operator_highlight_to_other_fields() {
+        let theme = crate::config::Theme::default();
+        let mut scorer = FuzzyScorer::new();
+        let patterns = compile_highlight_patterns("snippet:NameNeedle");
+        let preview = render_snippet_preview_text(
+            &snippet("NameNeedle helper", "", "echo BodyNeedle", &[]),
+            80,
+            &theme,
+            &patterns,
+            &mut scorer,
+        );
+        let chars = text_to_styled_chars(&preview);
+
+        assert_substr_not_style(
+            &chars,
+            "NameNeedle",
+            theme.emphasis.patch(theme.fuzzy_highlight),
         );
     }
 
@@ -1148,7 +1290,7 @@ mod tests {
             ),
             80,
             &theme,
-            None,
+            &[],
             &mut scorer,
         );
         let rendered = text_plain(&preview);
@@ -1169,7 +1311,7 @@ mod tests {
             &snippet("Demo", "plain text description", "echo hi", &[]),
             80,
             &theme,
-            None,
+            &[],
             &mut scorer,
         );
 
@@ -1184,7 +1326,7 @@ mod tests {
             &snippet("Demo", "**description**", "echo **literal**", &[]),
             80,
             &theme,
-            None,
+            &[],
             &mut scorer,
         );
 
@@ -1195,12 +1337,12 @@ mod tests {
     fn preview_body_highlight_patches_existing_shell_style() {
         let theme = crate::config::Theme::default();
         let mut scorer = FuzzyScorer::new();
-        let pattern = build_pattern("home");
+        let patterns = compile_highlight_patterns("home");
         let preview = render_snippet_preview_text(
             &snippet("Demo", "", "echo $HOME", &[]),
             80,
             &theme,
-            Some(&pattern),
+            &patterns,
             &mut scorer,
         );
         let chars = text_to_styled_chars(&preview);
@@ -1219,7 +1361,7 @@ mod tests {
         let theme = crate::config::Theme::default();
         let mut scorer = FuzzyScorer::new();
         let s = snippet_with_language("deploy", "desc", "kubectl apply", &[], Some("bash"));
-        let spans = fuzzy_snippet_row_spans(&theme, &s, None, &mut scorer, false);
+        let spans = fuzzy_snippet_row_spans(&theme, &s, &[], &mut scorer, false);
         let rendered: String = spans.iter().map(|span| span.content.as_ref()).collect();
         assert!(
             rendered.contains(" · bash"),
@@ -1232,7 +1374,7 @@ mod tests {
         let theme = crate::config::Theme::default();
         let mut scorer = FuzzyScorer::new();
         let s = snippet_with_language("deploy", "desc", "kubectl apply", &[], Some("bash"));
-        let preview = render_snippet_preview_text(&s, 80, &theme, None, &mut scorer);
+        let preview = render_snippet_preview_text(&s, 80, &theme, &[], &mut scorer);
         let rendered: String = preview
             .lines
             .iter()

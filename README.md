@@ -46,8 +46,9 @@ Nothing can do that sadly, but peanutbutter tries to get close by understanding:
 Peanutbutter has fuzzy find, structured "file-list", and tag modes. `Ctrl+T` cycles through them in the picker: fuzzy -> file-list -> tags -> fuzzy.
 
 - Fuzzy finding is basically like fzf, I just stand on the back of helix's `nucleo-matcher` crate.
+- Fuzzy mode supports these field operators for precise searches: `name:`, `path:`, `tag:`, and `snippet:`. Operators can be mixed with ordinary fuzzy text, so `tag:docker logs` means docker-tagged snippets that also match `logs` somewhere in the normal searchable text. `snippet:` searches the executable snippet code; `body:` is accepted as a compatibility alias.
 - File-list mode lets you walk through your snippets as they're structured via directories and files. I find this useful when I need inspiration on what I want to do. It's hard to explain, but when you **know** you need to do something, but you want to explore what you have.
-- Tags mode lists frontmatter tags with snippet counts. Type to filter tags, press Enter to drill into snippets for the highlighted tag, then type again to filter that snippet list by name. In the drilled list, Backspace clears the snippet filter before returning to tags; Esc returns to tags immediately. Snippets with no tags appear in `(untagged)`, and snippets with multiple tags count once under each tag. Query syntax like `tag:foo` is tracked as follow-up work; use the dedicated tags mode for now.
+- Tags mode lists frontmatter tags with snippet counts. Type to filter tags, press Enter to drill into snippets for the highlighted tag, then type again to filter that snippet list by name. In the drilled list, Backspace clears the snippet filter before returning to tags; Esc returns to tags immediately. Snippets with no tags appear in `(untagged)`, and snippets with multiple tags count once under each tag.
 
 ## Curating, Editing and Maintaining Snippets
 
