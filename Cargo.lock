@@ -1031,7 +1031,6 @@ dependencies = [
  "ansi-to-tui",
  "clap",
  "crossterm 0.28.1",
- "libc",
  "nucleo-matcher",
  "owo-colors",
  "ratatui",

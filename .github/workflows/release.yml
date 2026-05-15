@@ -51,13 +51,17 @@ jobs:
     permissions:
       contents: write
     needs: [ci, release_notes]
-    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         include:
-          - target: x86_64-unknown-linux-gnu
-          - target: x86_64-unknown-linux-musl
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
@@ -67,15 +71,43 @@ jobs:
       - name: Install musl tools
         if: matrix.target == 'x86_64-unknown-linux-musl'
         run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - name: Test Windows target
+        if: runner.os == 'Windows'
+        run: cargo test --target ${{ matrix.target }}
       - name: Build release
         run: cargo build --release --target ${{ matrix.target }}
-      - name: Package release artifact
+      - name: Package Unix release artifact
+        if: runner.os != 'Windows'
         run: |
           mkdir -p dist
           tar -czf "dist/${{ env.BINARY_NAME }}-${{ matrix.target }}.tar.gz" \
             -C "target/${{ matrix.target }}/release" "${{ env.BINARY_NAME }}"
+      - name: Package Windows release artifact
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Compress-Archive -Path "target/${{ matrix.target }}/release/${{ env.BINARY_NAME }}.exe" -DestinationPath "dist/${{ env.BINARY_NAME }}-${{ matrix.target }}.zip"
+      - name: Upload release artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.BINARY_NAME }}-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+
+  publish_release:
+    permissions:
+      contents: write
+    needs: [release, release_notes]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/${{ env.BINARY_NAME }}-${{ matrix.target }}.tar.gz
+          files: dist/*
           body: ${{ needs.release_notes.outputs.body }}

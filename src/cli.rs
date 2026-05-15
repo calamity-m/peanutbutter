@@ -60,6 +60,11 @@ pub enum Command {
         #[arg(default_value = "C+b")]
         binding: String,
     },
+    /// Emit PowerShell integration code for the given PSReadLine binding.
+    Powershell {
+        #[arg(default_value = "C+b")]
+        binding: String,
+    },
     /// Check snippet files for authoring problems.
     Lint {
         /// Include stricter style and structure checks.
@@ -115,7 +120,7 @@ pub struct ExecuteCommandResult {
 pub fn after_help(paths: &Paths) -> String {
     let mut out = String::new();
     out.push_str(&format!(
-        "shell integration: `{BINARY_NAME} bash|zsh|fish` also defines `{BASH_ALIAS_NAME}`\n\n"
+        "shell integration: `{BINARY_NAME} bash|zsh|fish|powershell` also defines `{BASH_ALIAS_NAME}`\n\n"
     ));
     out.push_str("snippet roots:\n");
     for root in &paths.snippet_roots {
@@ -843,6 +848,14 @@ mod tests {
             })
         );
         assert_eq!(
+            Cli::try_parse_from(["peanutbutter", "powershell"])
+                .unwrap()
+                .command,
+            Some(Command::Powershell {
+                binding: "C+b".to_string()
+            })
+        );
+        assert_eq!(
             Cli::try_parse_from(["peanutbutter", "complete-edit", "nested/"])
                 .unwrap()
                 .command,
@@ -893,7 +906,7 @@ mod tests {
     fn after_help_mentions_all_shells_and_pb_alias() {
         let paths = test_paths(Path::new("/tmp/snippets"));
         let help = after_help(&paths);
-        assert!(help.contains("bash|zsh|fish` also defines `pb`"));
+        assert!(help.contains("bash|zsh|fish|powershell` also defines `pb`"));
         assert!(help.contains("snippet roots:"));
         assert!(help.contains("/tmp/snippets"));
     }
