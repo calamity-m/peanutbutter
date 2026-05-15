@@ -41,6 +41,7 @@ pub mod index;
 pub mod lint;
 pub mod parser;
 pub mod search;
+pub(crate) mod shell;
 pub mod stats;
 pub mod tui_chrome;
 

@@ -568,7 +568,7 @@ pub fn command_suggestions(command: &str, cwd: &Path, timeout_ms: u64) -> io::Re
     // whose startup output (e.g. `Agent pid NNNN` from ssh-agent) leaks into
     // stdout as fake suggestions and whose prompts (e.g. ssh-add passphrase)
     // block on captured stdin.
-    let mut child = Command::new("bash")
+    let mut child = Command::new(crate::shell::bash_command())
         .arg("-c")
         .arg(command)
         .current_dir(cwd)

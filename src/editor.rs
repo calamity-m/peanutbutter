@@ -59,9 +59,21 @@ pub fn open_snippet(snippet: &IndexedSnippet, editor_override: Option<&str>) -> 
 /// only the file path.
 pub fn open(target: &EditorTarget, editor_override: Option<&str>) -> io::Result<()> {
     let editor = resolve_editor(editor_override)?;
-    let args = editor_args(&editor, target);
+    if direct_editor_command(&editor) {
+        let status = ProcessCommand::new(&editor)
+            .args(editor_arg_values(&editor, target))
+            .status()?;
+        if status.success() {
+            return Ok(());
+        }
+        return Err(io::Error::other(format!(
+            "editor exited unsuccessfully for {}",
+            target.path.display()
+        )));
+    }
 
-    let status = ProcessCommand::new("bash")
+    let args = editor_args(&editor, target);
+    let status = ProcessCommand::new(crate::shell::bash_command())
         .arg("-lc")
         .arg("eval \"$PB_EDITOR\" $PB_EDITOR_ARGS")
         .env("PB_EDITOR", editor)
@@ -98,12 +110,23 @@ fn resolve_editor(editor_override: Option<&str>) -> io::Result<String> {
 }
 
 fn editor_args(editor: &str, target: &EditorTarget) -> String {
-    line_args(editor, target)
-        .unwrap_or_else(|| vec![target.path.to_string_lossy().into_owned()])
+    editor_arg_values(editor, target)
         .into_iter()
         .map(|arg| shell_quote(&arg))
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+fn editor_arg_values(editor: &str, target: &EditorTarget) -> Vec<String> {
+    line_args(editor, target).unwrap_or_else(|| vec![target.path.to_string_lossy().into_owned()])
+}
+
+fn direct_editor_command(editor: &str) -> bool {
+    let editor = editor.trim();
+    !editor.is_empty()
+        && !editor
+            .chars()
+            .any(|c| c.is_whitespace() || "'\"$;&|<>(){}[]*?!~`".contains(c))
 }
 
 fn line_args(editor: &str, target: &EditorTarget) -> Option<Vec<String>> {

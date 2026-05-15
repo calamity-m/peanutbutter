@@ -760,9 +760,11 @@ mod tests {
     use super::*;
     use crate::config::Paths;
     use crate::domain::SnippetId;
+    #[cfg(not(windows))]
     use std::process::Command as ProcessCommand;
     use std::sync::atomic::{AtomicU64, Ordering};
 
+    #[cfg(not(windows))]
     fn shell_quote(value: &str) -> String {
         format!("'{}'", value.replace('\'', "'\\''"))
     }
@@ -1112,21 +1114,37 @@ mod tests {
         let root = temp_dir("edit-command");
         let paths = test_paths(&root);
         let editor_log = root.join("editor.log");
+        #[cfg(windows)]
+        let editor = root.join("fake-editor.cmd");
+        #[cfg(not(windows))]
         let editor = root.join("fake-editor.sh");
+
+        #[cfg(windows)]
         fs::write(
             &editor,
             format!(
-                "#!/usr/bin/env bash\nprintf '%s' \"$1\" > {}\n",
-                shell_quote(&editor_log.to_string_lossy())
+                "@echo off\r\n<nul set /p=%%~1 > \"{}\"\r\n",
+                editor_log.display()
             ),
         )
         .unwrap();
-        let status = ProcessCommand::new("chmod")
-            .arg("+x")
-            .arg(&editor)
-            .status()
+        #[cfg(not(windows))]
+        {
+            fs::write(
+                &editor,
+                format!(
+                    "#!/usr/bin/env bash\nprintf '%s' \"$1\" > {}\n",
+                    shell_quote(&editor_log.to_string_lossy())
+                ),
+            )
             .unwrap();
-        assert!(status.success());
+            let status = ProcessCommand::new("chmod")
+                .arg("+x")
+                .arg(&editor)
+                .status()
+                .unwrap();
+            assert!(status.success());
+        }
 
         let target = run_edit_command_with_editor(
             &paths,
