@@ -1123,7 +1123,7 @@ mod tests {
         fs::write(
             &editor,
             format!(
-                "@echo off\r\n> \"{}\" echo %%~1\r\nexit /b 0\r\n",
+                "@echo off\r\n> \"{}\" echo %~1\r\nexit /b 0\r\n",
                 editor_log.display()
             ),
         )
