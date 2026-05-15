@@ -10,11 +10,9 @@ use crossterm::execute;
 use crossterm::terminal::{self, ClearType, disable_raw_mode, enable_raw_mode};
 use ratatui::backend::CrosstermBackend;
 use ratatui::{Terminal, TerminalOptions, Viewport};
-use std::fs;
 use std::io;
 use std::io::IsTerminal;
 use std::io::Write;
-use std::os::fd::{FromRawFd, OwnedFd};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use super::app::{AppEvent, ExecutionApp, SuggestionProvider, SystemSuggestionProvider};
@@ -57,8 +55,8 @@ pub fn run_execute(
 /// Core TUI runner — sets up the terminal, runs the event loop, tears down.
 ///
 /// Steps:
-/// 1. Redirect stdout to the TTY if it was piped (needed so the shell can
-///    capture the emitted command while we still draw to the terminal).
+/// 1. Choose stdout or stderr for TUI drawing. Shell integrations capture stdout
+///    for the emitted command, so stderr is used when stdout is piped.
 /// 2. Enter raw mode via [`RawModeGuard`].
 /// 3. Build a ratatui inline viewport and enter the draw/poll loop.
 /// 4. On exit, drain any buffered key-release events (kitty keyboard protocol)
@@ -81,9 +79,9 @@ pub fn run_execute_with_provider<P: SuggestionProvider>(
         options.theme,
         provider,
     );
-    let _stdout_guard = StdoutTtyGuard::enter()?;
-    let mut raw_mode = RawModeGuard::enter()?;
-    let mut terminal = build_terminal(options.viewport_height)?;
+    let tui_output = TuiOutputKind::detect();
+    let mut raw_mode = RawModeGuard::enter(tui_output)?;
+    let mut terminal = build_terminal(options.viewport_height, tui_output)?;
     let mut viewport_top: Option<u16> = None;
     let outcome = loop {
         terminal.draw(|frame| {
@@ -113,11 +111,11 @@ pub fn run_execute_with_provider<P: SuggestionProvider>(
                     ));
                     continue;
                 };
-                cleanup_terminal(viewport_top)?;
+                cleanup_terminal(viewport_top, tui_output)?;
                 raw_mode.suspend()?;
                 let edit_result = edit_snippet(&snippet);
                 raw_mode.resume()?;
-                terminal = build_terminal(options.viewport_height)?;
+                terminal = build_terminal(options.viewport_height, tui_output)?;
                 viewport_top = None;
                 app.status = Some(edit_status(edit_result, &mut app, &options.snippet_roots));
             }
@@ -130,13 +128,16 @@ pub fn run_execute_with_provider<P: SuggestionProvider>(
     while event::poll(Duration::ZERO).unwrap_or(false) {
         let _ = event::read();
     }
-    cleanup_terminal(viewport_top)?;
+    cleanup_terminal(viewport_top, tui_output)?;
     Ok(outcome)
 }
 
-fn build_terminal(viewport_height: u16) -> io::Result<Terminal<CrosstermBackend<io::Stdout>>> {
-    let backend = CrosstermBackend::new(io::stdout());
-    let viewport_height = inline_viewport_height(viewport_height)?;
+fn build_terminal(
+    viewport_height: u16,
+    output: TuiOutputKind,
+) -> io::Result<Terminal<CrosstermBackend<TuiOutput>>> {
+    let backend = CrosstermBackend::new(output.writer());
+    let viewport_height = inline_viewport_height(viewport_height);
     match Terminal::with_options(
         backend,
         TerminalOptions {
@@ -144,13 +145,12 @@ fn build_terminal(viewport_height: u16) -> io::Result<Terminal<CrosstermBackend<
         },
     ) {
         Ok(terminal) => Ok(terminal),
-        Err(_) => Terminal::new(CrosstermBackend::new(io::stdout())),
+        Err(_) => Terminal::new(CrosstermBackend::new(output.writer())),
     }
 }
 
-fn inline_viewport_height(max_height: u16) -> io::Result<u16> {
-    let _ = terminal::size()?;
-    Ok(compact_viewport_height(max_height))
+fn inline_viewport_height(max_height: u16) -> u16 {
+    compact_viewport_height(max_height)
 }
 
 pub(crate) fn compact_viewport_height(max_height: u16) -> u16 {
@@ -205,26 +205,74 @@ fn reload_after_edit<P: SuggestionProvider>(
     }
 }
 
+#[derive(Clone, Copy)]
+enum TuiOutputKind {
+    Stdout,
+    Stderr,
+}
+
+impl TuiOutputKind {
+    fn detect() -> Self {
+        if io::stdout().is_terminal() {
+            Self::Stdout
+        } else {
+            Self::Stderr
+        }
+    }
+
+    fn writer(self) -> TuiOutput {
+        match self {
+            Self::Stdout => TuiOutput::Stdout(io::stdout()),
+            Self::Stderr => TuiOutput::Stderr(io::stderr()),
+        }
+    }
+}
+
+enum TuiOutput {
+    Stdout(io::Stdout),
+    Stderr(io::Stderr),
+}
+
+impl Write for TuiOutput {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        match self {
+            Self::Stdout(stdout) => stdout.write(buf),
+            Self::Stderr(stderr) => stderr.write(buf),
+        }
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        match self {
+            Self::Stdout(stdout) => stdout.flush(),
+            Self::Stderr(stderr) => stderr.flush(),
+        }
+    }
+}
+
 /// RAII guard that enables terminal raw mode on construction and disables it
 /// on drop, even if the TUI exits via `?`.
 struct RawModeGuard {
     active: bool,
+    output: TuiOutputKind,
 }
 
 impl RawModeGuard {
-    fn enter() -> io::Result<Self> {
+    fn enter(output: TuiOutputKind) -> io::Result<Self> {
         enable_raw_mode()?;
         // Bracketed paste lets the terminal deliver pasted text as a single
         // Event::Paste(String) — preserving newlines — instead of a stream of
         // KeyCode::Char events that strip them. Best-effort: terminals that
         // don't support it silently ignore the escape.
-        let _ = execute!(io::stdout(), EnableBracketedPaste);
-        Ok(Self { active: true })
+        let _ = execute!(output.writer(), EnableBracketedPaste);
+        Ok(Self {
+            active: true,
+            output,
+        })
     }
 
     fn suspend(&mut self) -> io::Result<()> {
         if self.active {
-            let _ = execute!(io::stdout(), DisableBracketedPaste);
+            let _ = execute!(self.output.writer(), DisableBracketedPaste);
             disable_raw_mode()?;
             self.active = false;
         }
@@ -234,7 +282,7 @@ impl RawModeGuard {
     fn resume(&mut self) -> io::Result<()> {
         if !self.active {
             enable_raw_mode()?;
-            let _ = execute!(io::stdout(), EnableBracketedPaste);
+            let _ = execute!(self.output.writer(), EnableBracketedPaste);
             self.active = true;
         }
         Ok(())
@@ -244,97 +292,25 @@ impl RawModeGuard {
 impl Drop for RawModeGuard {
     fn drop(&mut self) {
         if self.active {
-            let _ = execute!(io::stdout(), DisableBracketedPaste);
+            let _ = execute!(self.output.writer(), DisableBracketedPaste);
             let _ = disable_raw_mode();
         }
     }
 }
 
-/// RAII guard that redirects stdout to the TTY when stdout is not a terminal.
-///
-/// When peanutbutter is invoked via the shell hotkey (`pb`), bash captures
-/// stdout to write the selected command into the readline buffer. That means
-/// fd 1 is a pipe, not a terminal — we can't draw the TUI there. This guard
-/// saves fd 1, points it at stderr (if that's a terminal) or `/dev/tty`, and
-/// restores the original fd on drop so the caller can still print the command.
-struct StdoutTtyGuard {
-    saved_stdout: Option<OwnedFd>,
-}
-
-impl StdoutTtyGuard {
-    fn enter() -> io::Result<Self> {
-        if io::stdout().is_terminal() {
-            return Ok(Self { saved_stdout: None });
-        }
-
-        io::stdout().flush()?;
-        let saved = unsafe { libc::dup(libc::STDOUT_FILENO) };
-        if saved < 0 {
-            return Err(io::Error::last_os_error());
-        }
-
-        if io::stderr().is_terminal() {
-            if unsafe { libc::dup2(libc::STDERR_FILENO, libc::STDOUT_FILENO) } < 0 {
-                let _ = unsafe { libc::close(saved) };
-                return Err(io::Error::last_os_error());
-            }
-            return Ok(Self {
-                saved_stdout: Some(unsafe { OwnedFd::from_raw_fd(saved) }),
-            });
-        }
-
-        let tty = match fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open("/dev/tty")
-        {
-            Ok(tty) => tty,
-            Err(err) => {
-                let _ = unsafe { libc::close(saved) };
-                return Err(err);
-            }
-        };
-        if unsafe { libc::dup2(std::os::fd::AsRawFd::as_raw_fd(&tty), libc::STDOUT_FILENO) } < 0 {
-            let _ = unsafe { libc::close(saved) };
-            return Err(io::Error::last_os_error());
-        }
-        drop(tty);
-
-        Ok(Self {
-            saved_stdout: Some(unsafe { OwnedFd::from_raw_fd(saved) }),
-        })
-    }
-}
-
-impl Drop for StdoutTtyGuard {
-    fn drop(&mut self) {
-        let Some(saved_stdout) = &self.saved_stdout else {
-            return;
-        };
-        let _ = io::stdout().flush();
-        let _ = unsafe {
-            libc::dup2(
-                std::os::fd::AsRawFd::as_raw_fd(saved_stdout),
-                libc::STDOUT_FILENO,
-            )
-        };
-        let _ = io::stdout().flush();
-    }
-}
-
-fn cleanup_terminal(viewport_top: Option<u16>) -> io::Result<()> {
-    let mut stdout = io::stdout();
+fn cleanup_terminal(viewport_top: Option<u16>, output: TuiOutputKind) -> io::Result<()> {
+    let mut writer = output.writer();
     if let Some(y) = viewport_top {
         crossterm::execute!(
-            stdout,
+            writer,
             cursor::MoveTo(0, y),
             terminal::Clear(ClearType::FromCursorDown),
             cursor::Show
         )?;
     } else {
-        crossterm::execute!(stdout, cursor::Show)?;
+        crossterm::execute!(writer, cursor::Show)?;
     }
-    stdout.flush()?;
+    writer.flush()?;
     Ok(())
 }
 

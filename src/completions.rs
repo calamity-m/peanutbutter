@@ -1,7 +1,7 @@
-//! Shell integration scripts for bash, zsh, and fish.
+//! Shell integration scripts for bash, zsh, fish, and PowerShell.
 //!
-//! Each public function emits a shell script intended to be eval'd (bash/zsh)
-//! or sourced (fish) from the user's shell init file. The script installs a
+//! Each public function emits a shell script intended to be eval'd (bash/zsh),
+//! sourced (fish), or added to the user's PowerShell profile. The script installs a
 //! key binding that runs the peanutbutter TUI and injects the selected command
 //! into the shell's readline buffer, plus tab-completion for `peanutbutter edit`.
 
@@ -71,7 +71,7 @@ __pb_complete() {{
     done < <({executable} complete-edit "$cur")
     return 0
   fi
-  COMPREPLY=( $(compgen -W "--theme bash edit execute zsh fish lint gc new stats" -- "$cur") )
+  COMPREPLY=( $(compgen -W "--theme bash edit execute zsh fish powershell lint gc new stats" -- "$cur") )
 }}
 complete -o nospace -F __pb_complete {BINARY_NAME} {BASH_ALIAS_NAME}
 "#
@@ -133,7 +133,7 @@ _pb_complete() {{
     candidates=( ${{(f)"$({executable} complete-edit "${{words[CURRENT]}}")"}} )
     compadd -S '' -- "${{candidates[@]}}"
   else
-    compadd -- --theme bash edit execute zsh fish lint gc new stats
+    compadd -- --theme bash edit execute zsh fish powershell lint gc new stats
   fi
 }}
 compdef _pb_complete {BINARY_NAME} {BASH_ALIAS_NAME}
@@ -188,9 +188,59 @@ function {BINARY_NAME}
   __pb_dispatch $argv
 end
 complete -c {BINARY_NAME} -f -l theme -a '(__pb_complete_theme)'
-complete -c {BINARY_NAME} -f -n 'not __fish_seen_subcommand_from bash edit execute zsh fish lint gc new stats' -a 'bash edit execute zsh fish lint gc new stats'
+complete -c {BINARY_NAME} -f -n 'not __fish_seen_subcommand_from bash edit execute zsh fish powershell lint gc new stats' -a 'bash edit execute zsh fish powershell lint gc new stats'
 complete -c {BINARY_NAME} -f -n '__fish_seen_subcommand_from edit' -a '(__pb_complete_edit)'
 complete -c {BASH_ALIAS_NAME} -w {BINARY_NAME}
+"#
+    ))
+}
+
+/// Emit the PowerShell integration script using the path of the currently running
+/// executable. Intended for `peanutbutter powershell`; the caller should add the
+/// output to their PowerShell profile.
+pub fn powershell_integration_for_current_exe(binding: &str) -> io::Result<String> {
+    let exe = env::current_exe()?;
+    powershell_integration_script(binding, &exe)
+}
+
+/// Build the PowerShell integration script for a given `executable` path and
+/// PSReadLine `binding` (e.g. `"C+b"`). Separated from
+/// [`powershell_integration_for_current_exe`] so tests can supply a controlled path.
+pub fn powershell_integration_script(binding: &str, executable: &Path) -> io::Result<String> {
+    let binding = powershell_binding(binding)
+        .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err))?;
+    let executable = powershell_quote(&executable.to_string_lossy());
+    Ok(format!(
+        r#"$script:__pb_exe = {executable}
+function __pb_dispatch {{
+  if ($args.Count -gt 0 -and $args[0] -eq 'new') {{
+    $oldHistory = $env:PEANUTBUTTER_HISTORY
+    $env:PEANUTBUTTER_HISTORY = (Get-History -Count 50 | Sort-Object Id -Descending | ForEach-Object CommandLine | Where-Object {{ $_ -notmatch '^\s*(pb|peanutbutter)(\s|$)' }} | Select-Object -First 50) -join [char]31
+    try {{ & $script:__pb_exe @args }} finally {{
+      if ($null -eq $oldHistory) {{ Remove-Item Env:\PEANUTBUTTER_HISTORY -ErrorAction SilentlyContinue }} else {{ $env:PEANUTBUTTER_HISTORY = $oldHistory }}
+    }}
+  }} else {{
+    & $script:__pb_exe @args
+  }}
+}}
+function {BASH_ALIAS_NAME} {{ __pb_dispatch @args }}
+function {BINARY_NAME} {{ __pb_dispatch @args }}
+Set-PSReadLineKeyHandler -Chord '{binding}' -ScriptBlock {{
+  $cmd = (& $script:__pb_exe execute) -join [Environment]::NewLine
+  if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrEmpty($cmd)) {{ return }}
+  [Microsoft.PowerShell.PSConsoleReadLine]::Insert($cmd)
+}}
+Register-ArgumentCompleter -CommandName {BINARY_NAME},{BASH_ALIAS_NAME} -ScriptBlock {{
+  param($wordToComplete, $commandAst, $cursorPosition)
+  $words = @($commandAst.CommandElements | ForEach-Object {{ $_.Extent.Text }})
+  if ($words.Count -ge 2 -and ($words[$words.Count - 1] -eq '--theme' -or $words[$words.Count - 2] -eq '--theme')) {{
+    & $script:__pb_exe complete-theme $wordToComplete | ForEach-Object {{ [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_) }}
+  }} elseif ($words.Count -ge 2 -and $words[1] -eq 'edit') {{
+    & $script:__pb_exe complete-edit $wordToComplete | ForEach-Object {{ [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_) }}
+  }} else {{
+    'bash','edit','execute','zsh','fish','powershell','lint','gc','new','stats','--theme' | Where-Object {{ $_ -like "$wordToComplete*" }} | ForEach-Object {{ [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_) }}
+  }}
+}}
 "#
     ))
 }
@@ -223,6 +273,14 @@ fn zsh_bindkey_binding(binding: &str) -> Result<String, String> {
 
 fn fish_bind_key(binding: &str) -> Result<String, String> {
     parse_ctrl_key(binding).map(|ch| format!("\\c{}", ch.to_ascii_lowercase()))
+}
+
+fn powershell_binding(binding: &str) -> Result<String, String> {
+    parse_ctrl_key(binding).map(|ch| format!("Ctrl+{}", ch.to_ascii_lowercase()))
+}
+
+fn powershell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "''"))
 }
 
 fn shell_quote(value: &str) -> String {
@@ -259,7 +317,7 @@ mod tests {
     #[test]
     fn bash_script_completion_word_list_includes_all_shells() {
         let script = bash_integration_script("C+b", Path::new("/tmp/peanutbutter")).unwrap();
-        assert!(script.contains("bash edit execute zsh fish lint gc new stats"));
+        assert!(script.contains("bash edit execute zsh fish powershell lint gc new stats"));
         assert!(script.contains("complete-theme \"$cur\""));
         assert!(script.contains("--theme"));
     }
@@ -373,5 +431,39 @@ mod tests {
     #[test]
     fn fish_script_rejects_invalid_binding() {
         assert!(fish_integration_script("notabinding", Path::new("/tmp/pb")).is_err());
+    }
+
+    #[test]
+    fn powershell_script_registers_psreadline_insert_handler() {
+        let script =
+            powershell_integration_script("C+b", Path::new("C:/Tools/peanutbutter.exe")).unwrap();
+        assert!(script.contains("Set-PSReadLineKeyHandler -Chord 'Ctrl+b'"));
+        assert!(script.contains("[Microsoft.PowerShell.PSConsoleReadLine]::Insert($cmd)"));
+        assert!(script.contains("(& $script:__pb_exe execute) -join [Environment]::NewLine"));
+        assert!(script.contains("$script:__pb_exe = 'C:/Tools/peanutbutter.exe'"));
+    }
+
+    #[test]
+    fn powershell_script_emits_pb_alias_history_and_completions() {
+        let script = powershell_integration_script("C+b", Path::new("C:/pb.exe")).unwrap();
+        assert!(script.contains("function pb { __pb_dispatch @args }"));
+        assert!(script.contains("function peanutbutter { __pb_dispatch @args }"));
+        assert!(script.contains("Get-History -Count 50"));
+        assert!(script.contains("PEANUTBUTTER_HISTORY"));
+        assert!(script.contains("Register-ArgumentCompleter -CommandName peanutbutter,pb"));
+        assert!(script.contains("complete-edit $wordToComplete"));
+        assert!(script.contains("complete-theme $wordToComplete"));
+        assert!(script.contains("'powershell'"));
+    }
+
+    #[test]
+    fn powershell_script_uses_requested_binding() {
+        let script = powershell_integration_script("C+f", Path::new("C:/pb.exe")).unwrap();
+        assert!(script.contains("Set-PSReadLineKeyHandler -Chord 'Ctrl+f'"));
+    }
+
+    #[test]
+    fn powershell_script_rejects_invalid_binding() {
+        assert!(powershell_integration_script("notabinding", Path::new("C:/pb.exe")).is_err());
     }
 }

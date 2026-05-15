@@ -119,6 +119,15 @@ fn main() {
                 Err(err) => Err(err),
             }
         }
+        cli::Command::Powershell { binding } => {
+            match completions::powershell_integration_for_current_exe(&binding) {
+                Ok(script) => {
+                    print!("{script}");
+                    Ok(())
+                }
+                Err(err) => Err(err),
+            }
+        }
         cli::Command::Edit { path } => cli::run_edit_command(&paths, path.as_deref()).map(|_| ()),
         cli::Command::New { name, command } => match cli::run_new_command(
             &paths,

@@ -31,6 +31,13 @@ set -x PEANUTBUTTER_PATH "$PWD/examples"
 peanutbutter fish | source
 ```
 
+**PowerShell** — add to `$PROFILE`:
+
+```powershell
+$env:PEANUTBUTTER_PATH = "$PWD/examples"
+peanutbutter powershell | Invoke-Expression
+```
+
 ## Why
 
 I personally find that other cheatsheet or snippet tools don't adapt to my workflows, and cause me to constantly exit out of my own flow state.
@@ -81,7 +88,7 @@ $ pb new deploy
 space toggle   e rename   n name   enter accept   b back   esc cancel
 ```
 
-`pb new` requires the shell integration to be sourced (`eval "$(peanutbutter bash C+b)"` or its zsh/fish equivalent) — that's what populates the history list. You can skip the history step entirely by passing a command after `--`:
+`pb new` requires the shell integration to be sourced (`eval "$(peanutbutter bash C+b)"` or its zsh/fish/PowerShell equivalent) — that's what populates the history list. You can skip the history step entirely by passing a command after `--`:
 
 ```bash
 pb new deploy -- ssh root@host 'systemctl restart nginx'
@@ -185,11 +192,12 @@ disable = false
 1. `peanutbutter bash [C+b]` — emit bash integration script (eval it in `~/.bashrc`)
 2. `peanutbutter zsh [C+b]` — emit zsh integration script (eval it in `~/.zshrc`)
 3. `peanutbutter fish [C+b]` — emit fish integration script (source it in `config.fish`)
-4. `peanutbutter edit ...` — edit a snippet file in `$EDITOR`/`$VISUAL`
-5. `peanutbutter lint [--strict] [--json]` — check configured snippet roots for authoring problems
-6. `peanutbutter execute [--theme <name>]` — run the inline TUI; output can be piped, e.g. `peanutbutter execute | grep foo`
+4. `peanutbutter powershell [C+b]` — emit PowerShell/PSReadLine integration script (add it to `$PROFILE`)
+5. `peanutbutter edit ...` — edit a snippet file in `$EDITOR`/`$VISUAL`
+6. `peanutbutter lint [--strict] [--json]` — check configured snippet roots for authoring problems
+7. `peanutbutter execute [--theme <name>]` — run the inline TUI; output can be piped, e.g. `peanutbutter execute | grep foo`
 
-All three shell integrations install a `pb` alias and wire up `pb edit <TAB>` plus `--theme <TAB>` completion.
+All shell integrations install a `pb` alias and wire up `pb edit <TAB>` plus `--theme <TAB>` completion.
 
 `pb lint` is read-only. It reports broken frontmatter, unused frontmatter/config variables, duplicate snippet slugs, suggestion-command failures, dry-run frecency GC orphans, and obvious static inline suggestion commands. Bare manual placeholders like `<@value>` are valid in normal mode. `--strict` adds style/structure checks such as undeclared manual placeholders, unbalanced fences, missing code-fence language tags, and confusing file-local variable overrides. Pretty output is written to stdout by default; `--json` writes a parseable object with stable `findings[].code` fields. Exit codes are `0` for no findings, `1` for lint findings, and `2` for operational failures that prevent lint from running.
 
