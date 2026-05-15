@@ -1123,7 +1123,7 @@ mod tests {
         fs::write(
             &editor,
             format!(
-                "@echo off\r\n> \"{}\" echo|set /p dummy=%%~1\r\n",
+                "@echo off\r\n> \"{}\" echo %%~1\r\nexit /b 0\r\n",
                 editor_log.display()
             ),
         )
@@ -1155,8 +1155,9 @@ mod tests {
 
         assert_eq!(target, root.join("git/log.md"));
         assert!(target.exists());
+        let logged_path = fs::read_to_string(editor_log).unwrap();
         assert_eq!(
-            fs::read_to_string(editor_log).unwrap(),
+            logged_path.trim_end_matches(['\r', '\n']),
             target.to_string_lossy()
         );
     }
