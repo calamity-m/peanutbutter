@@ -123,10 +123,15 @@ fn editor_arg_values(editor: &str, target: &EditorTarget) -> Vec<String> {
 
 fn direct_editor_command(editor: &str) -> bool {
     let editor = editor.trim();
-    !editor.is_empty()
-        && !editor
-            .chars()
-            .any(|c| c.is_whitespace() || "'\"$;&|<>(){}[]*?!~`".contains(c))
+    if editor.is_empty() {
+        return false;
+    }
+    if Path::new(editor).exists() {
+        return true;
+    }
+    !editor
+        .chars()
+        .any(|c| c.is_whitespace() || "'\"$;&|<>(){}[]*?!`".contains(c))
 }
 
 fn line_args(editor: &str, target: &EditorTarget) -> Option<Vec<String>> {
