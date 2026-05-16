@@ -39,7 +39,42 @@ with independent snippet roots work correctly.
 
 ## Neovim setup
 
-### Option A — built-in `vim.lsp` (no plugins required)
+### Recommended — nvim-lspconfig
+
+Use [nvim-lspconfig](https://github.com/neovim/nvim-lspconfig) if you have it
+installed. It gives better `:LspInfo` output, handles root detection cleanly,
+and makes executable/path problems easier to diagnose than a hand-written
+autocmd.
+
+Register peanutbutter as a custom server:
+
+```lua
+local lspconfig = require("lspconfig")
+local lspconfig_configs = require("lspconfig.configs")
+
+if not lspconfig_configs.peanutbutter then
+  lspconfig_configs.peanutbutter = {
+    default_config = {
+      cmd = { "peanutbutter", "lsp" },
+      filetypes = { "markdown" },
+      root_dir = require("lspconfig.util").root_pattern(
+        ".peanutbutter.toml",
+        "peanutbutter.toml",
+        "_peanutbutter.toml"
+      ),
+      single_file_support = false,
+    },
+  }
+end
+
+lspconfig.peanutbutter.setup({})
+```
+
+### Fallback — built-in `vim.lsp` autocmd
+
+If you really do not want to use nvim-lspconfig, you can start the server
+directly with Neovim's built-in LSP client. Prefer the nvim-lspconfig setup
+above unless you have a specific reason not to add that dependency.
 
 Add this to your Neovim config (`init.lua` or a plugin file):
 
@@ -64,33 +99,6 @@ vim.api.nvim_create_autocmd("FileType", {
 `vim.lsp.start` is idempotent: if an instance with the same `name` and
 `root_dir` is already running, Neovim reuses it rather than spawning a second
 process.
-
-### Option B — nvim-lspconfig
-
-If you use [nvim-lspconfig](https://github.com/neovim/nvim-lspconfig) you can
-register peanutbutter as a custom server:
-
-```lua
-local lspconfig = require("lspconfig")
-local lspconfig_configs = require("lspconfig.configs")
-
-if not lspconfig_configs.peanutbutter then
-  lspconfig_configs.peanutbutter = {
-    default_config = {
-      cmd = { "peanutbutter", "lsp" },
-      filetypes = { "markdown" },
-      root_dir = require("lspconfig.util").root_pattern(
-        ".peanutbutter.toml",
-        "peanutbutter.toml",
-        "_peanutbutter.toml"
-      ),
-      single_file_support = false,
-    },
-  }
-end
-
-lspconfig.peanutbutter.setup({})
-```
 
 ### Completions
 
