@@ -133,6 +133,16 @@ CLI args → cli::Cli (clap) → command dispatch
 6. TUI is built with `ratatui` + `crossterm`; terminal state is sensitive — always restore raw mode on exit paths.
 7. The `execute` subcommand writes output to stdout for shell consumption; don't mix debug prints into that path.
 
+### TUI / shell-integration invariants
+
+The shell hotkey path is the primary way users invoke this tool. It has subtle invariants that are easy to break with well-intentioned refactors:
+
+- **Stdout is captured by `$(...)`** when invoked via the shell hotkey. Anything written to fd 1 during the TUI ends up in the shell's readline buffer, not on screen. The chosen snippet must be the *only* thing left on fd 1 by the time the process exits.
+- **Crossterm queries the terminal via fd 1 and reads replies from stdin** — e.g. the cursor-position DSR (`^[[6n`). Routing the Rust-side writer to stderr does NOT redirect these queries; they still go to fd 1. If fd 1 is a pipe, the query bytes leak into the shell buffer and crossterm waits the full timeout (~3s) for a reply that never comes.
+- **The fix on Unix is the `StdoutTtyGuard` `dup2` pattern** in `src/execute/terminal.rs`: save fd 1, point it at `/dev/tty` (or stderr if that's a tty), restore on drop. Do not remove this guard or replace it with a Rust-level writer switch — they are not equivalent.
+- **Cross-platform support must not regress the primary (Unix) path.** When adding Windows/PowerShell behavior, gate the new code with `#[cfg(windows)]` or `#[cfg(not(unix))]` rather than replacing the existing Unix path. The Unix path is exercised by every shell user; Windows is a smaller surface.
+- **Verify TUI changes through the actual hotkey path**, not just `pb execute` in a terminal. The two paths differ in whether fd 1 is a tty. A working `pb execute` says nothing about the hotkey path. Minimum repro: `out=$(peanutbutter execute); echo "[$out]"` from an interactive shell, and confirm no stray escape sequences appear in `$out`.
+
 ### Snippet Format
 
 When interacting with, extending, or touching the snippet parsing or logic refer to [the snippet syntax specification](/docs/SNIPPET_SYNTAX.md)
