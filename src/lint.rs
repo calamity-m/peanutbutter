@@ -179,6 +179,38 @@ pub fn run<W: Write>(
     Ok(result)
 }
 
+/// Run single-file lint checks on in-memory content and return the findings.
+///
+/// This is intended for use by the LSP server, which re-parses documents on
+/// each change without reading from disk. Cross-file checks (unused config
+/// variables, duplicate slugs across files, GC) are not included.
+pub fn lint_file(path: &Path, root: &Path, content: &str, config: &AppConfig) -> Vec<LintFinding> {
+    let parsed = parser::parse_file(path, root, content);
+    let ctx = FileContext {
+        root: root.to_path_buf(),
+        path: path.to_path_buf(),
+        content: content.to_string(),
+        parsed,
+    };
+    let mut findings = Vec::new();
+    findings.extend(lint_frontmatter_source(path, content));
+    findings.extend(lint_duplicate_slugs(path, content));
+    findings.extend(lint_unused_file_variables(&ctx));
+    findings.extend(lint_suggestion_commands(
+        &ctx,
+        &config.variables,
+        &config.suggestion_commands,
+    ));
+    findings.extend(lint_static_inline_commands(&ctx));
+    findings.extend(lint_markdown_structure(path, content));
+    findings.extend(lint_missing_code_languages(&ctx));
+    findings.extend(lint_frontmatter_overrides(&ctx, &config.variables));
+    attach_suppress_paths(&mut findings, &[ctx]);
+    findings.retain(|f| !is_suppressed(f, &config.lint));
+    sort_findings(&mut findings);
+    findings
+}
+
 fn validate_roots(roots: &[PathBuf]) -> io::Result<()> {
     for root in roots {
         match fs::metadata(root) {

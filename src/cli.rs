@@ -104,6 +104,8 @@ pub enum Command {
     /// Internal shell completion helper for `--theme`.
     #[command(hide = true)]
     CompleteTheme { current: Option<String> },
+    /// Start a Language Server Protocol server over stdio for snippet authoring.
+    Lsp,
 }
 
 /// Result returned by [`run_execute_command`].

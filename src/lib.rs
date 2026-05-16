@@ -23,6 +23,7 @@
 //! | [`config`] | TOML config loading and theme |
 //! | [`cli`] | Argument parsing and command dispatch |
 //! | [`execute`] | Interactive TUI (ratatui, crossterm) |
+//! | [`lsp`] | Language Server Protocol server (diagnostics, completions, hover, go-to-def) |
 
 pub mod browse;
 pub mod capture;
@@ -39,6 +40,7 @@ pub mod fuzzy;
 pub mod gc;
 pub mod index;
 pub mod lint;
+pub mod lsp;
 pub mod parser;
 pub mod search;
 pub(crate) mod shell;
