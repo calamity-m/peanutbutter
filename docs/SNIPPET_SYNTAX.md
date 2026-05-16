@@ -43,7 +43,12 @@ that file:
 ```yaml
 variables:
   http_method:
-    suggestions: [GET, POST, PUT, PATCH, DELETE]
+    suggestions:
+      - GET
+      - POST
+      - PUT
+      - PATCH
+      - DELETE
   git_branch:
     command: git branch --format='%(refname:short)'
 ```

@@ -177,6 +177,22 @@ fn parse_variable_block(lines: &[&str]) -> (BTreeMap<String, VariableSpec>, usiz
                         "command" => spec.command = Some(fval.to_string()),
                         _ => {}
                     }
+                } else if fkey == "suggestions" {
+                    j += 1;
+                    while j < lines.len() {
+                        let item_line = lines[j];
+                        let item_trim = item_line.trim_start();
+                        let item_indent = item_line.len() - item_trim.len();
+                        if item_indent <= field_indent || !item_trim.starts_with('-') {
+                            break;
+                        }
+                        let suggestion = strip_quotes(item_trim[1..].trim()).to_string();
+                        if !suggestion.is_empty() {
+                            spec.suggestions.push(suggestion);
+                        }
+                        j += 1;
+                    }
+                    continue;
                 }
             }
             j += 1;
@@ -570,6 +586,23 @@ variables:
             Some("git branch --format='%(refname:short)'")
         );
         assert!(!fm.variables.contains_key("bad_spec"));
+    }
+
+    #[test]
+    fn parses_frontmatter_variable_block_suggestions() {
+        let content = r#"---
+variables:
+  pattern:
+    suggestions:
+      - "*.psd"
+      - "*.png"
+      - "*.pdf"
+---
+"#;
+        let lines: Vec<&str> = content.lines().collect();
+        let (fm, _) = parse_frontmatter(&lines);
+        let pattern = fm.variables.get("pattern").unwrap();
+        assert_eq!(pattern.suggestions, vec!["*.psd", "*.png", "*.pdf"]);
     }
 
     #[test]
