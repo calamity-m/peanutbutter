@@ -55,8 +55,9 @@ pub fn run_execute(
 /// Core TUI runner — sets up the terminal, runs the event loop, tears down.
 ///
 /// Steps:
-/// 1. Choose stdout or stderr for TUI drawing. Shell integrations capture stdout
-///    for the emitted command, so stderr is used when stdout is piped.
+/// 1. On Unix, redirect stdout to the TTY if it was piped via [`StdoutTtyGuard`]
+///    so crossterm's terminal queries reach the terminal (not the captured pipe).
+///    On Windows, fall back to drawing the TUI to stderr when stdout is piped.
 /// 2. Enter raw mode via [`RawModeGuard`].
 /// 3. Build a ratatui inline viewport and enter the draw/poll loop.
 /// 4. On exit, drain any buffered key-release events (kitty keyboard protocol)
@@ -79,6 +80,7 @@ pub fn run_execute_with_provider<P: SuggestionProvider>(
         options.theme,
         provider,
     );
+    let _stdout_guard = StdoutTtyGuard::enter()?;
     let tui_output = TuiOutputKind::detect();
     let mut raw_mode = RawModeGuard::enter(tui_output)?;
     let mut terminal = build_terminal(options.viewport_height, tui_output)?;
@@ -208,21 +210,33 @@ fn reload_after_edit<P: SuggestionProvider>(
 #[derive(Clone, Copy)]
 enum TuiOutputKind {
     Stdout,
+    #[cfg(not(unix))]
     Stderr,
 }
 
 impl TuiOutputKind {
     fn detect() -> Self {
-        if io::stdout().is_terminal() {
+        // On Unix, StdoutTtyGuard has already redirected fd 1 to the TTY when
+        // stdout was piped, so we can safely draw to stdout. On Windows we
+        // fall back to stderr because the dup2 trick isn't available.
+        #[cfg(unix)]
+        {
             Self::Stdout
-        } else {
-            Self::Stderr
+        }
+        #[cfg(not(unix))]
+        {
+            if io::stdout().is_terminal() {
+                Self::Stdout
+            } else {
+                Self::Stderr
+            }
         }
     }
 
     fn writer(self) -> TuiOutput {
         match self {
             Self::Stdout => TuiOutput::Stdout(io::stdout()),
+            #[cfg(not(unix))]
             Self::Stderr => TuiOutput::Stderr(io::stderr()),
         }
     }
@@ -230,6 +244,7 @@ impl TuiOutputKind {
 
 enum TuiOutput {
     Stdout(io::Stdout),
+    #[cfg(not(unix))]
     Stderr(io::Stderr),
 }
 
@@ -237,6 +252,7 @@ impl Write for TuiOutput {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         match self {
             Self::Stdout(stdout) => stdout.write(buf),
+            #[cfg(not(unix))]
             Self::Stderr(stderr) => stderr.write(buf),
         }
     }
@@ -244,6 +260,7 @@ impl Write for TuiOutput {
     fn flush(&mut self) -> io::Result<()> {
         match self {
             Self::Stdout(stdout) => stdout.flush(),
+            #[cfg(not(unix))]
             Self::Stderr(stderr) => stderr.flush(),
         }
     }
@@ -295,6 +312,98 @@ impl Drop for RawModeGuard {
             let _ = execute!(self.output.writer(), DisableBracketedPaste);
             let _ = disable_raw_mode();
         }
+    }
+}
+
+/// RAII guard that redirects stdout to the TTY when stdout is not a terminal.
+///
+/// When peanutbutter is invoked via the shell hotkey (`pb`), bash captures
+/// stdout to write the selected command into the readline buffer. That means
+/// fd 1 is a pipe, not a terminal — we can't draw the TUI there, and
+/// crossterm's terminal queries (e.g. cursor-position DSR) would be written
+/// into the pipe instead of reaching the terminal, causing multi-second
+/// timeouts and stray escape sequences in the readline buffer. This guard
+/// saves fd 1, points it at stderr (if that's a terminal) or `/dev/tty`, and
+/// restores the original fd on drop so the caller can still print the command.
+///
+/// Unix-only — Windows uses a different mechanism (TUI writes to stderr).
+#[cfg(unix)]
+struct StdoutTtyGuard {
+    saved_stdout: Option<std::os::fd::OwnedFd>,
+}
+
+#[cfg(unix)]
+impl StdoutTtyGuard {
+    fn enter() -> io::Result<Self> {
+        use std::os::fd::FromRawFd;
+
+        if io::stdout().is_terminal() {
+            return Ok(Self { saved_stdout: None });
+        }
+
+        io::stdout().flush()?;
+        let saved = unsafe { libc::dup(libc::STDOUT_FILENO) };
+        if saved < 0 {
+            return Err(io::Error::last_os_error());
+        }
+
+        if io::stderr().is_terminal() {
+            if unsafe { libc::dup2(libc::STDERR_FILENO, libc::STDOUT_FILENO) } < 0 {
+                let _ = unsafe { libc::close(saved) };
+                return Err(io::Error::last_os_error());
+            }
+            return Ok(Self {
+                saved_stdout: Some(unsafe { std::os::fd::OwnedFd::from_raw_fd(saved) }),
+            });
+        }
+
+        let tty = match std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open("/dev/tty")
+        {
+            Ok(tty) => tty,
+            Err(err) => {
+                let _ = unsafe { libc::close(saved) };
+                return Err(err);
+            }
+        };
+        if unsafe { libc::dup2(std::os::fd::AsRawFd::as_raw_fd(&tty), libc::STDOUT_FILENO) } < 0 {
+            let _ = unsafe { libc::close(saved) };
+            return Err(io::Error::last_os_error());
+        }
+        drop(tty);
+
+        Ok(Self {
+            saved_stdout: Some(unsafe { std::os::fd::OwnedFd::from_raw_fd(saved) }),
+        })
+    }
+}
+
+#[cfg(unix)]
+impl Drop for StdoutTtyGuard {
+    fn drop(&mut self) {
+        let Some(saved_stdout) = &self.saved_stdout else {
+            return;
+        };
+        let _ = io::stdout().flush();
+        let _ = unsafe {
+            libc::dup2(
+                std::os::fd::AsRawFd::as_raw_fd(saved_stdout),
+                libc::STDOUT_FILENO,
+            )
+        };
+        let _ = io::stdout().flush();
+    }
+}
+
+#[cfg(not(unix))]
+struct StdoutTtyGuard;
+
+#[cfg(not(unix))]
+impl StdoutTtyGuard {
+    fn enter() -> io::Result<Self> {
+        Ok(Self)
     }
 }
 
