@@ -214,6 +214,10 @@ fn main() {
             }
             Err(err) => Err(err),
         },
+        cli::Command::Lsp => {
+            peanutbutter::lsp::run_lsp_server();
+            Ok(())
+        }
     };
 
     if let Err(err) = result {

@@ -20,6 +20,8 @@ termimad = "0.34"
 toml = "0.8"
 owo-colors = "4"
 shell-words = "1.1.1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std"] }
+tower-lsp = "0.20"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
