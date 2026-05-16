@@ -130,8 +130,26 @@ For a stricter syntax reference, see [docs/SNIPPET_SYNTAX.md](docs/SNIPPET_SYNTA
 Snippets are really just **ANY** markdown file that follows the following structure:
 
 A `##` heading, followed below by some ` ` code wrapping block. If multiple code wrapping blocks
-are present, only the first will be considered the snippet. Otherwise, anything between the code wrapping block
+are present, only the first non-`text` fenced block will be considered the snippet. Otherwise, anything between the code wrapping block
 and the heading is considered description/preview data.
+
+Important: bare `text` fences are reserved for picker-visible examples in the description. They are rendered in the preview and deliberately ignored as executable snippet bodies. If a section only contains `text` fences, peanutbutter does not create a snippet from it. Existing executable snippets that used ````text` should be migrated to an untagged fence or another language tag.
+
+````markdown
+## Preview an example before running
+
+This example is shown in the picker preview:
+
+```text
+input.txt -> output.txt
+```
+
+This is the executable snippet body:
+
+```bash
+cp <@source> <@dest>
+```
+````
 
 I recommend just [just reading through the examples](/examples/simple/snippets.md)
 

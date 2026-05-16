@@ -1319,6 +1319,28 @@ mod tests {
     }
 
     #[test]
+    fn preview_renders_fenced_text_description_and_body() {
+        let theme = crate::config::Theme::default();
+        let mut scorer = FuzzyScorer::new();
+        let preview = render_snippet_preview_text(
+            &snippet(
+                "Demo",
+                "Example output:\n\n```text\nsource.txt -> dest.txt\n```",
+                "cp <@source> <@dest>",
+                &[],
+            ),
+            80,
+            &theme,
+            &[],
+            &mut scorer,
+        );
+        let rendered = text_plain(&preview);
+
+        assert!(rendered.contains("source.txt -> dest.txt"));
+        assert!(rendered.contains("cp <@source> <@dest>"));
+    }
+
+    #[test]
     fn preview_does_not_render_body_as_markdown() {
         let theme = crate::config::Theme::default();
         let mut scorer = FuzzyScorer::new();

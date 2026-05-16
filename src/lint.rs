@@ -31,6 +31,8 @@ pub const CODE_GC_ORPHAN_UNRESOLVABLE: &str = "lint/gc-orphan-unresolvable";
 pub const CODE_STATIC_INLINE_COMMAND: &str = "lint/static-inline-command";
 /// Strict markdown/snippet structure finding.
 pub const CODE_MARKDOWN_STRUCTURE: &str = "lint/markdown-structure";
+/// Snippet section contains only `text` fences and no executable body.
+pub const CODE_TEXT_ONLY_SECTION: &str = "lint/text-only-section";
 /// Strict snippet-defining code fence has no language tag.
 pub const CODE_MISSING_CODE_LANGUAGE: &str = "lint/missing-code-language";
 /// Strict file-local variable changes a global variable's suggestion source.
@@ -619,38 +621,36 @@ fn lint_static_inline_commands(file: &FileContext) -> Vec<LintFinding> {
 
 fn lint_markdown_structure(path: &Path, content: &str) -> Vec<LintFinding> {
     let mut out = Vec::new();
-    let mut in_fence: Option<(String, usize)> = None;
-    let mut open_heading: Option<(String, usize, bool)> = None;
+    // `in_fence` carries `(fence, line_no, is_text)` for the currently-open fence.
+    let mut in_fence: Option<(String, usize, bool)> = None;
+    // `open_heading` carries `(heading, line_no, has_executable, has_text)`.
+    let mut open_heading: Option<(String, usize, bool, bool)> = None;
     for (idx, line) in content.lines().enumerate() {
         let line_no = idx + 1;
-        if let Some((fence, _)) = &in_fence {
+        if let Some((fence, _, is_text)) = &in_fence {
             if is_fence_close(line, fence) {
+                let was_text = *is_text;
                 in_fence = None;
-                if let Some((_, _, has_code)) = &mut open_heading {
-                    *has_code = true;
+                if let Some((_, _, has_executable, has_text)) = &mut open_heading {
+                    if was_text {
+                        *has_text = true;
+                    } else {
+                        *has_executable = true;
+                    }
                 }
             }
             continue;
         }
         if let Some(heading) = snippet_heading(line) {
-            if let Some((previous, previous_line, false)) =
-                open_heading.replace((heading, line_no, false))
-            {
-                out.push(finding(
-                    LintSeverity::Warning,
-                    CODE_MARKDOWN_STRUCTURE,
-                    path.to_path_buf(),
-                    Some(previous_line),
-                    None,
-                    format!("snippet section '{previous}' has no code fence"),
-                    None,
-                ));
+            if let Some(previous) = open_heading.replace((heading, line_no, false, false)) {
+                emit_section_structure_finding(&mut out, path, previous);
             }
-        } else if let Some(fence) = fence_open(line) {
-            in_fence = Some((fence, line_no));
+        } else if let Some((fence, language)) = fence_open(line) {
+            let is_text = is_ignored_body_language(language.as_deref());
+            in_fence = Some((fence, line_no, is_text));
         }
     }
-    if let Some((_, start)) = in_fence {
+    if let Some((_, start, _)) = in_fence {
         out.push(finding(
             LintSeverity::Warning,
             CODE_MARKDOWN_STRUCTURE,
@@ -661,7 +661,35 @@ fn lint_markdown_structure(path: &Path, content: &str) -> Vec<LintFinding> {
             None,
         ));
     }
-    if let Some((heading, line, false)) = open_heading {
+    if let Some(previous) = open_heading {
+        emit_section_structure_finding(&mut out, path, previous);
+    }
+    out
+}
+
+fn emit_section_structure_finding(
+    out: &mut Vec<LintFinding>,
+    path: &Path,
+    section: (String, usize, bool, bool),
+) {
+    let (heading, line, has_executable, has_text) = section;
+    if has_executable {
+        return;
+    }
+    if has_text {
+        out.push(finding(
+            LintSeverity::Warning,
+            CODE_TEXT_ONLY_SECTION,
+            path.to_path_buf(),
+            Some(line),
+            None,
+            format!(
+                "snippet section '{heading}' has only `text` fences; \
+                 `text` is reserved for preview examples and is not executable"
+            ),
+            None,
+        ));
+    } else {
         out.push(finding(
             LintSeverity::Warning,
             CODE_MARKDOWN_STRUCTURE,
@@ -672,7 +700,10 @@ fn lint_markdown_structure(path: &Path, content: &str) -> Vec<LintFinding> {
             None,
         ));
     }
-    out
+}
+
+fn is_ignored_body_language(language: Option<&str>) -> bool {
+    language.is_some_and(|language| language.eq_ignore_ascii_case("text"))
 }
 
 fn lint_missing_code_languages(file: &FileContext) -> Vec<LintFinding> {
@@ -853,13 +884,18 @@ fn snippet_heading(line: &str) -> Option<String> {
     (!text.is_empty()).then(|| text.to_string())
 }
 
-fn fence_open(line: &str) -> Option<String> {
+fn fence_open(line: &str) -> Option<(String, Option<String>)> {
     let trimmed = line.trim_start();
     if !trimmed.starts_with("```") {
         return None;
     }
     let ticks: String = trimmed.chars().take_while(|c| *c == '`').collect();
-    (ticks.len() >= 3).then_some(ticks)
+    if ticks.len() < 3 {
+        return None;
+    }
+    let lang = trimmed[ticks.len()..].trim();
+    let language = (!lang.is_empty()).then(|| lang.to_string());
+    Some((ticks, language))
 }
 
 fn is_fence_close(line: &str, fence: &str) -> bool {
@@ -1059,6 +1095,93 @@ mod tests {
         assert!(!result.findings.iter().any(|finding| {
             finding.code == CODE_UNUSED_VARIABLE && finding.message.contains("'used'")
         }));
+    }
+
+    #[test]
+    fn text_only_sections_emit_dedicated_lint() {
+        let root = temp_dir("text-only");
+        fs::write(
+            root.join("snippets.md"),
+            "## Example only\n\n```text\nnot executable\n```\n",
+        )
+        .unwrap();
+        let mut out = Vec::new();
+        let result = run(
+            &config(root),
+            LintOptions {
+                strict: true,
+                json: false,
+            },
+            &mut out,
+        )
+        .unwrap();
+
+        assert!(!result.findings.iter().any(|finding| {
+            finding.code == CODE_MISSING_CODE_LANGUAGE || finding.code == CODE_MARKDOWN_STRUCTURE
+        }));
+        assert!(
+            result
+                .findings
+                .iter()
+                .any(|finding| finding.code == CODE_TEXT_ONLY_SECTION),
+            "expected CODE_TEXT_ONLY_SECTION finding, got: {:?}",
+            result.findings
+        );
+    }
+
+    #[test]
+    fn text_then_executable_section_has_no_structure_findings() {
+        let root = temp_dir("text-then-exec");
+        fs::write(
+            root.join("snippets.md"),
+            "## Demo\n\n```text\nexample\n```\n\n```bash\necho hi\n```\n",
+        )
+        .unwrap();
+        let mut out = Vec::new();
+        let result = run(
+            &config(root),
+            LintOptions {
+                strict: true,
+                json: false,
+            },
+            &mut out,
+        )
+        .unwrap();
+
+        assert!(!result.findings.iter().any(|finding| {
+            finding.code == CODE_TEXT_ONLY_SECTION
+                || finding.code == CODE_MARKDOWN_STRUCTURE
+                || finding.code == CODE_MISSING_CODE_LANGUAGE
+        }));
+    }
+
+    #[test]
+    fn unclosed_text_fence_is_flagged_as_unclosed() {
+        let root = temp_dir("unclosed-text");
+        fs::write(
+            root.join("snippets.md"),
+            "## Demo\n\n```text\nno close here\n",
+        )
+        .unwrap();
+        let mut out = Vec::new();
+        let result = run(
+            &config(root),
+            LintOptions {
+                strict: true,
+                json: false,
+            },
+            &mut out,
+        )
+        .unwrap();
+
+        assert!(
+            result.findings.iter().any(|finding| {
+                finding.code == CODE_MARKDOWN_STRUCTURE
+                    && finding.message.contains("code fence is not closed")
+            }),
+            "expected unclosed-fence finding, got: {:?}",
+            result.findings
+        );
     }
 
     #[test]

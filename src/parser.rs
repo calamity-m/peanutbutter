@@ -230,6 +230,11 @@ enum State {
         heading: String,
         description: Vec<String>,
     },
+    InIgnoredTextFence {
+        heading: String,
+        description: Vec<String>,
+        fence: String,
+    },
     InCode {
         heading: String,
         description: Vec<String>,
@@ -244,6 +249,11 @@ enum RangeState {
     InSection {
         heading: String,
         start_line: usize,
+    },
+    InIgnoredTextFence {
+        heading: String,
+        start_line: usize,
+        fence: String,
     },
     InCode {
         heading: String,
@@ -278,16 +288,40 @@ fn parse_snippets(lines: &[&str], relative_path: &Path) -> Vec<Snippet> {
                     };
                 } else if let Some((fence, language)) = parse_fence_open(line) {
                     let heading = std::mem::take(heading);
-                    let description = std::mem::take(description);
-                    state = State::InCode {
-                        heading,
-                        description,
-                        fence,
-                        language,
-                        body: Vec::new(),
-                    };
+                    let mut description = std::mem::take(description);
+                    if is_ignored_body_language(language.as_deref()) {
+                        description.push((*line).to_string());
+                        state = State::InIgnoredTextFence {
+                            heading,
+                            description,
+                            fence,
+                        };
+                    } else {
+                        state = State::InCode {
+                            heading,
+                            description,
+                            fence,
+                            language,
+                            body: Vec::new(),
+                        };
+                    }
                 } else {
                     description.push((*line).to_string());
+                }
+            }
+            State::InIgnoredTextFence {
+                heading,
+                description,
+                fence,
+            } => {
+                description.push((*line).to_string());
+                if is_fence_close(line, fence) {
+                    let heading = std::mem::take(heading);
+                    let description = std::mem::take(description);
+                    state = State::InSection {
+                        heading,
+                        description,
+                    };
                 }
             }
             State::InCode {
@@ -348,13 +382,34 @@ fn parse_snippet_line_ranges(
                 if let Some(next_heading) = parse_snippet_heading(line) {
                     *heading = next_heading;
                     *start_line = abs_idx;
-                } else if let Some((fence, _)) = parse_fence_open(line) {
+                } else if let Some((fence, language)) = parse_fence_open(line) {
                     let heading = std::mem::take(heading);
                     let start_line = *start_line;
-                    state = RangeState::InCode {
+                    if is_ignored_body_language(language.as_deref()) {
+                        state = RangeState::InIgnoredTextFence {
+                            heading,
+                            start_line,
+                            fence,
+                        };
+                    } else {
+                        state = RangeState::InCode {
+                            heading,
+                            start_line,
+                            fence,
+                        };
+                    }
+                }
+            }
+            RangeState::InIgnoredTextFence {
+                heading,
+                start_line,
+                fence,
+            } => {
+                if is_fence_close(line, fence) {
+                    let heading = std::mem::take(heading);
+                    state = RangeState::InSection {
                         heading,
-                        start_line,
-                        fence,
+                        start_line: *start_line,
                     };
                 }
             }
@@ -418,6 +473,11 @@ fn is_fence_close(line: &str, fence: &str) -> bool {
         return false;
     }
     trimmed.chars().all(|c| c == '`') && trimmed.len() >= fence.len()
+}
+
+/// Returns true for fenced code languages reserved for preview-only examples.
+fn is_ignored_body_language(language: Option<&str>) -> bool {
+    language.is_some_and(|language| language.eq_ignore_ascii_case("text"))
 }
 
 fn build_snippet(
@@ -693,6 +753,86 @@ variables:
         let content = "## Hello\n\n```\necho hi\n```\n";
         let snippets = parse_snippets(&content.lines().collect::<Vec<_>>(), &rel("x.md"));
         assert_eq!(snippets[0].language, None);
+    }
+
+    #[test]
+    fn text_fences_are_description_not_body() {
+        let content = "## Hello\n\n```text\nexample output\n```\n\n```bash\necho hi\n```\n";
+        let snippets = parse_snippets(&content.lines().collect::<Vec<_>>(), &rel("x.md"));
+
+        assert_eq!(snippets.len(), 1);
+        assert_eq!(snippets[0].body, "echo hi");
+        assert_eq!(snippets[0].language.as_deref(), Some("bash"));
+        assert!(snippets[0].description.contains("```text"));
+        assert!(snippets[0].description.contains("example output"));
+    }
+
+    #[test]
+    fn text_only_sections_are_not_snippets() {
+        let content =
+            "## Example only\n\n```text\nnot executable\n```\n\n## Real\n\n```bash\nrun\n```\n";
+        let snippets = parse_snippets(&content.lines().collect::<Vec<_>>(), &rel("x.md"));
+
+        assert_eq!(snippets.len(), 1);
+        assert_eq!(snippets[0].name, "Real");
+    }
+
+    #[test]
+    fn text_fence_matching_is_case_insensitive() {
+        let content = "## Hello\n\n```TEXT\nexample output\n```\n\n```bash\necho hi\n```\n";
+        let snippets = parse_snippets(&content.lines().collect::<Vec<_>>(), &rel("x.md"));
+
+        assert_eq!(snippets.len(), 1);
+        assert_eq!(snippets[0].body, "echo hi");
+    }
+
+    #[test]
+    fn extended_text_info_string_is_executable() {
+        let content =
+            "## Hello\n\n```text linenums\nexample output\n```\n\n```bash\necho hi\n```\n";
+        let snippets = parse_snippets(&content.lines().collect::<Vec<_>>(), &rel("x.md"));
+
+        assert_eq!(snippets.len(), 1);
+        assert_eq!(snippets[0].body, "example output");
+        assert_eq!(snippets[0].language.as_deref(), Some("text linenums"));
+    }
+
+    #[test]
+    fn text_only_sections_do_not_consume_duplicate_slug_suffixes() {
+        let content = "## Same\n\n```text\nexample only\n```\n\n## Same\n\n```bash\nrun\n```\n";
+        let snippets = parse_snippets(&content.lines().collect::<Vec<_>>(), &rel("x.md"));
+
+        assert_eq!(snippets.len(), 1);
+        assert_eq!(snippets[0].id.as_str(), "x.md#same");
+    }
+
+    #[test]
+    fn unclosed_text_fence_yields_no_snippet() {
+        let content = "## Hello\n\n```text\nno close here\n";
+        let snippets = parse_snippets(&content.lines().collect::<Vec<_>>(), &rel("x.md"));
+
+        assert!(snippets.is_empty());
+    }
+
+    #[test]
+    fn snippet_line_ranges_skip_text_fences() {
+        let content = "## Hello\n\n```text\nexample output\n```\n\n```bash\necho hi\n```\n";
+        let ranges = snippet_line_ranges(&rel("x.md"), content);
+
+        assert_eq!(ranges.len(), 1);
+        assert_eq!(ranges[0].id.as_str(), "x.md#hello");
+        assert_eq!(ranges[0].start_line, 0);
+        assert_eq!(ranges[0].end_line, 9);
+    }
+
+    #[test]
+    fn snippet_line_ranges_do_not_include_text_only_sections() {
+        let content = "## Same\n\n```text\nexample only\n```\n\n## Same\n\n```bash\nrun\n```\n";
+        let ranges = snippet_line_ranges(&rel("x.md"), content);
+
+        assert_eq!(ranges.len(), 1);
+        assert_eq!(ranges[0].id.as_str(), "x.md#same");
+        assert_eq!(ranges[0].start_line, 6);
     }
 
     #[test]

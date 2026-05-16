@@ -40,6 +40,12 @@ mkdir -p <@path> && cd <@path>
 
 ## Copy a file to a timestamped backup
 
+Example output path shown in the picker preview:
+
+```text
+notes.md.20240517123000.bak
+```
+
 ```bash
 cp <@file:rg . --files> <@file:rg . --files>.$(date +%Y%m%d%H%M%S).bak
 ```

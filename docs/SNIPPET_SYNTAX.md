@@ -79,7 +79,7 @@ A snippet is defined by:
 
 1. A level-two markdown heading (`##`).
 2. Optional markdown description text below that heading.
-3. The first fenced code block below that heading.
+3. The first fenced code block below that heading whose language tag is not bare `text`.
 
 Example:
 
@@ -94,8 +94,35 @@ rg <@pattern> <@file>
 ````
 
 The heading text is the snippet name. The description text is shown in the UI
-and participates in search. The first fenced code block is the executable
+and participates in search. The first non-`text` fenced code block is the
+executable snippet body.
+
+Bare `text` fences are reserved for picker-visible examples in snippet
+descriptions. They remain part of the description markdown and are rendered in
+the preview, but they are ignored when peanutbutter chooses the executable
 snippet body.
+
+````markdown
+## Copy one path to another
+
+This example is shown in the picker preview:
+
+```text
+source.txt -> destination.txt
+```
+
+This is the executable snippet body:
+
+```bash
+cp <@source> <@destination>
+```
+````
+
+If a section only has `text` fences, peanutbutter ignores it as an executable
+snippet. This is deliberate: `text` is not a body language in peanutbutter, it
+is the reserved language for preview-only examples. Existing executable snippets
+that used ````text` should be migrated to an untagged fence or a different
+language tag.
 
 ### Multiple Snippets Per File
 
