@@ -196,6 +196,7 @@ disable = false
 5. `peanutbutter edit ...` — edit a snippet file in `$EDITOR`/`$VISUAL`
 6. `peanutbutter lint [--strict] [--json]` — check configured snippet roots for authoring problems
 7. `peanutbutter execute [--theme <name>]` — run the inline TUI; output can be piped, e.g. `peanutbutter execute | grep foo`
+8. `peanutbutter lsp` — start a Language Server Protocol server over stdio for editor integration (diagnostics, completions, hover, go-to-definition). See [docs/LSP.md](docs/LSP.md) for setup.
 
 All shell integrations install a `pb` alias and wire up `pb edit <TAB>` plus `--theme <TAB>` completion.
 
