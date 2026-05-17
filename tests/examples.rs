@@ -23,6 +23,8 @@ fn temp_dir_stats(prefix: &str) -> PathBuf {
 fn stats_test_paths(root: &std::path::Path) -> Paths {
     Paths {
         snippet_roots: vec![root.to_path_buf()],
+        xdg_snippets_dir: root.to_path_buf(),
+        snippet_overrides_active: false,
         state_file: root.join("state.tsv"),
         config_file: root.join("config.toml"),
     }

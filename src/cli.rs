@@ -13,6 +13,7 @@ use std::path::{Component, Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const DEFAULT_EDIT_PATH: &str = "snippets.md";
+const STARTER_SNIPPETS_MD: &str = include_str!("../assets/starter_snippets.md");
 
 /// Terminal snippet manager.
 #[derive(Debug, Clone, Parser, PartialEq, Eq)]
@@ -31,6 +32,16 @@ pub struct Cli {
 pub enum Command {
     /// Run the interactive TUI and emit the selected command to stdout.
     Execute,
+    /// Scaffold starter snippets at the XDG default snippets directory.
+    ///
+    /// This deliberately writes to the XDG default path, not the first resolved
+    /// snippet root. `--force` overwrites `snippets.md` unconditionally and does
+    /// not create a backup.
+    Init {
+        /// Overwrite an existing starter file unconditionally, without backup.
+        #[arg(long)]
+        force: bool,
+    },
     /// Open `$EDITOR` on the given snippet file (or the default file).
     Edit { path: Option<PathBuf> },
     /// Capture a recently-run shell command and append it as a new snippet.
@@ -122,7 +133,10 @@ pub struct ExecuteCommandResult {
 pub fn after_help(paths: &Paths) -> String {
     let mut out = String::new();
     out.push_str(&format!(
-        "shell integration: `{BINARY_NAME} bash|zsh|fish|powershell` also defines `{BASH_ALIAS_NAME}`\n\n"
+        "shell integration: `{BINARY_NAME} bash|zsh|fish|powershell` also defines `{BASH_ALIAS_NAME}`\n"
+    ));
+    out.push_str(&format!(
+        "new here? run `{BASH_ALIAS_NAME} init` to scaffold starter snippets.\n\n"
     ));
     out.push_str("snippet roots:\n");
     for root in &paths.snippet_roots {
@@ -131,6 +145,104 @@ pub fn after_help(paths: &Paths) -> String {
     out.push_str(&format!("config file: {}\n", paths.config_file.display()));
     out.push_str(&format!("state file: {}\n", paths.state_file.display()));
     out
+}
+
+/// Scaffold the starter snippet collection at the XDG default snippets path.
+///
+/// This command intentionally targets [`Paths::xdg_snippets_dir`] even when
+/// `$PEANUTBUTTER_PATH` or config roots are set, so first-run docs and auto-init
+/// always agree on a single default location. Passing `force` overwrites the
+/// existing `snippets.md` without creating a backup.
+pub fn run_init_command<W: Write>(paths: &Paths, force: bool, writer: &mut W) -> io::Result<()> {
+    match write_starter_snippets(paths, force)? {
+        InitOutcome::Written(path) => {
+            writeln!(writer, "wrote {}", path.display())?;
+            writeln!(
+                writer,
+                "next: pb new   |   pb edit   |   docs/SNIPPET_SYNTAX.md"
+            )?;
+        }
+        InitOutcome::Skipped(path) => {
+            writeln!(
+                writer,
+                "snippets.md already exists at {} (use --force to overwrite)",
+                path.display()
+            )?;
+        }
+    }
+    if overrides_active(paths) {
+        eprintln!(
+            "{BINARY_NAME}: note: snippet root overrides are set; init writes to the XDG default by design"
+        );
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum InitOutcome {
+    Written(PathBuf),
+    Skipped(PathBuf),
+}
+
+fn auto_init_if_needed(paths: &Paths) {
+    if paths.xdg_snippets_dir.exists() {
+        return;
+    }
+    match write_starter_snippets(paths, false) {
+        Ok(InitOutcome::Written(path)) => {
+            if overrides_active(paths) {
+                eprintln!(
+                    "{BINARY_NAME}: note: seeded starter snippets at {}; snippet root overrides are active",
+                    path.display()
+                );
+            }
+        }
+        Ok(InitOutcome::Skipped(_)) => {}
+        Err(err) => eprintln!("{BINARY_NAME}: warning: could not seed starter snippets: {err}"),
+    }
+}
+
+fn write_starter_snippets(paths: &Paths, force: bool) -> io::Result<InitOutcome> {
+    fs::create_dir_all(&paths.xdg_snippets_dir)?;
+    let target = paths.xdg_snippets_dir.join(DEFAULT_EDIT_PATH);
+    if target.exists() && !force {
+        return Ok(InitOutcome::Skipped(display_path(&target)));
+    }
+
+    let tmp = paths.xdg_snippets_dir.join(format!(
+        ".{DEFAULT_EDIT_PATH}.tmp-{}-{}",
+        std::process::id(),
+        unique_tmp_suffix()
+    ));
+    fs::write(&tmp, STARTER_SNIPPETS_MD)?;
+    match fs::rename(&tmp, &target) {
+        Ok(()) => Ok(InitOutcome::Written(display_path(&target))),
+        Err(err) => {
+            let _ = fs::remove_file(&tmp);
+            Err(err)
+        }
+    }
+}
+
+fn unique_tmp_suffix() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or_default()
+}
+
+fn display_path(path: &Path) -> PathBuf {
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        env::current_dir()
+            .unwrap_or_else(|_| PathBuf::from("."))
+            .join(path)
+    }
+}
+
+fn overrides_active(paths: &Paths) -> bool {
+    env::var_os("PEANUTBUTTER_PATH").is_some() || paths.snippet_overrides_active
 }
 
 /// Run the execute TUI, write the selected command to `writer`, and record a
@@ -156,6 +268,7 @@ where
     W: Write,
     F: FnOnce(SnippetIndex, FrecencyStore, ExecuteOptions) -> io::Result<Option<ExecutionOutcome>>,
 {
+    auto_init_if_needed(paths);
     let index = crate::index::load_from_roots(&paths.snippet_roots)?;
     let mut store = FrecencyStore::load(&paths.state_file)?;
     let cwd = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
@@ -786,6 +899,8 @@ mod tests {
     fn test_paths(root: &Path) -> Paths {
         Paths {
             snippet_roots: vec![root.to_path_buf()],
+            xdg_snippets_dir: root.to_path_buf(),
+            snippet_overrides_active: false,
             state_file: root.join("state.tsv"),
             config_file: root.join("config.toml"),
         }
@@ -795,6 +910,8 @@ mod tests {
         let first = roots.first().unwrap().clone();
         Paths {
             snippet_roots: roots,
+            xdg_snippets_dir: first.clone(),
+            snippet_overrides_active: false,
             state_file: first.join("state.tsv"),
             config_file: first.join("config.toml"),
         }
@@ -826,6 +943,12 @@ mod tests {
                 .unwrap()
                 .command,
             Some(Command::Execute)
+        );
+        assert_eq!(
+            Cli::try_parse_from(["peanutbutter", "init", "--force"])
+                .unwrap()
+                .command,
+            Some(Command::Init { force: true })
         );
         assert_eq!(
             Cli::try_parse_from(["peanutbutter", "edit", "nested/demo"])
@@ -911,6 +1034,7 @@ mod tests {
         let paths = test_paths(Path::new("/tmp/snippets"));
         let help = after_help(&paths);
         assert!(help.contains("bash|zsh|fish|powershell` also defines `pb`"));
+        assert!(help.contains("pb init"));
         assert!(help.contains("snippet roots:"));
         assert!(help.contains("/tmp/snippets"));
     }
@@ -923,6 +1047,145 @@ mod tests {
         let help = String::from_utf8(help).unwrap();
         assert!(help.contains("bash"));
         assert!(!help.contains("--bash"));
+    }
+
+    #[test]
+    fn run_init_command_writes_skips_and_forces_starter_file() {
+        let root = temp_dir("init");
+        let paths = test_paths(&root);
+        let target = root.join("snippets.md");
+
+        let mut out = Vec::new();
+        run_init_command(&paths, false, &mut out).unwrap();
+        assert!(target.exists());
+        assert!(
+            String::from_utf8(out)
+                .unwrap()
+                .contains("docs/SNIPPET_SYNTAX.md")
+        );
+        assert!(fs::read_to_string(&target).unwrap().contains("<@branch>"));
+
+        fs::write(&target, "custom").unwrap();
+        let mut out = Vec::new();
+        run_init_command(&paths, false, &mut out).unwrap();
+        assert_eq!(fs::read_to_string(&target).unwrap(), "custom");
+        assert!(String::from_utf8(out).unwrap().contains("already exists"));
+
+        let mut out = Vec::new();
+        run_init_command(&paths, true, &mut out).unwrap();
+        assert!(
+            fs::read_to_string(&target)
+                .unwrap()
+                .contains("Conventional commit")
+        );
+    }
+
+    #[test]
+    fn execute_auto_init_seeds_before_loading_index() {
+        let root = temp_dir("auto-init").join("snippets");
+        let paths = test_paths(&root);
+        let mut saw_starter = false;
+
+        run_execute_command_with(&paths, &mut Vec::new(), None, |index, _store, _options| {
+            saw_starter = index
+                .iter()
+                .any(|snippet| snippet.name() == "Conventional commit");
+            Ok(None)
+        })
+        .unwrap();
+
+        assert!(saw_starter);
+        assert!(root.join("snippets.md").exists());
+    }
+
+    #[test]
+    fn execute_auto_init_does_not_retrigger_when_dir_exists() {
+        let root = temp_dir("auto-init-once").join("snippets");
+        let paths = test_paths(&root);
+
+        run_execute_command_with(&paths, &mut Vec::new(), None, |_index, _store, _options| {
+            Ok(None)
+        })
+        .unwrap();
+        fs::write(root.join("snippets.md"), "custom").unwrap();
+
+        run_execute_command_with(&paths, &mut Vec::new(), None, |_index, _store, _options| {
+            Ok(None)
+        })
+        .unwrap();
+
+        assert_eq!(
+            fs::read_to_string(root.join("snippets.md")).unwrap(),
+            "custom"
+        );
+    }
+
+    #[test]
+    fn execute_auto_init_failure_does_not_abort_empty_index() {
+        let root = temp_dir("auto-init-failure");
+        let blocker = root.join("blocker");
+        fs::write(&blocker, "not a directory").unwrap();
+        let paths = Paths {
+            snippet_roots: vec![root.join("empty")],
+            xdg_snippets_dir: blocker.join("snippets"),
+            snippet_overrides_active: false,
+            state_file: root.join("state.tsv"),
+            config_file: root.join("config.toml"),
+        };
+        let mut out = Vec::new();
+        let mut saw_empty_index = false;
+
+        run_execute_command_with(&paths, &mut out, None, |index, _store, _options| {
+            saw_empty_index = index.is_empty();
+            Ok(None)
+        })
+        .unwrap();
+
+        assert!(saw_empty_index);
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn concurrent_init_writes_parseable_starter_file() {
+        let root = temp_dir("init-concurrent");
+        let paths = test_paths(&root);
+        let first = paths.clone();
+        let second = paths.clone();
+
+        let a = std::thread::spawn(move || write_starter_snippets(&first, false));
+        let b = std::thread::spawn(move || write_starter_snippets(&second, false));
+        a.join().unwrap().unwrap();
+        b.join().unwrap().unwrap();
+
+        let index = crate::index::load_from_roots(&paths.snippet_roots).unwrap();
+        assert!(
+            index
+                .iter()
+                .any(|snippet| snippet.name() == "Conventional commit")
+        );
+    }
+
+    #[test]
+    fn overrides_active_matches_env_and_paths_flags() {
+        let root = temp_dir("overrides");
+        let mut paths = test_paths(&root);
+        let old = env::var_os("PEANUTBUTTER_PATH");
+
+        unsafe { env::remove_var("PEANUTBUTTER_PATH") };
+        paths.snippet_overrides_active = false;
+        assert!(!overrides_active(&paths));
+
+        paths.snippet_overrides_active = true;
+        assert!(overrides_active(&paths));
+
+        paths.snippet_overrides_active = false;
+        unsafe { env::set_var("PEANUTBUTTER_PATH", "") };
+        assert!(overrides_active(&paths));
+
+        match old {
+            Some(value) => unsafe { env::set_var("PEANUTBUTTER_PATH", value) },
+            None => unsafe { env::remove_var("PEANUTBUTTER_PATH") },
+        }
     }
 
     #[test]
