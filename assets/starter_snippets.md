@@ -59,12 +59,22 @@ git fetch <@remote> main:main
 
 ## Decode a Kubernetes secret value
 
-The kind of multi-step lookup peanutbutter is built for. `<@namespace>` is picked from a live `kubectl get ns` list. `<@secret>` is picked from the secrets in that namespace — but suggestion commands run independently of one another, so this one lists secrets across all namespaces; pick the right one for your namespace. `<@key>` is the field inside `.data` to decode.
+The kind of multi-step lookup peanutbutter is built for, using **dependent
+variables** (`<#name>`). Each picker narrows the next:
+
+- `<@namespace>` is picked from a live `kubectl get ns` list.
+- `<@secret>` lists only the secrets in the chosen namespace, because its
+  command references `<#namespace>`.
+- `<@key>` lists only the data keys of the chosen secret, because its command
+  references both `<#namespace>` and `<#secret>`.
+
+Default `<#name>` substitution shell-single-quotes the upstream value, so
+names with unusual characters are safe.
 
 ```bash
 kubectl get secret -n <@namespace:kubectl get ns --no-headers -o custom-columns=NAME:.metadata.name> \
-  <@secret:kubectl get secret -A --no-headers -o custom-columns=NAME:.metadata.name> \
-  -o jsonpath='{.data.<@key>}' | base64 -d
+  <@secret:kubectl get secret -n <#namespace> --no-headers -o custom-columns=NAME:.metadata.name> \
+  -o jsonpath='{.data.<@key:kubectl get secret -n <#namespace> <#secret> -o go-template='"'"'{{range $k, $_ := .data}}{{$k}}{{"\n"}}{{end}}'"'"'>}' | base64 -d
 echo
 ```
 
@@ -109,6 +119,11 @@ This snippet uses a `text` fence as a preview-only example. Peanutbutter shows i
 <@name>             prompt for a value
 <@name:?default>    prompt with a pre-filled default
 <@name:command>     prompt with suggestions from a shell command
+
+inside a suggestion command, reference an earlier prompt's value:
+  <#name>           shell-quoted splice of the confirmed value
+  <#name:raw>       verbatim splice (no quoting — use for shell syntax)
+  \<#name>          literal <#name>, not a reference
 
 frontmatter variables (above):
   type:    suggestions: [...]   fixed picker list

@@ -37,6 +37,18 @@ pub const CODE_TEXT_ONLY_SECTION: &str = "lint/text-only-section";
 pub const CODE_MISSING_CODE_LANGUAGE: &str = "lint/missing-code-language";
 /// Strict file-local variable changes a global variable's suggestion source.
 pub const CODE_FRONTMATTER_OVERRIDE: &str = "lint/frontmatter-override";
+/// A suggestion command contains `<#name>` references, so it was skipped at
+/// lint time because there is no user input to substitute.
+pub const CODE_DEPENDENT_SUGGESTION_SKIPPED: &str = "lint/dependent-suggestion-skipped";
+/// `<#name>` references a variable that is not declared in this snippet or
+/// in its frontmatter.
+pub const CODE_UNKNOWN_VARIABLE_REFERENCE: &str = "lint/unknown-variable-reference";
+/// `<#name>` references a variable that appears later in prompt order.
+pub const CODE_FORWARD_VARIABLE_REFERENCE: &str = "lint/forward-variable-reference";
+/// `<#name>` references the variable whose own command it sits inside.
+pub const CODE_SELF_VARIABLE_REFERENCE: &str = "lint/self-variable-reference";
+/// A suggestion command's `<#...>` syntax could not be parsed.
+pub const CODE_INVALID_DEPENDENT_REFERENCE: &str = "lint/invalid-dependent-reference";
 
 /// Runtime options for [`run`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -69,6 +81,13 @@ pub struct LintFinding {
     /// Optional 1-based source line.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub line: Option<usize>,
+    /// Optional 0-based byte column where the finding begins on `line`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub col_start: Option<usize>,
+    /// Optional 0-based byte column where the finding ends on `line`
+    /// (exclusive).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub col_end: Option<usize>,
     /// Optional snippet id when known.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub snippet_id: Option<String>,
@@ -153,6 +172,7 @@ pub fn run<W: Write>(
             &config.suggestion_commands,
         ));
         findings.extend(lint_static_inline_commands(file));
+        findings.extend(lint_dependent_references(file, &config.variables));
         if options.strict {
             findings.extend(lint_variables(file, &config.variables));
             findings.extend(lint_markdown_structure(&file.path, &file.content));
@@ -204,6 +224,7 @@ pub fn lint_file(path: &Path, root: &Path, content: &str, config: &AppConfig) ->
         &config.suggestion_commands,
     ));
     findings.extend(lint_static_inline_commands(&ctx));
+    findings.extend(lint_dependent_references(&ctx, &config.variables));
     findings.extend(lint_markdown_structure(path, content));
     findings.extend(lint_missing_code_languages(&ctx));
     findings.extend(lint_frontmatter_overrides(&ctx, &config.variables));
@@ -523,6 +544,45 @@ fn lint_suggestion_commands(
     for snippet in &file.parsed.snippets {
         let commands = command_sources(snippet, &file.parsed.frontmatter.variables, globals);
         for (name, command) in commands {
+            // If the command references upstream variables, skip execution —
+            // there is no user input at lint time to substitute.
+            match crate::command_template::parse_command_template(&command) {
+                Ok(template) if crate::command_template::is_dependent(&template) => {
+                    out.push(
+                        finding(
+                            LintSeverity::Warning,
+                            CODE_DEPENDENT_SUGGESTION_SKIPPED,
+                            file.path.clone(),
+                            None,
+                            Some(snippet.id.clone()),
+                            format!(
+                                "suggestion command for variable '{name}' was skipped because it references upstream variables"
+                            ),
+                            None,
+                        )
+                        .with_suppress_command(command.clone()),
+                    );
+                    continue;
+                }
+                Ok(_) => {}
+                Err(err) => {
+                    out.push(
+                        finding(
+                            LintSeverity::Error,
+                            CODE_INVALID_DEPENDENT_REFERENCE,
+                            file.path.clone(),
+                            None,
+                            Some(snippet.id.clone()),
+                            format!(
+                                "suggestion command for variable '{name}' has an invalid <# reference"
+                            ),
+                            Some(err.to_string()),
+                        )
+                        .with_suppress_command(command.clone()),
+                    );
+                    continue;
+                }
+            }
             if !config.allow_commands {
                 out.push(finding(LintSeverity::Warning, CODE_SUGGESTION_COMMANDS_DISABLED, file.path.clone(), None, Some(snippet.id.clone()), format!("suggestion command for variable '{name}' was skipped because commands are disabled"), None));
                 continue;
@@ -548,6 +608,164 @@ fn lint_suggestion_commands(
                         )
                         .with_suppress_command(command.clone()),
                     );
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Find all `<#name>` token spans in `content`. Returns
+/// `(name, line_1based, col_start, col_end)` tuples in document order.
+/// Backslash-escaped `\<#...>` is skipped. The returned columns are 0-based
+/// byte offsets within the line.
+fn find_dependent_ref_spans(content: &str) -> Vec<(String, usize, usize, usize)> {
+    let mut out = Vec::new();
+    for (line_idx, line) in content.lines().enumerate() {
+        let bytes = line.as_bytes();
+        let mut i = 0;
+        while i < bytes.len() {
+            // Skip escaped \<#...>
+            if bytes[i] == b'\\'
+                && i + 2 < bytes.len()
+                && bytes[i + 1] == b'<'
+                && bytes[i + 2] == b'#'
+            {
+                if let Some(off) = line[i + 1..].find('>') {
+                    i = i + 1 + off + 1;
+                    continue;
+                }
+                i += 1;
+                continue;
+            }
+            if bytes[i] == b'<' && i + 1 < bytes.len() && bytes[i + 1] == b'#' {
+                let inner_start = i + 2;
+                let Some(off) = line[inner_start..].find('>') else {
+                    i += 1;
+                    continue;
+                };
+                let inner_end = inner_start + off;
+                let inner = &line[inner_start..inner_end];
+                let name = inner.split(':').next().unwrap_or(inner).trim().to_string();
+                if !name.is_empty() {
+                    out.push((name, line_idx + 1, i, inner_end + 1));
+                }
+                i = inner_end + 1;
+                continue;
+            }
+            i += 1;
+        }
+    }
+    out
+}
+
+/// Walk all suggestion commands in `file` and emit lint findings for
+/// `<#name>` references that are: unknown, forward, or self.
+fn lint_dependent_references(
+    file: &FileContext,
+    globals: &BTreeMap<String, VariableInputConfig>,
+) -> Vec<LintFinding> {
+    use crate::command_template::{parse_command_template, referenced_names};
+    let mut out = Vec::new();
+
+    // Pre-scan the file content for all <#name> spans so we can attach
+    // precise diagnostic ranges. We pop spans as we attribute findings to
+    // them — if two refs of the same name exist, each one gets a position
+    // in document order.
+    let mut spans = find_dependent_ref_spans(&file.content);
+    let mut take_span = |name: &str| -> Option<(usize, usize, usize)> {
+        let pos = spans.iter().position(|(n, ..)| n == name)?;
+        let (_, l, c0, c1) = spans.remove(pos);
+        Some((l, c0, c1))
+    };
+
+    for snippet in &file.parsed.snippets {
+        // Build prompt order from the deduplicated body variables. Forward
+        // references are decided against this order.
+        let mut prompt_order: Vec<String> = Vec::new();
+        let mut seen = HashSet::new();
+        for variable in &snippet.variables {
+            if seen.insert(variable.name.clone()) {
+                prompt_order.push(variable.name.clone());
+            }
+        }
+        let order_index: HashMap<String, usize> = prompt_order
+            .iter()
+            .enumerate()
+            .map(|(i, name)| (name.clone(), i))
+            .collect();
+
+        // The universe of declared variables: body, frontmatter, config.
+        let mut declared: HashSet<String> = prompt_order.iter().cloned().collect();
+        declared.extend(file.parsed.frontmatter.variables.keys().cloned());
+        declared.extend(globals.keys().cloned());
+        // Builtins are always declared.
+        declared.insert("file".to_string());
+        declared.insert("directory".to_string());
+
+        for (owner, command) in
+            command_sources(snippet, &file.parsed.frontmatter.variables, globals)
+        {
+            let Ok(template) = parse_command_template(&command) else {
+                continue;
+            };
+            let refs = referenced_names(&template);
+            for ref_name in &refs {
+                let span = take_span(ref_name);
+                if ref_name == &owner {
+                    let mut f = finding(
+                        LintSeverity::Error,
+                        CODE_SELF_VARIABLE_REFERENCE,
+                        file.path.clone(),
+                        None,
+                        Some(snippet.id.clone()),
+                        format!("variable '{owner}' references itself via <#{ref_name}>"),
+                        None,
+                    )
+                    .with_suppress_command(command.clone());
+                    if let Some((l, c0, c1)) = span {
+                        f = f.with_span(l, c0, c1);
+                    }
+                    out.push(f);
+                    continue;
+                }
+                if !declared.contains(ref_name) {
+                    let mut f = finding(
+                        LintSeverity::Error,
+                        CODE_UNKNOWN_VARIABLE_REFERENCE,
+                        file.path.clone(),
+                        None,
+                        Some(snippet.id.clone()),
+                        format!("variable '{owner}' references unknown <#{ref_name}>"),
+                        Some("declare it with an inline placeholder, frontmatter variable, or config override".to_string()),
+                    )
+                    .with_suppress_command(command.clone());
+                    if let Some((l, c0, c1)) = span {
+                        f = f.with_span(l, c0, c1);
+                    }
+                    out.push(f);
+                    continue;
+                }
+                if let (Some(&owner_idx), Some(&ref_idx)) =
+                    (order_index.get(&owner), order_index.get(ref_name))
+                    && ref_idx >= owner_idx
+                {
+                    let mut f = finding(
+                        LintSeverity::Error,
+                        CODE_FORWARD_VARIABLE_REFERENCE,
+                        file.path.clone(),
+                        None,
+                        Some(snippet.id.clone()),
+                        format!(
+                            "variable '{owner}' references <#{ref_name}> which comes later in prompt order"
+                        ),
+                        None,
+                    )
+                    .with_suppress_command(command.clone());
+                    if let Some((l, c0, c1)) = span {
+                        f = f.with_span(l, c0, c1);
+                    }
+                    out.push(f);
                 }
             }
         }
@@ -793,6 +1011,8 @@ fn finding(
         code,
         path,
         line,
+        col_start: None,
+        col_end: None,
         snippet_id: snippet_id.map(|id| id.to_string()),
         message,
         detail,
@@ -820,6 +1040,13 @@ fn attach_suppress_paths(findings: &mut [LintFinding], files: &[FileContext]) {
 impl LintFinding {
     fn with_suppress_command(mut self, command: String) -> Self {
         self.suppress_command = Some(command);
+        self
+    }
+
+    fn with_span(mut self, line: usize, col_start: usize, col_end: usize) -> Self {
+        self.line = Some(line);
+        self.col_start = Some(col_start);
+        self.col_end = Some(col_end);
         self
     }
 }
@@ -1323,6 +1550,220 @@ mod tests {
                 .findings
                 .iter()
                 .any(|f| f.code == CODE_MISSING_CODE_LANGUAGE)
+        );
+    }
+}
+
+#[cfg(test)]
+mod dependent_tests {
+    use super::*;
+    use crate::config::{FrecencyConfig, FuzzyWeights, SearchConfig, Theme, UiConfig};
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    fn temp_dir(prefix: &str) -> PathBuf {
+        static NEXT: AtomicU64 = AtomicU64::new(1);
+        let path = std::env::temp_dir().join(format!(
+            "pb-lint-dep-{prefix}-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        let _ = fs::remove_dir_all(&path);
+        fs::create_dir_all(&path).unwrap();
+        path
+    }
+
+    fn config(root: PathBuf) -> AppConfig {
+        AppConfig {
+            paths: Paths {
+                snippet_roots: vec![root.clone()],
+                xdg_snippets_dir: root.clone(),
+                snippet_overrides_active: false,
+                state_file: root.join("state.tsv"),
+                config_file: root.join("config.toml"),
+            },
+            ui: UiConfig::default(),
+            search: SearchConfig {
+                frecency_weight: 250.0,
+                fuzzy: FuzzyWeights::default(),
+                frecency: FrecencyConfig::default(),
+            },
+            variables: BTreeMap::new(),
+            theme: Theme::default(),
+            lint: BTreeMap::new(),
+            suggestion_commands: SuggestionCommandsConfig {
+                timeout_ms: 50,
+                allow_commands: true,
+            },
+        }
+    }
+
+    fn lint(root: PathBuf) -> LintResult {
+        let mut out = Vec::new();
+        run(
+            &config(root),
+            LintOptions {
+                strict: false,
+                json: false,
+            },
+            &mut out,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn dependent_command_is_skipped_not_executed() {
+        let root = temp_dir("skip");
+        fs::write(
+            root.join("snippets.md"),
+            "## Demo\n\n```bash\n<@bucket> <@key:ls <#bucket>>\n```\n",
+        )
+        .unwrap();
+        let result = lint(root);
+        assert!(
+            result
+                .findings
+                .iter()
+                .any(|f| f.code == CODE_DEPENDENT_SUGGESTION_SKIPPED),
+            "expected dependent-suggestion-skipped, got {:?}",
+            result.findings
+        );
+        // Should NOT report a command failure for the dependent command.
+        assert!(
+            !result
+                .findings
+                .iter()
+                .any(|f| f.code == CODE_SUGGESTION_COMMAND_FAILED)
+        );
+    }
+
+    #[test]
+    fn non_dependent_command_still_executes() {
+        let root = temp_dir("nondep");
+        fs::write(
+            root.join("snippets.md"),
+            "## Demo\n\n```bash\n<@x:echo a>\n```\n",
+        )
+        .unwrap();
+        let result = lint(root);
+        assert!(
+            !result
+                .findings
+                .iter()
+                .any(|f| f.code == CODE_DEPENDENT_SUGGESTION_SKIPPED)
+        );
+    }
+
+    #[test]
+    fn unknown_dependent_reference_is_flagged() {
+        let root = temp_dir("unknown");
+        fs::write(
+            root.join("snippets.md"),
+            "## Demo\n\n```bash\n<@x:echo <#nope>>\n```\n",
+        )
+        .unwrap();
+        let result = lint(root);
+        assert!(
+            result
+                .findings
+                .iter()
+                .any(|f| f.code == CODE_UNKNOWN_VARIABLE_REFERENCE),
+            "got {:?}",
+            result.findings
+        );
+    }
+
+    #[test]
+    fn forward_dependent_reference_is_flagged() {
+        let root = temp_dir("forward");
+        // Order: a, b. a's command references b (which comes after) → forward.
+        fs::write(
+            root.join("snippets.md"),
+            "## Demo\n\n```bash\n<@a:echo <#b>> <@b:?x>\n```\n",
+        )
+        .unwrap();
+        let result = lint(root);
+        assert!(
+            result
+                .findings
+                .iter()
+                .any(|f| f.code == CODE_FORWARD_VARIABLE_REFERENCE),
+            "got {:?}",
+            result.findings
+        );
+    }
+
+    #[test]
+    fn self_dependent_reference_is_flagged() {
+        let root = temp_dir("self");
+        fs::write(
+            root.join("snippets.md"),
+            "## Demo\n\n```bash\n<@a:echo <#a>>\n```\n",
+        )
+        .unwrap();
+        let result = lint(root);
+        assert!(
+            result
+                .findings
+                .iter()
+                .any(|f| f.code == CODE_SELF_VARIABLE_REFERENCE),
+            "got {:?}",
+            result.findings
+        );
+    }
+
+    #[test]
+    fn escaped_dependent_reference_is_not_flagged() {
+        let root = temp_dir("escaped");
+        fs::write(
+            root.join("snippets.md"),
+            "## Demo\n\n```bash\n<@x:echo \\<#nope>>\n```\n",
+        )
+        .unwrap();
+        let result = lint(root);
+        assert!(
+            !result
+                .findings
+                .iter()
+                .any(|f| f.code == CODE_UNKNOWN_VARIABLE_REFERENCE
+                    || f.code == CODE_DEPENDENT_SUGGESTION_SKIPPED),
+            "escaped literal should not be reported: {:?}",
+            result.findings
+        );
+    }
+
+    #[test]
+    fn ignore_command_suppresses_dependent_skip() {
+        let root = temp_dir("ignore-cmd");
+        fs::write(
+            root.join("snippets.md"),
+            "## Demo\n\n```bash\n<@bucket> <@key:ls <#bucket>>\n```\n",
+        )
+        .unwrap();
+        let mut cfg = config(root);
+        cfg.lint.insert(
+            "dependent-suggestion-skipped".to_string(),
+            crate::config::LintRuleConfig {
+                ignore_command: vec!["*ls*".to_string()],
+                ..Default::default()
+            },
+        );
+        let mut out = Vec::new();
+        let result = run(
+            &cfg,
+            LintOptions {
+                strict: false,
+                json: false,
+            },
+            &mut out,
+        )
+        .unwrap();
+        assert!(
+            !result
+                .findings
+                .iter()
+                .any(|f| f.code == CODE_DEPENDENT_SUGGESTION_SKIPPED),
+            "suppression should hide finding, got: {:?}",
+            result.findings
         );
     }
 }

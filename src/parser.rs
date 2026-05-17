@@ -553,18 +553,51 @@ pub fn parse_variables(body: &str) -> Vec<Variable> {
     while i + 1 < bytes.len() {
         if bytes[i] == b'<' && bytes[i + 1] == b'@' {
             let start = i + 2;
-            if let Some(offset) = body[start..].find('>') {
-                let inner = &body[start..start + offset];
+            if let Some(end) = find_placeholder_end(body, start) {
+                let inner = &body[start..end];
                 if let Some(var) = parse_variable_inner(inner) {
                     out.push(var);
                 }
-                i = start + offset + 1;
+                i = end + 1;
                 continue;
             }
         }
         i += 1;
     }
     out
+}
+
+/// Scan forward from `start` in `src` to find the `>` that closes a `<@...>`
+/// placeholder, treating nested `<#...>` references as opaque (their inner
+/// `>` does not terminate the outer placeholder). Backslash-escaped `\<#`
+/// inside the inner text is also skipped. Returns the byte index of the
+/// closing `>` if found.
+pub(crate) fn find_placeholder_end(src: &str, start: usize) -> Option<usize> {
+    let bytes = src.as_bytes();
+    let mut i = start;
+    while i < bytes.len() {
+        if bytes[i] == b'\\' && i + 2 < bytes.len() && bytes[i + 1] == b'<' && bytes[i + 2] == b'#'
+        {
+            // Skip past the escaped `\<#...>`: find its `>` and continue after.
+            if let Some(offset) = src[i + 1..].find('>') {
+                i = i + 1 + offset + 1;
+                continue;
+            }
+            return None;
+        }
+        if bytes[i] == b'<' && i + 1 < bytes.len() && bytes[i + 1] == b'#' {
+            if let Some(offset) = src[i + 2..].find('>') {
+                i = i + 2 + offset + 1;
+                continue;
+            }
+            return None;
+        }
+        if bytes[i] == b'>' {
+            return Some(i);
+        }
+        i += 1;
+    }
+    None
 }
 
 fn parse_variable_inner(inner: &str) -> Option<Variable> {

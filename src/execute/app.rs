@@ -1,4 +1,5 @@
 use crate::browse::{BrowseEntry, BrowseState, BrowseTree};
+use crate::command_template;
 use crate::config::{SearchConfig, SuggestionCommandsConfig, Theme, VariableInputConfig};
 use crate::domain::{SnippetId, Variable, VariableSource, VariableSpec};
 use crate::frecency::FrecencyStore;
@@ -191,14 +192,30 @@ pub trait SuggestionProvider {
     /// Return the candidate values to show in the suggestion list for `variable`
     /// when the user is in the given `cwd`. Returns an empty vec (not an error)
     /// when there are no suggestions.
+    ///
+    /// `confirmed` carries previously-confirmed variable values keyed by name,
+    /// used to substitute `<#name>` / `<#name:raw>` dependent references inside
+    /// the suggestion command before it is executed.
     fn suggestions(
         &self,
         variable: &Variable,
         cwd: &Path,
         local_variables: &std::collections::BTreeMap<String, VariableSpec>,
+        confirmed: &BTreeMap<String, String>,
     ) -> io::Result<Vec<String>>;
     /// Return the value to pre-populate the input box with, if any.
     fn default_input(
+        &self,
+        variable: &Variable,
+        local_variables: &std::collections::BTreeMap<String, VariableSpec>,
+    ) -> Option<String>;
+    /// Return the raw suggestion-command source for `variable`, if any, by
+    /// inspecting inline source, file-local spec, and config overrides in that
+    /// order. The string is the *unrendered* template — `<#...>` references
+    /// are not yet substituted. Returns `None` for variables that do not run
+    /// a shell command (free-form, default-only, builtins, static suggestion
+    /// lists).
+    fn command_source(
         &self,
         variable: &Variable,
         local_variables: &std::collections::BTreeMap<String, VariableSpec>,
@@ -231,15 +248,18 @@ impl SuggestionProvider for SystemSuggestionProvider {
         variable: &Variable,
         cwd: &Path,
         local_variables: &std::collections::BTreeMap<String, VariableSpec>,
+        confirmed: &BTreeMap<String, String>,
     ) -> io::Result<Vec<String>> {
         let timeout_ms = self.suggestion_commands.timeout_ms;
-        match &variable.source {
-            VariableSource::Command(cmd) => {
-                if !self.suggestion_commands.allow_commands {
-                    return Ok(Vec::new());
-                }
-                super::prompt::command_suggestions(cmd, cwd, timeout_ms)
+        let run = |command: &str| -> io::Result<Vec<String>> {
+            if !self.suggestion_commands.allow_commands {
+                return Ok(Vec::new());
             }
+            let rendered = render_template_for_exec(command, confirmed)?;
+            super::prompt::command_suggestions(&rendered, cwd, timeout_ms)
+        };
+        match &variable.source {
+            VariableSource::Command(cmd) => run(cmd),
             VariableSource::Default(_) => Ok(Vec::new()),
             VariableSource::Free => {
                 if let Some(config) = local_variables.get(&variable.name) {
@@ -247,10 +267,7 @@ impl SuggestionProvider for SystemSuggestionProvider {
                         return Ok(config.suggestions.clone());
                     }
                     if let Some(command) = &config.command {
-                        if !self.suggestion_commands.allow_commands {
-                            return Ok(Vec::new());
-                        }
-                        return super::prompt::command_suggestions(command, cwd, timeout_ms);
+                        return run(command);
                     }
                 }
                 if let Some(config) = self.variable_inputs.get(&variable.name) {
@@ -258,13 +275,40 @@ impl SuggestionProvider for SystemSuggestionProvider {
                         return Ok(config.suggestions.clone());
                     }
                     if let Some(command) = &config.command {
-                        if !self.suggestion_commands.allow_commands {
-                            return Ok(Vec::new());
-                        }
-                        return super::prompt::command_suggestions(command, cwd, timeout_ms);
+                        return run(command);
                     }
                 }
                 super::prompt::builtin_suggestions(&variable.name, cwd)
+            }
+        }
+    }
+
+    fn command_source(
+        &self,
+        variable: &Variable,
+        local_variables: &std::collections::BTreeMap<String, VariableSpec>,
+    ) -> Option<String> {
+        match &variable.source {
+            VariableSource::Command(cmd) => Some(cmd.clone()),
+            VariableSource::Default(_) => None,
+            VariableSource::Free => {
+                if let Some(config) = local_variables.get(&variable.name) {
+                    if !config.suggestions.is_empty() {
+                        return None;
+                    }
+                    if let Some(command) = &config.command {
+                        return Some(command.clone());
+                    }
+                }
+                if let Some(config) = self.variable_inputs.get(&variable.name) {
+                    if !config.suggestions.is_empty() {
+                        return None;
+                    }
+                    if let Some(command) = &config.command {
+                        return Some(command.clone());
+                    }
+                }
+                None
             }
         }
     }
@@ -295,7 +339,10 @@ pub(crate) enum Screen {
     /// The snippet picker (fuzzy search, browse tree, or tags view).
     Select,
     /// Variable-filling dialog for the snippet identified by `PromptState`.
-    Prompt(PromptState),
+    ///
+    /// `PromptState` is boxed because it is significantly larger than the
+    /// other (zero-sized) variant of this enum.
+    Prompt(Box<PromptState>),
 }
 
 /// Root application state for the interactive TUI session.
@@ -766,7 +813,7 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
             PromptState::new(snippet_id, variables, snippet.frontmatter.variables.clone());
         load_prompt_state(&mut prompt, &self.provider, &self.cwd);
         self.status = prompt.error.clone();
-        self.screen = Screen::Prompt(prompt);
+        self.screen = Screen::Prompt(Box::new(prompt));
         AppEvent::Continue
     }
 
@@ -907,6 +954,17 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
         let current = self.tags.list_selection.unwrap_or(0).min(visible_len - 1);
         self.tags.list_selection = Some(current);
     }
+}
+
+/// Parse `command` for `<#...>` references, substitute confirmed values, and
+/// return the rendered string ready for `bash -c`. Parse and render errors
+/// become `io::Error` so they flow through the existing suggestion-error path.
+pub(crate) fn render_template_for_exec(
+    command: &str,
+    confirmed: &BTreeMap<String, String>,
+) -> io::Result<String> {
+    let template = command_template::parse_command_template(command).map_err(io::Error::other)?;
+    command_template::render(&template, confirmed).map_err(io::Error::other)
 }
 
 pub(crate) fn tag_label(key: &TagKey) -> &str {

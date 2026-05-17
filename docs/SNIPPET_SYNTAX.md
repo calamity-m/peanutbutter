@@ -279,6 +279,88 @@ uses the frontmatter default and config suggestions. If frontmatter defines
 either `suggestions` or `command`, that frontmatter suggestion source is used
 instead of config suggestions or command.
 
+### Dependent Variables
+
+A suggestion command may reference values the user has already confirmed for
+earlier variables, using `<#name>` (shell-quoted) or `<#name:raw>` (literal
+splice) tokens inside the command source. This lets one variable's suggestion
+list depend on another.
+
+Worked example — pick a Kubernetes secret, then pick a key from that secret:
+
+```sh
+kubectl get secret <@secret:kubectl get secret -o name | sed 's#secret/##'> -o jsonpath="{.data.<@key:kubectl get secret <#secret> -o jsonpath='{.data}' | jq -r 'keys[]'>}"
+```
+
+When the user confirms `secret`, the `key` variable's command is re-evaluated
+with `<#secret>` substituted, so its suggestions are the data keys of the
+chosen secret.
+
+**Quoting forms.**
+
+- `<#name>` — substitutes the confirmed value shell-single-quoted. Embedded
+  `'` characters become `'\''`. Safe against spaces, `;`, `$(...)`, and other
+  shell metacharacters. This is the default and should be used whenever the
+  value is an argument to a command.
+- `<#name:raw>` — substitutes the confirmed value verbatim, with no quoting.
+  Use this when the value itself is meant to provide shell syntax — typically
+  the "command-as-variable" pattern:
+
+  ```sh
+  <@verb:?get pods> <@target:kubectl <#verb:raw> -o name>
+  ```
+
+  Here `verb=get pods` splices as two words into the `kubectl` invocation.
+
+**Escaping a literal `<#name>`.** Prefix the opener with a backslash:
+`\<#name>` renders as the literal text `<#name>` and does not count as a
+dependent reference.
+
+**Declaration order = dependency order.** A `<#name>` reference may only point
+at a variable that appears *earlier* in the snippet's deduplicated prompt
+order (the order the TUI tabs through). Frontmatter and config variable specs
+do not create a separate dependency order — they overlay specs for variables
+that appear in the body. Forward references and self-references are lint
+errors.
+
+**Confirmed values only.** Only values the user has confirmed (moved past with
+Enter or Tab) are substituted. The in-flight input buffer is not visible to
+downstream commands. If the user revisits an upstream variable and changes
+its value, dependent descendants become *dirty*: their text is preserved for
+editing, but they are not treated as confirmed for later substitutions until
+the user revisits and reconfirms them.
+
+**Latency.** Each dependent step is bounded by the per-command timeout
+(default 2000ms). Suggestion lists are cached per upstream snapshot, so
+tabbing back to a downstream variable without changing the upstream does not
+re-run the command. Even so, keep dependent commands cheap — chained slow
+commands compound.
+
+**Security caveat for `:raw`.** Because `<#name:raw>` does not quote, a value
+containing shell metacharacters can change the semantics of the suggestion
+command — including arbitrary command execution if the upstream value comes
+from untrusted input. Restrict `:raw` consumption to variables whose upstream
+values come from a trusted source (suggestion lists you control), not
+free-form user input.
+
+**Failure UX.** If a dependent suggestion command exits non-zero, the error
+appears in the prompt status line and the user can still type a value or
+Shift+Tab back to fix the upstream. Failed dependent commands are not
+cached — revisiting the variable retries them.
+
+**Lint codes.**
+
+- `lint/dependent-suggestion-skipped` — `pb lint` does not execute a command
+  with `<#...>` references because there is no user input at lint time.
+  Suppress with `[lint.dependent-suggestion-skipped] ignore_command = "..."`.
+- `lint/unknown-variable-reference` — `<#name>` points at a name that is not
+  declared in the snippet, frontmatter, or config.
+- `lint/forward-variable-reference` — `<#name>` points at a variable that
+  comes later in prompt order.
+- `lint/self-variable-reference` — a variable's command references itself.
+- `lint/invalid-dependent-reference` — the `<#...>` token cannot be parsed
+  (unterminated, empty name, unknown modifier).
+
 ### Multi-line Values
 
 When filling in a variable, the value can span multiple lines:

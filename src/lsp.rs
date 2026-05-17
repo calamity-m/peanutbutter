@@ -226,11 +226,23 @@ fn lint_finding_to_diagnostic(finding: &lint::LintFinding, content: &str) -> Dia
         .nth(line as usize)
         .map(|l| l.len() as u32)
         .unwrap_or(0);
-    let range = Range {
-        start: Position { line, character: 0 },
-        end: Position {
-            line,
-            character: line_len,
+    let range = match (finding.col_start, finding.col_end) {
+        (Some(c0), Some(c1)) => Range {
+            start: Position {
+                line,
+                character: c0 as u32,
+            },
+            end: Position {
+                line,
+                character: c1 as u32,
+            },
+        },
+        _ => Range {
+            start: Position { line, character: 0 },
+            end: Position {
+                line,
+                character: line_len,
+            },
         },
     };
     let severity = match finding.severity {
@@ -330,8 +342,45 @@ fn compute_completions(content: &str, pos: Position) -> Option<CompletionRespons
         return Some(CompletionResponse::Array(items));
     }
 
-    // Inside a code block — offer `<@variable>` completions when user typed `<@`
     let before_cursor = &current_line[..char_idx.min(current_line.len())];
+
+    // Offer `<#variable>` dependent-ref completions when user typed `<#`.
+    // These are valid inside a suggestion command source (which we cannot
+    // easily detect from raw text), so we offer them whenever the cursor
+    // follows a `<#` token.
+    if let Some(at_pos) = before_cursor.rfind("<#") {
+        let var_prefix = &before_cursor[at_pos + 2..];
+        let parsed =
+            parser::parse_file(std::path::Path::new(""), std::path::Path::new(""), content);
+        let mut names: Vec<String> = parsed.frontmatter.variables.keys().cloned().collect();
+        // Add body placeholder names too, in document order.
+        for snippet in &parsed.snippets {
+            for v in &snippet.variables {
+                if !names.contains(&v.name) {
+                    names.push(v.name.clone());
+                }
+            }
+        }
+        let items: Vec<CompletionItem> = names
+            .into_iter()
+            .filter(|name| name.starts_with(var_prefix))
+            .map(|name| {
+                let detail = parsed
+                    .frontmatter
+                    .variables
+                    .get(&name)
+                    .map(variable_spec_summary)
+                    .unwrap_or_else(|| "dependent reference".to_string());
+                let mut item = completion_item(&name, &detail, CompletionItemKind::VARIABLE);
+                item.insert_text = Some(format!("{name}>"));
+                item.insert_text_format = Some(InsertTextFormat::PLAIN_TEXT);
+                item
+            })
+            .collect();
+        return Some(CompletionResponse::Array(items));
+    }
+
+    // Inside a code block — offer `<@variable>` completions when user typed `<@`
     if before_cursor.ends_with("<@") || before_cursor.contains("<@") {
         // Extract the prefix after `<@`
         let at_pos = before_cursor.rfind("<@").map(|i| i + 2).unwrap_or(0);
@@ -406,8 +455,44 @@ fn compute_hover(content: &str, pos: Position) -> Option<Hover> {
         return hover_frontmatter_key(current_line, pos);
     }
 
-    // Check if cursor is on a `<@name>` or `<@name:source>` placeholder
+    // Prefer `<#name>` (inner) over `<@name>` (potentially enclosing).
+    if let Some(h) = hover_dependent_ref(content, current_line, char_idx, pos) {
+        return Some(h);
+    }
     hover_variable_placeholder(content, current_line, char_idx, pos)
+}
+
+fn hover_dependent_ref(content: &str, line: &str, char_idx: usize, pos: Position) -> Option<Hover> {
+    let (name, start, end, raw) = dependent_ref_at(line, char_idx)?;
+    let parsed = parser::parse_file(std::path::Path::new(""), std::path::Path::new(""), content);
+    let mut md = if raw {
+        format!("**`<#{name}:raw>`** — dependent reference (raw splice, **not quoted**)\n\n")
+    } else {
+        format!("**`<#{name}>`** — dependent reference (shell-quoted)\n\n")
+    };
+    if let Some(spec) = parsed.frontmatter.variables.get(&name) {
+        if let Some(d) = &spec.default {
+            md.push_str(&format!("- **default**: `{d}`\n"));
+        }
+        if !spec.suggestions.is_empty() {
+            md.push_str(&format!(
+                "- **suggestions**: {}\n",
+                spec.suggestions.join(", ")
+            ));
+        }
+        if let Some(cmd) = &spec.command {
+            md.push_str(&format!("- **command**: `{cmd}`\n"));
+        }
+    } else {
+        md.push_str("_no frontmatter variable spec; declared inline or in config_\n");
+    }
+    Some(Hover {
+        contents: HoverContents::Markup(MarkupContent {
+            kind: MarkupKind::Markdown,
+            value: md,
+        }),
+        range: Some(line_range(pos.line, start as u32, end as u32)),
+    })
 }
 
 fn hover_frontmatter_key(line: &str, pos: Position) -> Option<Hover> {
@@ -466,7 +551,12 @@ fn compute_definition(uri: &Url, content: &str, pos: Position) -> Option<GotoDef
     let char_idx = pos.character as usize;
     let current_line = lines.get(line_idx).copied()?;
 
-    let (name, _, _) = placeholder_at(current_line, char_idx)?;
+    // Cursor may be on either `<@name>` or `<#name>`. Prefer the inner
+    // `<#name>` token because `placeholder_at` will match an enclosing
+    // `<@key:cmd-with-<#name>>` even when the cursor is on the nested ref.
+    let name = dependent_ref_at(current_line, char_idx)
+        .map(|(n, ..)| n)
+        .or_else(|| placeholder_at(current_line, char_idx).map(|(n, ..)| n))?;
 
     // Find the declaration line inside `variables:` frontmatter block.
     let def_line = find_variable_declaration_line(&lines, &name)?;
@@ -531,25 +621,36 @@ fn compute_references(uri: &Url, content: &str, pos: Position) -> Option<Vec<Loc
             return None;
         }
     } else {
-        // Cursor might be on a placeholder.
+        // Cursor might be on a `<#name>` ref or a `<@name>` placeholder.
+        // Prefer the inner `<#name>` so nested refs inside `<@key:...>` work.
         let char_idx = pos.character as usize;
-        let (name, _, _) = placeholder_at(current_line, char_idx)?;
-        var_name = name;
+        var_name = dependent_ref_at(current_line, char_idx)
+            .map(|(n, ..)| n)
+            .or_else(|| placeholder_at(current_line, char_idx).map(|(n, ..)| n))?;
     }
 
-    // Find all `<@var_name` occurrences in the document.
-    let pattern = format!("<@{var_name}");
     let mut locations = Vec::new();
+    // Find all `<@var_name>` and `<@var_name:...>` placeholder occurrences.
+    let at_pattern = format!("<@{var_name}");
+    // Find all `<#var_name>` and `<#var_name:raw>` dependent-ref occurrences.
+    let hash_pattern = format!("<#{var_name}");
     for (i, line) in lines.iter().enumerate() {
-        let mut search_from = 0;
-        while let Some(col) = line[search_from..].find(&pattern) {
-            let abs_col = search_from + col;
-            let end_col = abs_col + pattern.len();
-            locations.push(Location {
-                uri: uri.clone(),
-                range: line_range(i as u32, abs_col as u32, end_col as u32),
-            });
-            search_from = abs_col + 1;
+        for pattern in [&at_pattern, &hash_pattern] {
+            let mut search_from = 0;
+            while let Some(col) = line[search_from..].find(pattern.as_str()) {
+                let abs_col = search_from + col;
+                let end_col = abs_col + pattern.len();
+                // Boundary check: the next char must be `>` or `:` to avoid
+                // matching `<@foo` inside `<@foobar>`.
+                let next = line[end_col..].chars().next();
+                if matches!(next, Some('>') | Some(':')) {
+                    locations.push(Location {
+                        uri: uri.clone(),
+                        range: line_range(i as u32, abs_col as u32, end_col as u32),
+                    });
+                }
+                search_from = abs_col + 1;
+            }
         }
     }
     Some(locations)
@@ -600,6 +701,39 @@ fn frontmatter_end_line(lines: &[&str]) -> Option<usize> {
         .iter()
         .position(|l| l.trim() == "---")
         .map(|i| i + 1)
+}
+
+/// Extract the variable name and byte span `[start, end)` of a `<#name…>` or
+/// `<#name:raw>` dependent reference that the cursor sits within. Returns
+/// the bool `raw` indicating which form was used.
+fn dependent_ref_at(line: &str, char_idx: usize) -> Option<(String, usize, usize, bool)> {
+    let bytes = line.as_bytes();
+    let mut i = 0;
+    while i < bytes.len().saturating_sub(1) {
+        if bytes[i] == b'<' && bytes[i + 1] == b'#' {
+            let start = i;
+            let end = match bytes[start..].iter().position(|&b| b == b'>') {
+                Some(rel) => start + rel + 1,
+                None => bytes.len(),
+            };
+            if char_idx >= start && char_idx <= end {
+                let inner = &line[start + 2..end.min(bytes.len()).saturating_sub(1)];
+                let (name_part, raw) = match inner.split_once(':') {
+                    Some((n, m)) => (n, m == "raw"),
+                    None => (inner, false),
+                };
+                let name = name_part.trim().to_string();
+                if name.is_empty() {
+                    return None;
+                }
+                return Some((name, start, end, raw));
+            }
+            i = end;
+        } else {
+            i += 1;
+        }
+    }
+    None
 }
 
 /// Extract the variable name and byte span `[start, end)` of a `<@name…>` or
@@ -713,5 +847,99 @@ mod tests {
         fs::write(&file, "").unwrap();
         assert_eq!(find_marker_root(&file), Some(inner.clone()));
         fs::remove_dir_all(&outer).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod dependent_lsp_tests {
+    use super::*;
+
+    fn pos(line: u32, character: u32) -> Position {
+        Position { line, character }
+    }
+
+    #[test]
+    fn dependent_ref_at_finds_token() {
+        let line = "<@key:ls <#bucket>>";
+        let (name, start, end, raw) = dependent_ref_at(line, 12).unwrap();
+        assert_eq!(name, "bucket");
+        assert_eq!(start, 9);
+        assert_eq!(end, 18);
+        assert!(!raw);
+    }
+
+    #[test]
+    fn dependent_ref_at_handles_raw_modifier() {
+        let line = "kubectl <#verb:raw> -o name";
+        let (name, _, _, raw) = dependent_ref_at(line, 12).unwrap();
+        assert_eq!(name, "verb");
+        assert!(raw);
+    }
+
+    #[test]
+    fn dependent_ref_at_returns_none_outside() {
+        let line = "echo hi";
+        assert!(dependent_ref_at(line, 2).is_none());
+    }
+
+    #[test]
+    fn hover_on_dependent_ref_distinguishes_quoted_and_raw() {
+        let content = "---\nvariables:\n  bucket:\n    suggestions: [a, b]\n---\n## D\n\n```bash\n<@bucket> <@key:ls <#bucket>>\n```\n";
+        // Cursor is on `<#bucket>` inside the inline command. Body starts at
+        // line 8 (0-based).
+        let line_idx = 8;
+        let line = content.lines().nth(line_idx).unwrap();
+        let col = line.find("<#bucket").unwrap() + 2;
+        let h = compute_hover(content, pos(line_idx as u32, col as u32)).unwrap();
+        let HoverContents::Markup(m) = h.contents else {
+            panic!("expected markup");
+        };
+        assert!(m.value.contains("shell-quoted"), "got {}", m.value);
+        assert!(m.value.contains("`<#bucket>`"));
+    }
+
+    #[test]
+    fn definition_jumps_from_dependent_ref_to_frontmatter() {
+        let content = "---\nvariables:\n  bucket:\n    suggestions: [a]\n---\n## D\n\n```bash\n<@bucket> <@key:ls <#bucket>>\n```\n";
+        let uri = Url::parse("file:///x.md").unwrap();
+        let line_idx = 8;
+        let line = content.lines().nth(line_idx).unwrap();
+        let col = line.find("<#bucket").unwrap() + 2;
+        let def = compute_definition(&uri, content, pos(line_idx as u32, col as u32)).unwrap();
+        let GotoDefinitionResponse::Scalar(loc) = def else {
+            panic!("expected scalar");
+        };
+        // bucket: is declared on line 2 (0-based).
+        assert_eq!(loc.range.start.line, 2);
+    }
+
+    #[test]
+    fn references_includes_both_at_and_hash_uses() {
+        let content = "---\nvariables:\n  bucket:\n    suggestions: [a]\n---\n## D\n\n```bash\n<@bucket> <@key:ls <#bucket>>\n```\n";
+        let uri = Url::parse("file:///x.md").unwrap();
+        // Cursor on the `<#bucket>` ref.
+        let line_idx = 8;
+        let line = content.lines().nth(line_idx).unwrap();
+        let col = line.find("<#bucket").unwrap() + 2;
+        let refs = compute_references(&uri, content, pos(line_idx as u32, col as u32)).unwrap();
+        // Expect at least: one `<@bucket>` and one `<#bucket>` on the body line.
+        let bodies: Vec<_> = refs.iter().filter(|l| l.range.start.line == 8).collect();
+        assert!(bodies.len() >= 2, "got {refs:?}");
+    }
+
+    #[test]
+    fn completion_after_hash_offers_only_variables_matching_prefix() {
+        let content = "---\nvariables:\n  bucket:\n    suggestions: [a]\n  beach:\n    suggestions: [b]\n---\n## D\n\n```bash\n<@bucket> <@key:ls <#bu\n```\n";
+        let line_idx = 10;
+        let line = content.lines().nth(line_idx).unwrap();
+        let col = line.len();
+        let resp = compute_completions(content, pos(line_idx as u32, col as u32)).unwrap();
+        let CompletionResponse::Array(items) = resp else {
+            panic!("expected array");
+        };
+        let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
+        // Prefix "bu" matches only `bucket`, not `beach`.
+        assert!(labels.contains(&"bucket"), "got {labels:?}");
+        assert!(!labels.contains(&"beach"), "got {labels:?}");
     }
 }

@@ -29,6 +29,7 @@ pub mod browse;
 pub mod capture;
 pub mod capture_heuristics;
 pub mod cli;
+pub mod command_template;
 pub mod completions;
 pub mod config;
 pub mod discovery;

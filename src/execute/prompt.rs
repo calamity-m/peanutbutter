@@ -1,10 +1,11 @@
+use crate::command_template::{CommandTemplate, parse_command_template, referenced_names};
 use crate::config::Theme;
 use crate::domain::{Variable, VariableSpec};
 use crate::index::SnippetIndex;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span, Text};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
 use std::io;
 use std::path::Path;
@@ -40,6 +41,24 @@ pub(crate) struct PromptState {
     pub(crate) error: Option<String>,
     /// Currently highlighted row in the visible (filtered) suggestion list.
     pub(crate) selection: Option<usize>,
+    /// Variables whose previously-confirmed value has been invalidated because
+    /// an upstream value they depend on changed. Dirty values still appear in
+    /// `values` for input-buffer preservation, but they are not visible to
+    /// downstream `<#name>` substitutions until the user reconfirms them.
+    pub(crate) dirty: BTreeSet<String>,
+    /// Suggestion cache for dependent commands keyed on the upstream snapshot
+    /// they were computed from. Non-dependent commands bypass this cache.
+    pub(crate) suggestion_cache: HashMap<String, CachedSuggestions>,
+}
+
+/// Cached suggestion list for one dependent variable, alongside the upstream
+/// confirmed values used to compute it.
+#[derive(Debug, Clone)]
+pub(crate) struct CachedSuggestions {
+    /// Confirmed values of the upstream variables referenced by the command.
+    pub upstream: BTreeMap<String, String>,
+    /// The suggestion list returned by the provider.
+    pub suggestions: Vec<String>,
 }
 
 impl PromptState {
@@ -62,6 +81,8 @@ impl PromptState {
             suggestions: Vec::new(),
             error: None,
             selection: None,
+            dirty: BTreeSet::new(),
+            suggestion_cache: HashMap::new(),
         }
     }
 
@@ -221,7 +242,7 @@ pub(crate) fn handle_prompt_key<P: SuggestionProvider>(
             PromptTransition::Stay
         }
         KeyCode::Enter => {
-            store_current_value(prompt);
+            store_current_value(prompt, provider);
             if prompt.index + 1 < prompt.variables.len() {
                 prompt.index += 1;
                 load_prompt_state(prompt, provider, cwd);
@@ -240,11 +261,64 @@ pub(crate) fn handle_prompt_key<P: SuggestionProvider>(
     }
 }
 
-fn store_current_value(prompt: &mut PromptState) {
+fn store_current_value<P: SuggestionProvider>(prompt: &mut PromptState, provider: &P) {
     let variable = prompt.current_variable().clone();
+    let new_value = prompt.current_value();
+    let old_value = prompt.values.get(&variable.name).cloned();
     prompt
         .values
-        .insert(variable.name.clone(), prompt.current_value());
+        .insert(variable.name.clone(), new_value.clone());
+    // User reconfirmed this variable — clear its dirty flag.
+    prompt.dirty.remove(&variable.name);
+    // If the confirmed value changed, dirty downstream variables that depend
+    // on this one (transitively).
+    if old_value.as_deref() != Some(new_value.as_str()) {
+        mark_downstream_dirty(prompt, provider, &variable.name);
+    }
+}
+
+/// Walk forward through `prompt.variables` starting after the current index
+/// and mark as dirty any later variable whose suggestion-command template
+/// references `changed_name` (or, transitively, another newly-dirty name).
+fn mark_downstream_dirty<P: SuggestionProvider>(
+    prompt: &mut PromptState,
+    provider: &P,
+    changed_name: &str,
+) {
+    let mut tainted = BTreeSet::new();
+    tainted.insert(changed_name.to_string());
+    let locals = prompt.local_variables.clone();
+    let start = prompt.index + 1;
+    if start >= prompt.variables.len() {
+        return;
+    }
+    let names: Vec<String> = prompt.variables[start..]
+        .iter()
+        .map(|v| v.name.clone())
+        .collect();
+    for (offset, name) in names.iter().enumerate() {
+        let variable = &prompt.variables[start + offset];
+        let Some(template) = parsed_command_template(provider, variable, &locals) else {
+            continue;
+        };
+        let refs = referenced_names(&template);
+        if refs.iter().any(|r| tainted.contains(r)) {
+            prompt.dirty.insert(name.clone());
+            tainted.insert(name.clone());
+        }
+    }
+}
+
+/// Look up the suggestion-command source for `variable` (via the provider's
+/// resolution chain) and parse it into a [`CommandTemplate`]. Returns `None`
+/// when there is no command source or the source fails to parse.
+fn parsed_command_template<P: SuggestionProvider>(
+    provider: &P,
+    variable: &Variable,
+    local_variables: &BTreeMap<String, VariableSpec>,
+) -> Option<CommandTemplate> {
+    let source = provider.command_source(variable, local_variables)?;
+    parse_command_template(&source).ok()
 }
 
 fn cycle_prompt_variable<P: SuggestionProvider>(
@@ -254,7 +328,7 @@ fn cycle_prompt_variable<P: SuggestionProvider>(
     cwd: &Path,
     status: &mut Option<String>,
 ) {
-    store_current_value(prompt);
+    store_current_value(prompt, provider);
     if prompt.variables.len() <= 1 {
         return;
     }
@@ -275,21 +349,73 @@ pub(crate) fn load_prompt_state<P: SuggestionProvider>(
     cwd: &Path,
 ) {
     let variable = prompt.current_variable().clone();
-    prompt.input = prompt
-        .values
-        .get(&variable.name)
-        .cloned()
-        .or_else(|| default_input(&variable))
-        .or_else(|| provider.default_input(&variable, &prompt.local_variables))
-        .unwrap_or_default();
-    prompt.error = None;
-    prompt.suggestions = match provider.suggestions(&variable, cwd, &prompt.local_variables) {
-        Ok(values) => values,
-        Err(err) => {
-            prompt.error = Some(err.to_string());
-            Vec::new()
-        }
+    // Input-buffer preservation rule: restore the previously-entered text
+    // (confirmed or dirty) if present — including "confirmed empty". Only
+    // fall back to default_input on first entry to a never-touched variable.
+    prompt.input = if let Some(value) = prompt.values.get(&variable.name).cloned() {
+        value
+    } else {
+        default_input(&variable)
+            .or_else(|| provider.default_input(&variable, &prompt.local_variables))
+            .unwrap_or_default()
     };
+    prompt.error = None;
+
+    let confirmed = confirmed_upstream(prompt);
+
+    // Determine whether this variable's suggestion command is dependent.
+    let template = parsed_command_template(provider, &variable, &prompt.local_variables);
+    let upstream_refs = template.as_ref().map(referenced_names).unwrap_or_default();
+
+    if !upstream_refs.is_empty() {
+        // Dependent: consult the cache keyed on the upstream snapshot.
+        let upstream_snapshot: BTreeMap<String, String> = upstream_refs
+            .iter()
+            .map(|name| {
+                (
+                    name.clone(),
+                    confirmed.get(name).cloned().unwrap_or_default(),
+                )
+            })
+            .collect();
+        if let Some(cached) = prompt.suggestion_cache.get(&variable.name)
+            && cached.upstream == upstream_snapshot
+        {
+            // Cache hit — reuse and preserve transient suggestion state.
+            prompt.suggestions = cached.suggestions.clone();
+            return;
+        }
+        // Cache miss — fetch, store on success, reset transient state.
+        match provider.suggestions(&variable, cwd, &prompt.local_variables, &confirmed) {
+            Ok(values) => {
+                prompt.suggestions = values.clone();
+                prompt.suggestion_cache.insert(
+                    variable.name.clone(),
+                    CachedSuggestions {
+                        upstream: upstream_snapshot,
+                        suggestions: values,
+                    },
+                );
+            }
+            Err(err) => {
+                prompt.error = Some(err.to_string());
+                prompt.suggestions = Vec::new();
+                // Do not cache failed commands — let revisit retry.
+            }
+        }
+        prompt.reset_selection();
+        return;
+    }
+
+    // Non-dependent: same behavior as before — re-fetch on every revisit.
+    prompt.suggestions =
+        match provider.suggestions(&variable, cwd, &prompt.local_variables, &confirmed) {
+            Ok(values) => values,
+            Err(err) => {
+                prompt.error = Some(err.to_string());
+                Vec::new()
+            }
+        };
     prompt.reset_selection();
 }
 
@@ -310,20 +436,19 @@ fn template_segments(template: &str) -> Vec<Segment<'_>> {
     while i < bytes.len() {
         if i + 1 < bytes.len() && bytes[i] == b'<' && bytes[i + 1] == b'@' {
             let inner_start = i + 2;
-            if let Some(end_offset) = template[inner_start..].find('>') {
-                let inner_end = inner_start + end_offset;
-                if let Some(name) = placeholder_name(&template[inner_start..inner_end]) {
-                    if literal_start < i {
-                        out.push(Segment::Literal(&template[literal_start..i]));
-                    }
-                    out.push(Segment::Placeholder {
-                        name,
-                        raw: &template[i..=inner_end],
-                    });
-                    i = inner_end + 1;
-                    literal_start = i;
-                    continue;
+            if let Some(inner_end) = crate::parser::find_placeholder_end(template, inner_start)
+                && let Some(name) = placeholder_name(&template[inner_start..inner_end])
+            {
+                if literal_start < i {
+                    out.push(Segment::Literal(&template[literal_start..i]));
                 }
+                out.push(Segment::Placeholder {
+                    name,
+                    raw: &template[i..=inner_end],
+                });
+                i = inner_end + 1;
+                literal_start = i;
+                continue;
             }
         }
         let ch = template[i..]
@@ -438,6 +563,23 @@ pub(crate) fn active_prompt_style(theme: &Theme) -> Style {
 
 pub(crate) fn placeholder_prompt_style(theme: &Theme) -> Style {
     theme.placeholder
+}
+
+/// Build the map of upstream confirmed values that may be substituted into
+/// the current variable's suggestion command. Only includes variables that
+/// appear earlier in the prompt order and have a non-dirty confirmed value.
+pub(crate) fn confirmed_upstream(prompt: &PromptState) -> BTreeMap<String, String> {
+    let mut out = BTreeMap::new();
+    let upper = prompt.index.min(prompt.variables.len());
+    for variable in &prompt.variables[..upper] {
+        if prompt.dirty.contains(&variable.name) {
+            continue;
+        }
+        if let Some(value) = prompt.values.get(&variable.name) {
+            out.insert(variable.name.clone(), value.clone());
+        }
+    }
+    out
 }
 
 fn default_input(variable: &Variable) -> Option<String> {
