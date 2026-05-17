@@ -14,9 +14,10 @@
 //! any marked tree receive empty diagnostics and no completions/hover/definitions.
 
 use crate::config::{self, AppConfig};
+use crate::domain::VariableSpec;
 use crate::lint;
 use crate::parser;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -139,7 +140,7 @@ impl LanguageServer for Backend {
         let Some(content) = docs.get(uri) else {
             return Ok(None);
         };
-        Ok(compute_completions(content, pos))
+        Ok(compute_completions(content, pos, &self.config.variables))
     }
 
     async fn hover(&self, params: HoverParams) -> Result<Option<Hover>> {
@@ -152,7 +153,7 @@ impl LanguageServer for Backend {
         let Some(content) = docs.get(uri) else {
             return Ok(None);
         };
-        Ok(compute_hover(content, pos))
+        Ok(compute_hover(content, pos, &self.config.variables))
     }
 
     async fn goto_definition(
@@ -168,7 +169,7 @@ impl LanguageServer for Backend {
         let Some(content) = docs.get(uri) else {
             return Ok(None);
         };
-        Ok(compute_definition(uri, content, pos))
+        Ok(compute_definition(uri, content, pos, self.config.as_ref()))
     }
 
     async fn references(&self, params: ReferenceParams) -> Result<Option<Vec<Location>>> {
@@ -294,7 +295,11 @@ const VARIABLE_SPEC_KEYS: &[(&str, &str)] = &[
     ),
 ];
 
-fn compute_completions(content: &str, pos: Position) -> Option<CompletionResponse> {
+fn compute_completions(
+    content: &str,
+    pos: Position,
+    config_vars: &BTreeMap<String, VariableSpec>,
+) -> Option<CompletionResponse> {
     let lines: Vec<&str> = content.lines().collect();
     let line_idx = pos.line as usize;
     let char_idx = pos.character as usize;
@@ -353,6 +358,12 @@ fn compute_completions(content: &str, pos: Position) -> Option<CompletionRespons
         let parsed =
             parser::parse_file(std::path::Path::new(""), std::path::Path::new(""), content);
         let mut names: Vec<String> = parsed.frontmatter.variables.keys().cloned().collect();
+        // Add config-defined names not already in frontmatter.
+        for name in config_vars.keys() {
+            if !names.contains(name) {
+                names.push(name.clone());
+            }
+        }
         // Add body placeholder names too, in document order.
         for snippet in &parsed.snippets {
             for v in &snippet.variables {
@@ -369,6 +380,7 @@ fn compute_completions(content: &str, pos: Position) -> Option<CompletionRespons
                     .frontmatter
                     .variables
                     .get(&name)
+                    .or_else(|| config_vars.get(&name))
                     .map(variable_spec_summary)
                     .unwrap_or_else(|| "dependent reference".to_string());
                 let mut item = completion_item(&name, &detail, CompletionItemKind::VARIABLE);
@@ -385,19 +397,20 @@ fn compute_completions(content: &str, pos: Position) -> Option<CompletionRespons
         // Extract the prefix after `<@`
         let at_pos = before_cursor.rfind("<@").map(|i| i + 2).unwrap_or(0);
         let var_prefix = &before_cursor[at_pos..];
-        // Collect declared frontmatter variables
         let parsed =
             parser::parse_file(std::path::Path::new(""), std::path::Path::new(""), content);
-        let items: Vec<CompletionItem> = parsed
-            .frontmatter
-            .variables
-            .keys()
-            .filter(|name| name.starts_with(var_prefix))
-            .map(|name| {
-                let spec = &parsed.frontmatter.variables[name];
+        // Merge frontmatter variables with config-defined variables; frontmatter takes priority.
+        let mut all_vars: BTreeMap<&str, &VariableSpec> =
+            config_vars.iter().map(|(k, v)| (k.as_str(), v)).collect();
+        for (k, v) in &parsed.frontmatter.variables {
+            all_vars.insert(k.as_str(), v);
+        }
+        let items: Vec<CompletionItem> = all_vars
+            .into_iter()
+            .filter(|(name, _)| name.starts_with(var_prefix))
+            .map(|(name, spec)| {
                 let detail = variable_spec_summary(spec);
                 let mut item = completion_item(name, &detail, CompletionItemKind::VARIABLE);
-                // Insert the full placeholder including closing `>`
                 item.insert_text = Some(format!("{name}>"));
                 item.insert_text_format = Some(InsertTextFormat::PLAIN_TEXT);
                 item
@@ -440,7 +453,11 @@ fn variable_spec_summary(spec: &crate::domain::VariableSpec) -> String {
 // Hover
 // ---------------------------------------------------------------------------
 
-fn compute_hover(content: &str, pos: Position) -> Option<Hover> {
+fn compute_hover(
+    content: &str,
+    pos: Position,
+    config_vars: &BTreeMap<String, VariableSpec>,
+) -> Option<Hover> {
     let lines: Vec<&str> = content.lines().collect();
     let line_idx = pos.line as usize;
     let char_idx = pos.character as usize;
@@ -456,13 +473,19 @@ fn compute_hover(content: &str, pos: Position) -> Option<Hover> {
     }
 
     // Prefer `<#name>` (inner) over `<@name>` (potentially enclosing).
-    if let Some(h) = hover_dependent_ref(content, current_line, char_idx, pos) {
+    if let Some(h) = hover_dependent_ref(content, current_line, char_idx, pos, config_vars) {
         return Some(h);
     }
-    hover_variable_placeholder(content, current_line, char_idx, pos)
+    hover_variable_placeholder(content, current_line, char_idx, pos, config_vars)
 }
 
-fn hover_dependent_ref(content: &str, line: &str, char_idx: usize, pos: Position) -> Option<Hover> {
+fn hover_dependent_ref(
+    content: &str,
+    line: &str,
+    char_idx: usize,
+    pos: Position,
+    config_vars: &BTreeMap<String, VariableSpec>,
+) -> Option<Hover> {
     let (name, start, end, raw) = dependent_ref_at(line, char_idx)?;
     let parsed = parser::parse_file(std::path::Path::new(""), std::path::Path::new(""), content);
     let mut md = if raw {
@@ -470,7 +493,12 @@ fn hover_dependent_ref(content: &str, line: &str, char_idx: usize, pos: Position
     } else {
         format!("**`<#{name}>`** — dependent reference (shell-quoted)\n\n")
     };
-    if let Some(spec) = parsed.frontmatter.variables.get(&name) {
+    let spec = parsed
+        .frontmatter
+        .variables
+        .get(&name)
+        .or_else(|| config_vars.get(&name));
+    if let Some(spec) = spec {
         if let Some(d) = &spec.default {
             md.push_str(&format!("- **default**: `{d}`\n"));
         }
@@ -484,7 +512,7 @@ fn hover_dependent_ref(content: &str, line: &str, char_idx: usize, pos: Position
             md.push_str(&format!("- **command**: `{cmd}`\n"));
         }
     } else {
-        md.push_str("_no frontmatter variable spec; declared inline or in config_\n");
+        md.push_str("_no variable spec; declared inline_\n");
     }
     Some(Hover {
         contents: HoverContents::Markup(MarkupContent {
@@ -515,10 +543,15 @@ fn hover_variable_placeholder(
     line: &str,
     char_idx: usize,
     pos: Position,
+    config_vars: &BTreeMap<String, VariableSpec>,
 ) -> Option<Hover> {
     let (name, start, end) = placeholder_at(line, char_idx)?;
     let parsed = parser::parse_file(std::path::Path::new(""), std::path::Path::new(""), content);
-    let spec = parsed.frontmatter.variables.get(&name)?;
+    let spec = parsed
+        .frontmatter
+        .variables
+        .get(&name)
+        .or_else(|| config_vars.get(&name))?;
     let mut md = format!("**`<@{name}>`**\n\n");
     if let Some(d) = &spec.default {
         md.push_str(&format!("- **default**: `{d}`\n"));
@@ -545,7 +578,12 @@ fn hover_variable_placeholder(
 // Go-to-definition
 // ---------------------------------------------------------------------------
 
-fn compute_definition(uri: &Url, content: &str, pos: Position) -> Option<GotoDefinitionResponse> {
+fn compute_definition(
+    uri: &Url,
+    content: &str,
+    pos: Position,
+    config: &AppConfig,
+) -> Option<GotoDefinitionResponse> {
     let lines: Vec<&str> = content.lines().collect();
     let line_idx = pos.line as usize;
     let char_idx = pos.character as usize;
@@ -558,13 +596,36 @@ fn compute_definition(uri: &Url, content: &str, pos: Position) -> Option<GotoDef
         .map(|(n, ..)| n)
         .or_else(|| placeholder_at(current_line, char_idx).map(|(n, ..)| n))?;
 
-    // Find the declaration line inside `variables:` frontmatter block.
-    let def_line = find_variable_declaration_line(&lines, &name)?;
-    let target_range = line_range(def_line as u32, 0, lines[def_line].len() as u32);
-    Some(GotoDefinitionResponse::Scalar(Location {
-        uri: uri.clone(),
-        range: target_range,
-    }))
+    // Prefer frontmatter declaration in the current file.
+    if let Some(def_line) = find_variable_declaration_line(&lines, &name) {
+        let target_range = line_range(def_line as u32, 0, lines[def_line].len() as u32);
+        return Some(GotoDefinitionResponse::Scalar(Location {
+            uri: uri.clone(),
+            range: target_range,
+        }));
+    }
+
+    // Fall back to the config file if the variable is declared there.
+    if config.variables.contains_key(&name)
+        && let Some(loc) = find_config_variable_location(&config.paths.config_file, &name)
+    {
+        return Some(GotoDefinitionResponse::Scalar(loc));
+    }
+
+    None
+}
+
+/// Find the location of `[variables.<name>]` in the config TOML file.
+fn find_config_variable_location(config_file: &Path, name: &str) -> Option<Location> {
+    let content = std::fs::read_to_string(config_file).ok()?;
+    let target = format!("[variables.{name}]");
+    let (line_idx, _) = content
+        .lines()
+        .enumerate()
+        .find(|(_, line)| line.trim() == target)?;
+    let uri = Url::from_file_path(config_file).ok()?;
+    let range = line_range(line_idx as u32, 0, target.len() as u32);
+    Some(Location { uri, range })
 }
 
 /// Find the 0-based line index of `  <name>:` inside the `variables:` frontmatter block.
@@ -858,6 +919,29 @@ mod dependent_lsp_tests {
         Position { line, character }
     }
 
+    fn empty_config_vars() -> BTreeMap<String, VariableSpec> {
+        BTreeMap::new()
+    }
+
+    fn empty_app_config() -> crate::config::AppConfig {
+        use crate::config::{Paths, SearchConfig, SuggestionCommandsConfig, Theme, UiConfig};
+        crate::config::AppConfig {
+            paths: Paths {
+                snippet_roots: vec![],
+                xdg_snippets_dir: std::path::PathBuf::new(),
+                snippet_overrides_active: false,
+                state_file: std::path::PathBuf::new(),
+                config_file: std::path::PathBuf::new(),
+            },
+            ui: UiConfig::default(),
+            search: SearchConfig::default(),
+            variables: BTreeMap::new(),
+            theme: Theme::default(),
+            suggestion_commands: SuggestionCommandsConfig::default(),
+            lint: BTreeMap::new(),
+        }
+    }
+
     #[test]
     fn dependent_ref_at_finds_token() {
         let line = "<@key:ls <#bucket>>";
@@ -890,7 +974,12 @@ mod dependent_lsp_tests {
         let line_idx = 8;
         let line = content.lines().nth(line_idx).unwrap();
         let col = line.find("<#bucket").unwrap() + 2;
-        let h = compute_hover(content, pos(line_idx as u32, col as u32)).unwrap();
+        let h = compute_hover(
+            content,
+            pos(line_idx as u32, col as u32),
+            &empty_config_vars(),
+        )
+        .unwrap();
         let HoverContents::Markup(m) = h.contents else {
             panic!("expected markup");
         };
@@ -905,7 +994,13 @@ mod dependent_lsp_tests {
         let line_idx = 8;
         let line = content.lines().nth(line_idx).unwrap();
         let col = line.find("<#bucket").unwrap() + 2;
-        let def = compute_definition(&uri, content, pos(line_idx as u32, col as u32)).unwrap();
+        let def = compute_definition(
+            &uri,
+            content,
+            pos(line_idx as u32, col as u32),
+            &empty_app_config(),
+        )
+        .unwrap();
         let GotoDefinitionResponse::Scalar(loc) = def else {
             panic!("expected scalar");
         };
@@ -933,7 +1028,12 @@ mod dependent_lsp_tests {
         let line_idx = 10;
         let line = content.lines().nth(line_idx).unwrap();
         let col = line.len();
-        let resp = compute_completions(content, pos(line_idx as u32, col as u32)).unwrap();
+        let resp = compute_completions(
+            content,
+            pos(line_idx as u32, col as u32),
+            &empty_config_vars(),
+        )
+        .unwrap();
         let CompletionResponse::Array(items) = resp else {
             panic!("expected array");
         };
