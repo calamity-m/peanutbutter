@@ -66,8 +66,7 @@ Malformed or unsupported frontmatter variable specs are ignored during normal
 execution. Run `pb lint` to validate supported frontmatter syntax and variable
 expectations before opening the picker. Normal lint warns about variable specs
 that no snippet references. `pb lint --strict` additionally warns about style
-issues such as undeclared manual placeholders and confusing file-local variable
-overrides.
+issues such as confusing file-local variable overrides.
 
 ## Snippets
 

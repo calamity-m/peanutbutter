@@ -11,8 +11,6 @@ use std::path::{Path, PathBuf};
 
 /// Broken or unterminated file frontmatter.
 pub const CODE_BROKEN_FRONTMATTER: &str = "lint/broken-frontmatter";
-/// Strict-mode placeholder has no inline, file-local, config, or built-in source.
-pub const CODE_UNDECLARED_VARIABLE: &str = "lint/undeclared-variable";
 /// Frontmatter or config variable definition is not referenced by snippets.
 pub const CODE_UNUSED_VARIABLE: &str = "lint/unused-variable";
 /// Two snippets in the same file slugify to the same base slug.
@@ -174,7 +172,6 @@ pub fn run<W: Write>(
         findings.extend(lint_static_inline_commands(file));
         findings.extend(lint_dependent_references(file, &config.variables));
         if options.strict {
-            findings.extend(lint_variables(file, &config.variables));
             findings.extend(lint_markdown_structure(&file.path, &file.content));
             findings.extend(lint_missing_code_languages(file));
             findings.extend(lint_frontmatter_overrides(file, &config.variables));
@@ -386,40 +383,6 @@ fn lint_duplicate_slugs(path: &Path, content: &str) -> Vec<LintFinding> {
             } else {
                 first.insert(slug, idx + 1);
             }
-        }
-    }
-    out
-}
-
-fn lint_variables(
-    file: &FileContext,
-    globals: &BTreeMap<String, VariableInputConfig>,
-) -> Vec<LintFinding> {
-    let ranges = parser::snippet_line_ranges(&file.parsed.relative_path, &file.content);
-    let mut line_by_id = HashMap::new();
-    for range in ranges {
-        line_by_id.insert(range.id, range.start_line + 1);
-    }
-    let mut out = Vec::new();
-    for snippet in &file.parsed.snippets {
-        let mut seen = HashSet::new();
-        for variable in &snippet.variables {
-            if !seen.insert(variable.name.clone())
-                || !matches!(variable.source, VariableSource::Free)
-            {
-                continue;
-            }
-            if is_builtin_variable(&variable.name)
-                || file
-                    .parsed
-                    .frontmatter
-                    .variables
-                    .contains_key(&variable.name)
-                || globals.contains_key(&variable.name)
-            {
-                continue;
-            }
-            out.push(finding(LintSeverity::Warning, CODE_UNDECLARED_VARIABLE, file.path.clone(), line_by_id.get(&snippet.id).copied(), Some(snippet.id.clone()), format!("variable '{}' has no declared source", variable.name), Some("add an inline default/command, a file-local frontmatter variable, or a global variable config if this is not intentionally manual input".to_string())));
         }
     }
     out
@@ -1097,10 +1060,6 @@ fn sort_findings(findings: &mut [LintFinding]) {
     });
 }
 
-fn is_builtin_variable(name: &str) -> bool {
-    matches!(name, "file" | "directory")
-}
-
 fn snippet_heading(line: &str) -> Option<String> {
     let trimmed = line.trim_start();
     let rest = trimmed.strip_prefix("##")?;
@@ -1210,51 +1169,6 @@ mod tests {
                 allow_commands: true,
             },
         }
-    }
-
-    #[test]
-    fn undeclared_variable_is_strict_warning_and_json_is_parseable() {
-        let root = temp_dir("undeclared");
-        fs::write(
-            root.join("snippets.md"),
-            "## Demo\n\n```bash\necho <@name>\n```\n",
-        )
-        .unwrap();
-        let mut out = Vec::new();
-        let normal = run(
-            &config(root.clone()),
-            LintOptions {
-                strict: false,
-                json: true,
-            },
-            &mut out,
-        )
-        .unwrap();
-        assert!(
-            !normal
-                .findings
-                .iter()
-                .any(|f| f.code == CODE_UNDECLARED_VARIABLE)
-        );
-        let json: serde_json::Value = serde_json::from_slice(&out).unwrap();
-        assert!(json["findings"].is_array());
-
-        out.clear();
-        let strict = run(
-            &config(root),
-            LintOptions {
-                strict: true,
-                json: false,
-            },
-            &mut out,
-        )
-        .unwrap();
-        let finding = strict
-            .findings
-            .iter()
-            .find(|f| f.code == CODE_UNDECLARED_VARIABLE)
-            .unwrap();
-        assert_eq!(finding.severity, LintSeverity::Warning);
     }
 
     #[test]
@@ -1410,74 +1324,6 @@ mod tests {
             }),
             "expected unclosed-fence finding, got: {:?}",
             result.findings
-        );
-    }
-
-    #[test]
-    fn lint_config_can_disable_lint() {
-        let root = temp_dir("disable");
-        fs::write(
-            root.join("snippets.md"),
-            "## Demo\n\n```bash\necho <@name>\n```\n",
-        )
-        .unwrap();
-        let mut cfg = config(root);
-        cfg.lint.insert(
-            "undeclared-variable".to_string(),
-            LintRuleConfig {
-                disable: true,
-                ..LintRuleConfig::default()
-            },
-        );
-        let mut out = Vec::new();
-        let result = run(
-            &cfg,
-            LintOptions {
-                strict: true,
-                json: false,
-            },
-            &mut out,
-        )
-        .unwrap();
-        assert!(
-            !result
-                .findings
-                .iter()
-                .any(|finding| finding.code == CODE_UNDECLARED_VARIABLE)
-        );
-    }
-
-    #[test]
-    fn lint_config_can_ignore_relative_file_glob() {
-        let root = temp_dir("ignore-file");
-        fs::write(
-            root.join("test-snippets.md"),
-            "## Demo\n\n```bash\necho <@name>\n```\n",
-        )
-        .unwrap();
-        let mut cfg = config(root);
-        cfg.lint.insert(
-            "undeclared-variable".to_string(),
-            LintRuleConfig {
-                ignore_file: vec!["test*".to_string()],
-                ..LintRuleConfig::default()
-            },
-        );
-        let mut out = Vec::new();
-        let result = run(
-            &cfg,
-            LintOptions {
-                strict: true,
-                json: false,
-            },
-            &mut out,
-        )
-        .unwrap();
-        assert!(
-            !result
-                .findings
-                .iter()
-                .any(|finding| finding.code == CODE_UNDECLARED_VARIABLE)
         );
     }
 

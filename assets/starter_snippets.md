@@ -14,10 +14,6 @@ variables:
     command: git branch --format='%(refname:short)'
   remote:
     command: git remote
-  scope:
-  subject:
-  script:
-  key:
 ---
 
 # Peanutbutter starter snippets
