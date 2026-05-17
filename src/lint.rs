@@ -964,6 +964,8 @@ mod tests {
         AppConfig {
             paths: Paths {
                 snippet_roots: vec![root.clone()],
+                xdg_snippets_dir: root.clone(),
+                snippet_overrides_active: false,
                 state_file: root.join("state.tsv"),
                 config_file: root.join("config.toml"),
             },

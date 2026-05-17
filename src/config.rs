@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, HashSet};
 use std::env;
 use std::fs;
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Resolved file-system paths used throughout the application.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -13,6 +13,10 @@ pub struct Paths {
     /// Populated from `PEANUTBUTTER_PATH`, `[paths] snippets`, then the XDG
     /// default (`$XDG_CONFIG_HOME/peanutbutter/snippets`), in that order.
     pub snippet_roots: Vec<PathBuf>,
+    /// XDG default snippets directory used by `pb init` and first-run auto-init.
+    pub xdg_snippets_dir: PathBuf,
+    /// Whether snippet roots were explicitly configured through env or config.
+    pub snippet_overrides_active: bool,
     /// TSV file where usage events are appended for frecency scoring.
     /// Defaults to `$XDG_STATE_HOME/peanutbutter/state.tsv`.
     pub state_file: PathBuf,
@@ -371,8 +375,11 @@ pub fn load() -> io::Result<AppConfig> {
 pub fn load_with_theme_override(theme_name: Option<&str>) -> io::Result<AppConfig> {
     let config_file = resolve_config_file();
     let file = load_file_config(&config_file)?;
+    let xdg_snippets_dir = xdg_snippets_dir();
     let paths = Paths {
-        snippet_roots: resolve_snippet_roots(&file),
+        snippet_roots: resolve_snippet_roots(&file, &xdg_snippets_dir),
+        xdg_snippets_dir,
+        snippet_overrides_active: snippet_overrides_active(&file),
         state_file: resolve_state_file(&file),
         config_file,
     };
@@ -425,10 +432,16 @@ pub fn theme_completion_names() -> io::Result<Vec<String>> {
 /// Return the resolved [`Paths`] from the config file, or compute defaults if
 /// loading fails. Used by commands that need paths before a full config load.
 pub fn default_paths() -> Paths {
-    load().map(|config| config.paths).unwrap_or_else(|_| Paths {
-        snippet_roots: resolve_snippet_roots(&FileConfig::default()),
-        state_file: resolve_state_file(&FileConfig::default()),
-        config_file: resolve_config_file(),
+    load().map(|config| config.paths).unwrap_or_else(|_| {
+        let file = FileConfig::default();
+        let xdg_snippets_dir = xdg_snippets_dir();
+        Paths {
+            snippet_roots: resolve_snippet_roots(&file, &xdg_snippets_dir),
+            xdg_snippets_dir,
+            snippet_overrides_active: snippet_overrides_active(&file),
+            state_file: resolve_state_file(&file),
+            config_file: resolve_config_file(),
+        }
     })
 }
 
@@ -637,8 +650,7 @@ fn load_file_config(path: &PathBuf) -> io::Result<FileConfig> {
     })
 }
 
-fn resolve_snippet_roots(file: &FileConfig) -> Vec<PathBuf> {
-    let xdg_default = xdg_config_home().join("peanutbutter").join("snippets");
+fn resolve_snippet_roots(file: &FileConfig, xdg_default: &Path) -> Vec<PathBuf> {
     let mut roots = Vec::new();
     let mut seen = HashSet::new();
 
@@ -652,8 +664,12 @@ fn resolve_snippet_roots(file: &FileConfig) -> Vec<PathBuf> {
         push_unique(&mut roots, &mut seen, path.clone());
     }
 
-    push_unique(&mut roots, &mut seen, xdg_default);
+    push_unique(&mut roots, &mut seen, xdg_default.to_path_buf());
     roots
+}
+
+fn snippet_overrides_active(file: &FileConfig) -> bool {
+    env::var_os("PEANUTBUTTER_PATH").is_some() || !file.paths.snippets.is_empty()
 }
 
 fn resolve_state_file(file: &FileConfig) -> PathBuf {
@@ -728,6 +744,10 @@ fn parse_color(raw: &str) -> io::Result<Color> {
 
 fn invalid_color(raw: &str) -> impl FnOnce(std::num::ParseIntError) -> io::Error + '_ {
     move |_| io::Error::new(io::ErrorKind::InvalidData, format!("invalid color {raw}"))
+}
+
+fn xdg_snippets_dir() -> PathBuf {
+    xdg_config_home().join("peanutbutter").join("snippets")
 }
 
 fn xdg_config_home() -> PathBuf {

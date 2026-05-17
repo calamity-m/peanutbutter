@@ -8,6 +8,8 @@ A friendly terminal snippet management tool.
 
 ## Quick-Start
 
+New here? Run `pb init` once to scaffold starter snippets at the default XDG location; it points to [docs/SNIPPET_SYNTAX.md](docs/SNIPPET_SYNTAX.md) for the full snippet reference.
+
 **bash** — add to `~/.bashrc`:
 
 ```bash

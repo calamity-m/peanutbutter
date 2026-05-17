@@ -92,6 +92,12 @@ fn main() {
                 Err(err) => Err(err),
             }
         }
+        cli::Command::Init { force } => {
+            let mut stdout = io::stdout();
+            let result = cli::run_init_command(&paths, force, &mut stdout);
+            let _ = stdout.flush();
+            result
+        }
         cli::Command::Bash { binding } => {
             match completions::bash_integration_for_current_exe(&binding) {
                 Ok(script) => {
