@@ -47,6 +47,8 @@ pub const CODE_FORWARD_VARIABLE_REFERENCE: &str = "lint/forward-variable-referen
 pub const CODE_SELF_VARIABLE_REFERENCE: &str = "lint/self-variable-reference";
 /// A suggestion command's `<#...>` syntax could not be parsed.
 pub const CODE_INVALID_DEPENDENT_REFERENCE: &str = "lint/invalid-dependent-reference";
+/// The same variable name and command appear inline in multiple snippets in the same file.
+pub const CODE_DUPLICATE_INLINE_COMMAND: &str = "lint/duplicate-inline-command";
 
 /// Runtime options for [`run`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -170,6 +172,7 @@ pub fn run<W: Write>(
             &config.suggestion_commands,
         ));
         findings.extend(lint_static_inline_commands(file));
+        findings.extend(lint_duplicate_inline_commands(file));
         findings.extend(lint_dependent_references(file, &config.variables));
         if options.strict {
             findings.extend(lint_markdown_structure(&file.path, &file.content));
@@ -221,6 +224,7 @@ pub fn lint_file(path: &Path, root: &Path, content: &str, config: &AppConfig) ->
         &config.suggestion_commands,
     ));
     findings.extend(lint_static_inline_commands(&ctx));
+    findings.extend(lint_duplicate_inline_commands(&ctx));
     findings.extend(lint_dependent_references(&ctx, &config.variables));
     findings.extend(lint_markdown_structure(path, content));
     findings.extend(lint_missing_code_languages(&ctx));
@@ -800,6 +804,51 @@ fn lint_static_inline_commands(file: &FileContext) -> Vec<LintFinding> {
     out
 }
 
+fn lint_duplicate_inline_commands(file: &FileContext) -> Vec<LintFinding> {
+    // Collect (variable_name, command) -> first snippet id for each inline command.
+    let mut seen: HashMap<(String, String), SnippetId> = HashMap::new();
+    let mut duplicates: Vec<(String, String, SnippetId)> = Vec::new();
+    for snippet in &file.parsed.snippets {
+        for variable in &snippet.variables {
+            let VariableSource::Command(command) = &variable.source else {
+                continue;
+            };
+            let key = (variable.name.clone(), command.clone());
+            match seen.get(&key) {
+                None => {
+                    seen.insert(key, snippet.id.clone());
+                }
+                Some(first_id)
+                    if !duplicates
+                        .iter()
+                        .any(|(n, c, _)| n == &key.0 && c == &key.1) =>
+                {
+                    duplicates.push((variable.name.clone(), command.clone(), first_id.clone()));
+                }
+                _ => {}
+            }
+        }
+    }
+    duplicates
+        .into_iter()
+        .map(|(name, command, first_id)| {
+            finding(
+                LintSeverity::Warning,
+                CODE_DUPLICATE_INLINE_COMMAND,
+                file.path.clone(),
+                None,
+                Some(first_id),
+                format!(
+                    "inline command for variable '{name}' is repeated across multiple snippets"
+                ),
+                Some(format!(
+                    "move to frontmatter: variables:\n  {name}:\n    command: {command}"
+                )),
+            )
+        })
+        .collect()
+}
+
 fn lint_markdown_structure(path: &Path, content: &str) -> Vec<LintFinding> {
     let mut out = Vec::new();
     // `in_fence` carries `(fence, line_no, is_text)` for the currently-open fence.
@@ -1358,6 +1407,60 @@ mod tests {
                 .findings
                 .iter()
                 .any(|finding| finding.code == CODE_SUGGESTION_COMMAND_FAILED)
+        );
+    }
+
+    #[test]
+    fn duplicate_inline_command_across_snippets_is_reported() {
+        let root = temp_dir("dup-inline-cmd");
+        fs::write(
+            root.join("snippets.md"),
+            "## First\n\n```bash\necho <@env:kubectl get ns>\n```\n\n\
+             ## Second\n\n```bash\necho <@env:kubectl get ns>\n```\n",
+        )
+        .unwrap();
+        let mut out = Vec::new();
+        let result = run(
+            &config(root),
+            LintOptions {
+                strict: false,
+                json: false,
+            },
+            &mut out,
+        )
+        .unwrap();
+        let finding = result
+            .findings
+            .iter()
+            .find(|f| f.code == CODE_DUPLICATE_INLINE_COMMAND)
+            .expect("expected duplicate-inline-command finding");
+        assert!(finding.message.contains("env"));
+    }
+
+    #[test]
+    fn duplicate_inline_command_different_names_not_reported() {
+        let root = temp_dir("dup-inline-cmd-diff");
+        fs::write(
+            root.join("snippets.md"),
+            "## First\n\n```bash\necho <@a:ls>\n```\n\n\
+             ## Second\n\n```bash\necho <@b:ls>\n```\n",
+        )
+        .unwrap();
+        let mut out = Vec::new();
+        let result = run(
+            &config(root),
+            LintOptions {
+                strict: false,
+                json: false,
+            },
+            &mut out,
+        )
+        .unwrap();
+        assert!(
+            !result
+                .findings
+                .iter()
+                .any(|f| f.code == CODE_DUPLICATE_INLINE_COMMAND)
         );
     }
 
