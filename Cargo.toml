@@ -1,6 +1,6 @@
 [package]
 name = "peanutbutter"
-version = "0.14.1"
+version = "0.14.2"
 edition = "2024"
 default-run = "peanutbutter"
 
