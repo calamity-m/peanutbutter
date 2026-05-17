@@ -39,58 +39,48 @@ with independent snippet roots work correctly.
 
 ## Neovim setup
 
-### Recommended — nvim-lspconfig
+### Recommended — Neovim 0.11+ built-in LSP config
 
-Use [nvim-lspconfig](https://github.com/neovim/nvim-lspconfig) if you have it
-installed. It gives better `:LspInfo` output, handles root detection cleanly,
-and makes executable/path problems easier to diagnose than a hand-written
-autocmd.
+Neovim 0.11 added `vim.lsp.config` and `vim.lsp.enable` for LSP server
+configuration. This is now the preferred setup path; `require("lspconfig")`
+from nvim-lspconfig is deprecated.
 
-Register peanutbutter as a custom server:
+Add this to your Neovim config (`init.lua` or a plugin file):
 
 ```lua
-local lspconfig = require("lspconfig")
-local lspconfig_configs = require("lspconfig.configs")
+vim.lsp.config("peanutbutter", {
+  cmd = { "peanutbutter", "lsp" },
+  filetypes = { "markdown" },
+  root_markers = {
+    ".peanutbutter.toml",
+    "peanutbutter.toml",
+    "_peanutbutter.toml",
+  },
+})
 
-if not lspconfig_configs.peanutbutter then
-  lspconfig_configs.peanutbutter = {
-    default_config = {
-      cmd = { "peanutbutter", "lsp" },
-      filetypes = { "markdown" },
-      root_dir = require("lspconfig.util").root_pattern(
-        ".peanutbutter.toml",
-        "peanutbutter.toml",
-        "_peanutbutter.toml"
-      ),
-      single_file_support = false,
-    },
-  }
-end
-
-lspconfig.peanutbutter.setup({})
+vim.lsp.enable("peanutbutter")
 ```
 
-### Fallback — built-in `vim.lsp` autocmd
+### Fallback — Neovim 0.10 and older
 
-If you really do not want to use nvim-lspconfig, you can start the server
-directly with Neovim's built-in LSP client. Prefer the nvim-lspconfig setup
-above unless you have a specific reason not to add that dependency.
-
+Older Neovim versions can start the server directly with `vim.lsp.start`.
 Add this to your Neovim config (`init.lua` or a plugin file):
 
 ```lua
 vim.api.nvim_create_autocmd("FileType", {
   pattern = "markdown",
   callback = function()
+    local markers = { ".peanutbutter.toml", "peanutbutter.toml", "_peanutbutter.toml" }
+    local root = vim.fs.dirname(vim.fs.find(markers, { upward = true })[1])
+
+    if root == nil then
+      return
+    end
+
     vim.lsp.start({
       name = "peanutbutter",
       cmd = { "peanutbutter", "lsp" },
-      -- root_dir tells Neovim which directory to treat as the project root.
-      -- Here we walk up looking for a marker file, mirroring the server's own logic.
-      root_dir = (function()
-        local markers = { ".peanutbutter.toml", "peanutbutter.toml", "_peanutbutter.toml" }
-        return vim.fs.dirname(vim.fs.find(markers, { upward = true })[1])
-      end)(),
+      root_dir = root,
     })
   end,
 })
@@ -109,6 +99,6 @@ a completion plugin, no extra configuration is needed — the server advertises
 ### Verifying the setup
 
 1. Open a `.md` file under a directory that contains a marker file.
-2. Run `:LspInfo` (nvim-lspconfig) or `:lua vim.print(vim.lsp.get_clients())` to confirm the `peanutbutter` client is attached.
+2. Run `:checkhealth vim.lsp` or `:lua vim.print(vim.lsp.get_clients())` to confirm the `peanutbutter` client is attached.
 3. Introduce a lint error (e.g. add an unused `variables:` entry) and save — a warning squiggle should appear.
 4. Type `<@` inside a fenced code block and trigger completions — declared variable names should appear.
