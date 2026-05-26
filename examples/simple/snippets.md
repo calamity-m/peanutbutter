@@ -4,6 +4,11 @@ tags:
   - shell
   - files
 description: Common shell and file operations.
+variables:
+  file:
+    command: rg . --files
+  directory:
+    default: .
 ---
 
 # Shell Utilities
@@ -17,19 +22,19 @@ ls -lsha <@path:?.>
 ## Watch a file for new lines
 
 ```bash
-tail -f <@file:rg . --files>
+tail -f <@file>
 ```
 
 ## Find files by name pattern
 
 ```bash
-find <@directory:?.> -name "<@pattern>" -type f
+find <@directory> -name "<@pattern>" -type f
 ```
 
 ## Read and decode base64 content from a file
 
 ```bash
-cat <@file:rg . --files> | base64 -d
+cat <@file> | base64 -d
 ```
 
 ## Create a directory and navigate into it
@@ -47,7 +52,7 @@ notes.md.20240517123000.bak
 ```
 
 ```bash
-cp <@file:rg . --files> <@file:rg . --files>.$(date +%Y%m%d%H%M%S).bak
+cp <@file> <@file>.$(date +%Y%m%d%H%M%S).bak
 ```
 
 ## Search for a running process
