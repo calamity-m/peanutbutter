@@ -1,6 +1,6 @@
 //! Read-only snippet linting.
 
-use crate::config::{AppConfig, LintConfig, Paths, SuggestionCommandsConfig, VariableInputConfig};
+use crate::config::{AppConfig, LintConfig, Paths, VariableInputConfig};
 use crate::domain::{SnippetFile, SnippetId, VariableSource, VariableSpec};
 use crate::{discovery, parser};
 use serde::Serialize;
@@ -15,12 +15,6 @@ pub const CODE_BROKEN_FRONTMATTER: &str = "lint/broken-frontmatter";
 pub const CODE_UNUSED_VARIABLE: &str = "lint/unused-variable";
 /// Two snippets in the same file slugify to the same base slug.
 pub const CODE_DUPLICATE_SLUG: &str = "lint/duplicate-slug";
-/// A suggestion command exited unsuccessfully.
-pub const CODE_SUGGESTION_COMMAND_FAILED: &str = "lint/suggestion-command-failed";
-/// A suggestion command exceeded the configured timeout.
-pub const CODE_SUGGESTION_COMMAND_TIMEOUT: &str = "lint/suggestion-command-timeout";
-/// Suggestion commands are disabled, so a command-backed variable was skipped.
-pub const CODE_SUGGESTION_COMMANDS_DISABLED: &str = "lint/suggestion-commands-disabled";
 /// Frecency GC found an orphan that has a likely current snippet candidate.
 pub const CODE_GC_ORPHAN_REATTACHABLE: &str = "lint/gc-orphan-reattachable";
 /// Frecency GC found an orphan with no likely current snippet candidate.
@@ -35,9 +29,6 @@ pub const CODE_TEXT_ONLY_SECTION: &str = "lint/text-only-section";
 pub const CODE_MISSING_CODE_LANGUAGE: &str = "lint/missing-code-language";
 /// Strict file-local variable changes a global variable's suggestion source.
 pub const CODE_FRONTMATTER_OVERRIDE: &str = "lint/frontmatter-override";
-/// A suggestion command contains `<#name>` references, so it was skipped at
-/// lint time because there is no user input to substitute.
-pub const CODE_DEPENDENT_SUGGESTION_SKIPPED: &str = "lint/dependent-suggestion-skipped";
 /// `<#name>` references a variable that is not declared in this snippet or
 /// in its frontmatter.
 pub const CODE_UNKNOWN_VARIABLE_REFERENCE: &str = "lint/unknown-variable-reference";
@@ -119,15 +110,14 @@ impl LintResult {
 }
 
 struct FileContext {
-    root: PathBuf,
     path: PathBuf,
     content: String,
     parsed: SnippetFile,
 }
 
 /// Run lint over the configured snippet roots and write the selected output
-/// format to `writer`. This function is read-only: suggestion commands may be
-/// executed, but frecency GC is queried without saving or mutating state.
+/// format to `writer`. This function is read-only: suggestion commands are not
+/// executed, and frecency GC is queried without saving or mutating state.
 pub fn run<W: Write>(
     config: &AppConfig,
     options: LintOptions,
@@ -156,7 +146,6 @@ pub fn run<W: Write>(
             };
             let parsed = parser::parse_file(&path, root, &content);
             files.push(FileContext {
-                root: root.clone(),
                 path,
                 content,
                 parsed,
@@ -168,11 +157,6 @@ pub fn run<W: Write>(
         findings.extend(lint_frontmatter_source(&file.path, &file.content));
         findings.extend(lint_duplicate_slugs(&file.path, &file.content));
         findings.extend(lint_unused_file_variables(file));
-        findings.extend(lint_suggestion_commands(
-            file,
-            &config.variables,
-            &config.suggestion_commands,
-        ));
         findings.extend(lint_static_inline_commands(file));
         findings.extend(lint_duplicate_inline_commands(file));
         findings.extend(lint_dependent_references(file, &config.variables));
@@ -211,7 +195,6 @@ pub fn run<W: Write>(
 pub fn lint_file(path: &Path, root: &Path, content: &str, config: &AppConfig) -> Vec<LintFinding> {
     let parsed = parser::parse_file(path, root, content);
     let ctx = FileContext {
-        root: root.to_path_buf(),
         path: path.to_path_buf(),
         content: content.to_string(),
         parsed,
@@ -220,11 +203,6 @@ pub fn lint_file(path: &Path, root: &Path, content: &str, config: &AppConfig) ->
     findings.extend(lint_frontmatter_source(path, content));
     findings.extend(lint_duplicate_slugs(path, content));
     findings.extend(lint_unused_file_variables(&ctx));
-    findings.extend(lint_suggestion_commands(
-        &ctx,
-        &config.variables,
-        &config.suggestion_commands,
-    ));
     findings.extend(lint_static_inline_commands(&ctx));
     findings.extend(lint_duplicate_inline_commands(&ctx));
     findings.extend(lint_dependent_references(&ctx, &config.variables));
@@ -504,86 +482,6 @@ fn frontmatter_variable_lines(content: &str) -> HashMap<String, usize> {
     out
 }
 
-fn lint_suggestion_commands(
-    file: &FileContext,
-    globals: &BTreeMap<String, VariableInputConfig>,
-    config: &SuggestionCommandsConfig,
-) -> Vec<LintFinding> {
-    let mut out = Vec::new();
-    for snippet in &file.parsed.snippets {
-        let commands = command_sources(snippet, &file.parsed.frontmatter.variables, globals);
-        for (name, command) in commands {
-            // If the command references upstream variables, skip execution —
-            // there is no user input at lint time to substitute.
-            match crate::command_template::parse_command_template(&command) {
-                Ok(template) if crate::command_template::is_dependent(&template) => {
-                    out.push(
-                        finding(
-                            LintSeverity::Warning,
-                            CODE_DEPENDENT_SUGGESTION_SKIPPED,
-                            file.path.clone(),
-                            None,
-                            Some(snippet.id.clone()),
-                            format!(
-                                "suggestion command for variable '{name}' was skipped because it references upstream variables"
-                            ),
-                            None,
-                        )
-                        .with_suppress_command(command.clone()),
-                    );
-                    continue;
-                }
-                Ok(_) => {}
-                Err(err) => {
-                    out.push(
-                        finding(
-                            LintSeverity::Error,
-                            CODE_INVALID_DEPENDENT_REFERENCE,
-                            file.path.clone(),
-                            None,
-                            Some(snippet.id.clone()),
-                            format!(
-                                "suggestion command for variable '{name}' has an invalid <# reference"
-                            ),
-                            Some(err.to_string()),
-                        )
-                        .with_suppress_command(command.clone()),
-                    );
-                    continue;
-                }
-            }
-            if !config.allow_commands {
-                out.push(finding(LintSeverity::Warning, CODE_SUGGESTION_COMMANDS_DISABLED, file.path.clone(), None, Some(snippet.id.clone()), format!("suggestion command for variable '{name}' was skipped because commands are disabled"), None));
-                continue;
-            }
-            match crate::execute::command_suggestions(&command, &file.root, config.timeout_ms) {
-                Ok(_) => {}
-                Err(err) => {
-                    let msg = err.to_string();
-                    let code = if msg.contains("timed out") {
-                        CODE_SUGGESTION_COMMAND_TIMEOUT
-                    } else {
-                        CODE_SUGGESTION_COMMAND_FAILED
-                    };
-                    out.push(
-                        finding(
-                            LintSeverity::Error,
-                            code,
-                            file.path.clone(),
-                            None,
-                            Some(snippet.id.clone()),
-                            format!("suggestion command for variable '{name}' failed"),
-                            Some(msg),
-                        )
-                        .with_suppress_command(command.clone()),
-                    );
-                }
-            }
-        }
-    }
-    out
-}
-
 /// Find all `<#name>` token spans in `content`. Returns
 /// `(name, line_1based, col_start, col_end)` tuples in document order.
 /// Backslash-escaped `\<#...>` is skipped. The returned columns are 0-based
@@ -676,8 +574,22 @@ fn lint_dependent_references(
         for (owner, command) in
             command_sources(snippet, &file.parsed.frontmatter.variables, globals)
         {
-            if let Ok(template) = parse_command_template(&command) {
-                templates.push((owner, command, template, false));
+            match parse_command_template(&command) {
+                Ok(template) => templates.push((owner, command, template, false)),
+                Err(err) => out.push(
+                    finding(
+                        LintSeverity::Error,
+                        CODE_INVALID_DEPENDENT_REFERENCE,
+                        file.path.clone(),
+                        None,
+                        Some(snippet.id.clone()),
+                        format!(
+                            "suggestion command for variable '{owner}' has an invalid <# reference"
+                        ),
+                        Some(err.to_string()),
+                    )
+                    .with_suppress_command(command),
+                ),
             }
         }
         for (owner, default) in default_sources(snippet) {
@@ -1295,7 +1207,8 @@ fn suggestion_source(spec: &VariableSpec) -> &'static str {
 mod tests {
     use super::*;
     use crate::config::{
-        FrecencyConfig, FuzzyWeights, LintRuleConfig, SearchConfig, Theme, UiConfig,
+        FrecencyConfig, FuzzyWeights, LintRuleConfig, SearchConfig, SuggestionCommandsConfig,
+        Theme, UiConfig,
     };
     use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -1497,12 +1410,12 @@ mod tests {
         let root = temp_dir("ignore-command");
         fs::write(
             root.join("snippets.md"),
-            "## Demo\n\n```bash\necho <@file:rg --files '*.nope'>\n```\n",
+            "---\nvariables:\n  file:\n    command: rg <#\n---\n\n## Demo\n\n```bash\necho <@file>\n```\n",
         )
         .unwrap();
         let mut cfg = config(root);
         cfg.lint.insert(
-            "suggestion-command-failed".to_string(),
+            "invalid-dependent-reference".to_string(),
             LintRuleConfig {
                 ignore_command: vec!["*rg*".to_string()],
                 ..LintRuleConfig::default()
@@ -1522,7 +1435,7 @@ mod tests {
             !result
                 .findings
                 .iter()
-                .any(|finding| finding.code == CODE_SUGGESTION_COMMAND_FAILED)
+                .any(|finding| finding.code == CODE_INVALID_DEPENDENT_REFERENCE)
         );
     }
 
@@ -1622,7 +1535,9 @@ mod tests {
 #[cfg(test)]
 mod dependent_tests {
     use super::*;
-    use crate::config::{FrecencyConfig, FuzzyWeights, SearchConfig, Theme, UiConfig};
+    use crate::config::{
+        FrecencyConfig, FuzzyWeights, SearchConfig, SuggestionCommandsConfig, Theme, UiConfig,
+    };
     use std::sync::atomic::{AtomicU64, Ordering};
 
     fn temp_dir(prefix: &str) -> PathBuf {
@@ -1676,11 +1591,23 @@ mod dependent_tests {
     }
 
     #[test]
-    fn dependent_command_is_skipped_not_executed() {
-        let root = temp_dir("skip");
+    fn dependent_command_is_valid_syntax() {
+        let root = temp_dir("dependent-syntax");
         fs::write(
             root.join("snippets.md"),
             "## Demo\n\n```bash\n<@bucket> <@key:ls <#bucket>>\n```\n",
+        )
+        .unwrap();
+        let result = lint(root);
+        assert!(result.findings.is_empty(), "got {:?}", result.findings);
+    }
+
+    #[test]
+    fn invalid_command_reference_syntax_is_flagged() {
+        let root = temp_dir("invalid-command-ref");
+        fs::write(
+            root.join("snippets.md"),
+            "---\nvariables:\n  key:\n    command: ls <#\n---\n\n## Demo\n\n```bash\n<@key>\n```\n",
         )
         .unwrap();
         let result = lint(root);
@@ -1688,33 +1615,9 @@ mod dependent_tests {
             result
                 .findings
                 .iter()
-                .any(|f| f.code == CODE_DEPENDENT_SUGGESTION_SKIPPED),
-            "expected dependent-suggestion-skipped, got {:?}",
+                .any(|f| f.code == CODE_INVALID_DEPENDENT_REFERENCE),
+            "got {:?}",
             result.findings
-        );
-        // Should NOT report a command failure for the dependent command.
-        assert!(
-            !result
-                .findings
-                .iter()
-                .any(|f| f.code == CODE_SUGGESTION_COMMAND_FAILED)
-        );
-    }
-
-    #[test]
-    fn non_dependent_command_still_executes() {
-        let root = temp_dir("nondep");
-        fs::write(
-            root.join("snippets.md"),
-            "## Demo\n\n```bash\n<@x:echo a>\n```\n",
-        )
-        .unwrap();
-        let result = lint(root);
-        assert!(
-            !result
-                .findings
-                .iter()
-                .any(|f| f.code == CODE_DEPENDENT_SUGGESTION_SKIPPED)
         );
     }
 
@@ -1789,45 +1692,8 @@ mod dependent_tests {
             !result
                 .findings
                 .iter()
-                .any(|f| f.code == CODE_UNKNOWN_VARIABLE_REFERENCE
-                    || f.code == CODE_DEPENDENT_SUGGESTION_SKIPPED),
+                .any(|f| f.code == CODE_UNKNOWN_VARIABLE_REFERENCE),
             "escaped literal should not be reported: {:?}",
-            result.findings
-        );
-    }
-
-    #[test]
-    fn ignore_command_suppresses_dependent_skip() {
-        let root = temp_dir("ignore-cmd");
-        fs::write(
-            root.join("snippets.md"),
-            "## Demo\n\n```bash\n<@bucket> <@key:ls <#bucket>>\n```\n",
-        )
-        .unwrap();
-        let mut cfg = config(root);
-        cfg.lint.insert(
-            "dependent-suggestion-skipped".to_string(),
-            crate::config::LintRuleConfig {
-                ignore_command: vec!["*ls*".to_string()],
-                ..Default::default()
-            },
-        );
-        let mut out = Vec::new();
-        let result = run(
-            &cfg,
-            LintOptions {
-                strict: false,
-                json: false,
-            },
-            &mut out,
-        )
-        .unwrap();
-        assert!(
-            !result
-                .findings
-                .iter()
-                .any(|f| f.code == CODE_DEPENDENT_SUGGESTION_SKIPPED),
-            "suppression should hide finding, got: {:?}",
             result.findings
         );
     }
@@ -1891,8 +1757,7 @@ mod dependent_tests {
             !result
                 .findings
                 .iter()
-                .any(|f| f.code == CODE_UNKNOWN_VARIABLE_REFERENCE
-                    || f.code == CODE_DEPENDENT_SUGGESTION_SKIPPED),
+                .any(|f| f.code == CODE_UNKNOWN_VARIABLE_REFERENCE),
             "got {:?}",
             result.findings
         );
@@ -1913,24 +1778,5 @@ mod dependent_tests {
             .filter(|f| f.code == CODE_RAW_DEFAULT_UNTRUSTED_UPSTREAM)
             .collect();
         assert_eq!(warnings.len(), 1, "got {:?}", result.findings);
-    }
-
-    #[test]
-    fn dependent_default_does_not_emit_suggestion_skipped() {
-        let root = temp_dir("default-not-skip");
-        fs::write(
-            root.join("snippets.md"),
-            "## Demo\n\n```bash\n<@a:?x> <@b:?<#a>>\n```\n",
-        )
-        .unwrap();
-        let result = lint(root);
-        assert!(
-            !result
-                .findings
-                .iter()
-                .any(|f| f.code == CODE_DEPENDENT_SUGGESTION_SKIPPED),
-            "got {:?}",
-            result.findings
-        );
     }
 }

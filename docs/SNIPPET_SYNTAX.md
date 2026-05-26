@@ -233,12 +233,12 @@ the current working directory. Output is split into suggestions by real
 newlines and literal `\n` sequences. Blank suggestions are ignored.
 
 If a suggestion command fails or times out, peanutbutter shows the error but
-still lets the user type a value manually. `pb lint` also executes suggestion
-commands to verify them, using the configured timeout; when command execution is
-disabled, lint reports skipped command-backed variables as warnings instead.
-Specific lint findings can be suppressed in config with `[lint.<code>]` tables;
-for example, `[lint.suggestion-command-failed] ignore_command = "*rg*"` ignores
-expected `rg` failures for that lint.
+still lets the user type a value manually. `pb lint` does not execute suggestion
+commands; it only validates their static syntax and dependent-variable
+references. Specific lint findings can be suppressed in config with
+`[lint.<code>]` tables; for example,
+`[lint.invalid-dependent-reference] ignore_command = "*rg*"` suppresses invalid
+reference findings for matching command text.
 
 #### Timeouts and opt-out
 
@@ -365,10 +365,6 @@ cached — revisiting the variable retries them.
 
 **Lint codes.**
 
-- `lint/dependent-suggestion-skipped` — `pb lint` does not execute a command
-  with `<#...>` references because there is no user input at lint time.
-  Defaults are not commands and do not emit this lint. Suppress with
-  `[lint.dependent-suggestion-skipped] ignore_command = "..."`.
 - `lint/unknown-variable-reference` — `<#name>` points at a name that is not
   declared in the snippet, frontmatter, or config.
 - `lint/forward-variable-reference` — `<#name>` points at a variable that

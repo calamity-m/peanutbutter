@@ -885,13 +885,13 @@ command = "find . -type f"
     #[test]
     fn lint_rule_config_deserializes_string_and_list_patterns() {
         let raw = r#"
-[lint.suggestion-command-failed]
+[lint.invalid-dependent-reference]
 ignore_command = "*rg*"
 ignore_file = ["test*", "fixtures/*"]
 disable = true
 "#;
         let parsed: FileConfig = toml::from_str(raw).unwrap();
-        let rule = parsed.lint.get("suggestion-command-failed").unwrap();
+        let rule = parsed.lint.get("invalid-dependent-reference").unwrap();
         assert!(rule.disable);
         assert_eq!(rule.ignore_command, vec!["*rg*"]);
         assert_eq!(rule.ignore_file, vec!["test*", "fixtures/*"]);
