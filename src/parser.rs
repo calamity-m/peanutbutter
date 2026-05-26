@@ -100,7 +100,7 @@ fn parse_yaml_frontmatter(lines: &[&str]) -> Frontmatter {
                         if indent == 0 || !child.starts_with('-') {
                             break;
                         }
-                        fm.tags.push(strip_quotes(child[1..].trim()).to_string());
+                        fm.tags.push(strip_quotes(child[1..].trim()));
                         i += 1;
                     }
                 }
@@ -115,8 +115,8 @@ fn parse_yaml_frontmatter(lines: &[&str]) -> Frontmatter {
         }
 
         match key {
-            "name" => fm.name = Some(strip_quotes(value).to_string()),
-            "description" => fm.description = Some(strip_quotes(value).to_string()),
+            "name" => fm.name = Some(strip_quotes(value)),
+            "description" => fm.description = Some(strip_quotes(value)),
             _ => {}
         }
         i += 1;
@@ -170,11 +170,11 @@ fn parse_variable_block(lines: &[&str]) -> (BTreeMap<String, VariableSpec>, usiz
                 let fval = fval.trim();
                 if !fval.is_empty() {
                     match fkey {
-                        "default" => spec.default = Some(strip_quotes(fval).to_string()),
+                        "default" => spec.default = Some(strip_quotes(fval)),
                         "suggestions" if fval.starts_with('[') && fval.ends_with(']') => {
                             spec.suggestions = parse_inline_list(fval);
                         }
-                        "command" => spec.command = Some(fval.to_string()),
+                        "command" => spec.command = Some(strip_quotes(fval)),
                         _ => {}
                     }
                 } else if fkey == "suggestions" {
@@ -186,7 +186,7 @@ fn parse_variable_block(lines: &[&str]) -> (BTreeMap<String, VariableSpec>, usiz
                         if item_indent <= field_indent || !item_trim.starts_with('-') {
                             break;
                         }
-                        let suggestion = strip_quotes(item_trim[1..].trim()).to_string();
+                        let suggestion = strip_quotes(item_trim[1..].trim());
                         if !suggestion.is_empty() {
                             spec.suggestions.push(suggestion);
                         }
@@ -207,21 +207,26 @@ fn parse_inline_list(value: &str) -> Vec<String> {
     let inner = &value[1..value.len() - 1];
     inner
         .split(',')
-        .map(|s| strip_quotes(s.trim()).to_string())
+        .map(|s| strip_quotes(s.trim()))
         .filter(|s| !s.is_empty())
         .collect()
 }
 
-fn strip_quotes(s: &str) -> &str {
+fn strip_quotes(s: &str) -> String {
     let bytes = s.as_bytes();
     if bytes.len() >= 2 {
         let first = bytes[0];
         let last = bytes[bytes.len() - 1];
-        if (first == b'"' && last == b'"') || (first == b'\'' && last == b'\'') {
-            return &s[1..s.len() - 1];
+        if first == b'"' && last == b'"' {
+            return s[1..s.len() - 1]
+                .replace("\\\"", "\"")
+                .replace("\\\\", "\\");
+        }
+        if first == b'\'' && last == b'\'' {
+            return s[1..s.len() - 1].replace("''", "'");
         }
     }
-    s
+    s.to_string()
 }
 
 enum State {

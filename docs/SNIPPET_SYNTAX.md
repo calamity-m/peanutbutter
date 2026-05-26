@@ -60,7 +60,9 @@ Each variable spec may include:
 - `command` — shell command whose stdout lines become suggestions.
 
 These specs apply only to snippets in the same markdown file. They do not
-apply to other files.
+apply to other files. The peanutbutter LSP can refactor between inline
+`<@name:?default>` / `<@name:command>` placeholders and equivalent
+`variables.<name>` frontmatter specs with editor code actions.
 
 Malformed or unsupported frontmatter variable specs are ignored during normal
 execution. Run `pb lint` to validate supported frontmatter syntax and variable
