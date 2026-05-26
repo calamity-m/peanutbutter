@@ -10,12 +10,11 @@ A friendly terminal snippet management tool.
 
 ## Quick-Start
 
-New here? Run `pb init` once to scaffold starter snippets at the default XDG location; it points to [docs/SNIPPET_SYNTAX.md](docs/SNIPPET_SYNTAX.md) for the full snippet reference.
+New here? Run `pb init` once to scaffold starter snippets at the default XDG location.
 
 **bash** — add to `~/.bashrc`:
 
 ```bash
-export PEANUTBUTTER_PATH="$PWD/examples"
 eval "$(peanutbutter bash)"
 # then press Ctrl + b and have fun.
 # also installs `pb` as a bash alias for `peanutbutter`
@@ -24,21 +23,18 @@ eval "$(peanutbutter bash)"
 **zsh** — add to `~/.zshrc`:
 
 ```zsh
-export PEANUTBUTTER_PATH="$PWD/examples"
 eval "$(peanutbutter zsh)"
 ```
 
 **fish** — add to `~/.config/fish/config.fish`:
 
 ```fish
-set -x PEANUTBUTTER_PATH "$PWD/examples"
 peanutbutter fish | source
 ```
 
 **PowerShell** — add to `$PROFILE`:
 
 ```powershell
-$env:PEANUTBUTTER_PATH = "$PWD/examples"
 peanutbutter powershell | Invoke-Expression
 ```
 
@@ -51,15 +47,19 @@ Nothing can do that sadly, but peanutbutter tries to get close by understanding:
 - Snippets need to be readable outside of the tool.
 - Fuzzy finding is amazing, and allows you to narrow in a command you know exists, or feel out the existence of some shell script;
 - But sometimes I have no idea what I want, just knowledge that I have something in my personal journal with a bajillion pages. Fuzzy finding through that is just going to frustrate me.
+- Creating, updating and removing snippets should be considered as important as using them - so many snippet/cheatsheet managers are a bitch to create things in mid-workflow, or post-event when I'm already zonked out and braindead.
+
+:shrug: maybe this is pointless but oh well.
 
 ## Modes
 
-Peanutbutter has fuzzy find, structured "file-list", and tag modes. `Ctrl+T` cycles through them in the picker: fuzzy -> file-list -> tags -> fuzzy.
+In an attempt to help address the above understandings, peanutbutter has three search modes for selecting snippets:
 
-- Fuzzy finding is basically like fzf, I just stand on the back of helix's `nucleo-matcher` crate.
-- Fuzzy mode supports these field operators for precise searches: `name:`, `path:`, `tag:`, and `snippet:`. Operators can be mixed with ordinary fuzzy text, so `tag:docker logs` means docker-tagged snippets that also match `logs` somewhere in the normal searchable text. `snippet:` searches the executable snippet code; `body:` is accepted as a compatibility alias.
-- File-list mode lets you walk through your snippets as they're structured via directories and files. I find this useful when I need inspiration on what I want to do. It's hard to explain, but when you **know** you need to do something, but you want to explore what you have.
-- Tags mode lists frontmatter tags with snippet counts. Type to filter tags, press Enter to drill into snippets for the highlighted tag, then type again to filter that snippet list by name. In the drilled list, Backspace clears the snippet filter before returning to tags; Esc returns to tags immediately. Snippets with no tags appear in `(untagged)`, and snippets with multiple tags count once under each tag.
+1. Fuzzy (Default) - basically like fzf/nucleo, just fuzzy matching - there is query syntax and overloading you can use once you're comfortable, as detailed in [FUZZY](/docs/FUZZY.md).
+2. File-based - essentially a dumb file tree, which is counterintuitively, at least to me, sometimes more efficient for finding particular commands to run
+3. Tag mode - tags are fun, we tag everything - why the fuck does nobody seem to make it possible to list and search by tags in a tree-like view?
+
+In all modes, the basic concept of being able to backout is maintained - cycle with `Ctrl+T` safely, enter into snippets, half-fill them and press escape to go back to the viewer.
 
 ## Curating, Editing and Maintaining Snippets
 
@@ -69,47 +69,13 @@ I personally hate having to interact with snippet/cheatsheet tools, I want the e
 - You can add snippets via the cli - `pb edit <tab-complete>`.
 - After running a command you want to save, run `pb new [name]` — it harvests the last 50 entries from the shell's in-memory history, lets you pick one, suggests which arguments should become variables, and appends a snippet to `<first-root>/snippets.md`.
 
-### `pb new` walkthrough
+## LSP
 
-```text
-$ ssh root@10.0.0.4 'systemctl restart nginx'
-$ pb new deploy
-┌─ pb new: pick a command ───────────────────────────────┐
-│ ▸ ssh root@10.0.0.4 'systemctl restart nginx'          │
-│   docker run -e API_TOKEN=xyz... my/image              │
-│   ...                                                  │
-└────────────────────────────────────────────────────────┘
-↑↓/jk move   enter pick   type to filter   esc cancel
+Peanutbutter provides a bundled LSP to make life easier - [LSP](/docs/LSP.md) - setup for neovim is first-class, and at somepoint a shitty vscode extension may be created.
 
-┌─ pb new ───────────────────────────────────────────────┐
-│ Name: deploy                                           │
-│ Preview:                                               │
-│   ssh root@<@host> '<@value>'                          │
-│ Tokens:                                                │
-│   ▸ [x] 10.0.0.4                → host                 │
-│     [x] systemctl restart nginx → value                │
-└────────────────────────────────────────────────────────┘
-space toggle   e rename   n name   enter accept   b back   esc cancel
-```
+Preview (personal neovim setup):
 
-`pb new` requires the shell integration to be sourced (`eval "$(peanutbutter bash C+b)"` or its zsh/fish/PowerShell equivalent) — that's what populates the history list. You can skip the history step entirely by passing a command after `--`:
-
-```bash
-pb new deploy -- ssh root@host 'systemctl restart nginx'
-```
-
-#### Privacy
-
-`pb new` reads the parent shell's in-memory history list (not `$HISTFILE`). Anything you accept in the confirm screen is written verbatim into the target snippet file. Heuristics try to flag likely secrets (`--token=...`, `--password=...`, `Authorization: Bearer ...`, long base64-shaped tokens) and select them on by default so you notice; a warning fires if you accept a snippet with a flagged secret still literal. Even so: avoid typing real secrets on the command line.
-
-#### v1 limits
-
-- Writes to `<first snippet root>/snippets.md` only.
-- History capture is line-oriented; multi-line commands (heredocs, backslash continuations) only round-trip cleanly when supplied via `--`.
-- History payload is byte-capped (~64 KiB) before exec; very large entries may be dropped oldest-first.
-- Two concurrent `pb new` runs racing on the same file are last-writer-wins.
-
-:shrug: maybe this is pointless but oh well.
+![LSP Setup](assets/imgs/lsp-nvim.png)
 
 ## Alternatives
 
@@ -126,6 +92,8 @@ This tool has been [VIBED] with direction from myself. It's a tool I don't care 
 but enough that I've thought about it for years.
 
 Code probably shit - but the code would be shit if I wrote every single line myself too. Use it like I do, or burn it at the stake. You have free-will right? ;)
+
+I use the tool regularly anyway.
 
 ## Snippet Specification
 
@@ -186,65 +154,3 @@ Peanutbutter reads config from `~/.config/peanutbutter/config.toml` by default. 
 This file is optional. If it doesn't exist, peanutbutter uses built-in defaults.
 
 A fully commented example config lives at [examples/config.toml](examples/config.toml).
-
-Notes:
-
-- `paths.snippets` adds extra snippet roots, alongside `PEANUTBUTTER_PATH` and the default XDG snippets directory
-- `ui.height` controls the maximum inline TUI height
-- `search.frecency_weight` controls how much frecency influences the combined search ordering
-- `search.frecency.*` tunes the time/location/frequency balance for ranking
-- `search.fuzzy.*` tunes how much each snippet field contributes to fuzzy matching
-- `theme.name` selects a built-in theme (`default`, `gruvbox`, `catppuccin`, `nord`, or `monochrome`); `theme.*` color values override that base and accept common names like `red`, `dark_gray`, `white`, or `#RRGGBB`. Use `--theme <name>` to select a clean named theme from the CLI.
-- `variables.<name>` defines reusable inputs for free-form placeholders like `<@http_method>` or `<@kube_context>`
-- A configured variable can provide either `suggestions = [...]` or `command = "..."`, and may also provide `default = "..."`
-- Suggestion commands (both inline `<@name:cmd>` and `[variables.name] command = "..."`) run under non-login, non-interactive `bash -c`. They inherit `$PATH` from peanutbutter's parent process but do **not** source `~/.bash_profile` or `~/.bashrc`, so they can't use shell aliases or functions defined there. This is deliberate: a login shell's startup output (e.g. `Agent pid NNNN` from ssh-agent) would otherwise leak into the suggestion list, and any interactive prompt it triggers (e.g. an ssh-add passphrase) would hang the TUI.
-- `suggestion_commands.timeout_ms` caps how long any suggestion command may run (default `2000` ms); commands that exceed it are killed and the variable falls back to manual input
-- `suggestion_commands.allow_commands` set to `false` disables all suggestion command execution globally — variables fall back to static suggestions or manual input (useful when importing untrusted snippet collections)
-- `lint.<code>` config can disable or suppress specific lint findings. Use the lint code without the `lint/` prefix, e.g. `[lint.invalid-dependent-reference]`. `disable = true` drops that lint entirely, `ignore_file` matches snippet paths relative to their snippet root, and `ignore_command` matches command text for command-backed lint findings. `ignore_file` and `ignore_command` accept either one glob string or a list of glob strings.
-
-```toml
-[lint.invalid-dependent-reference]
-ignore_command = "*rg*"
-ignore_file = ["test*", "fixtures/*"]
-disable = false
-```
-
-## Peanutbutter CLI
-
-1. `peanutbutter bash [C+b]` — emit bash integration script (eval it in `~/.bashrc`)
-2. `peanutbutter zsh [C+b]` — emit zsh integration script (eval it in `~/.zshrc`)
-3. `peanutbutter fish [C+b]` — emit fish integration script (source it in `config.fish`)
-4. `peanutbutter powershell [C+b]` — emit PowerShell/PSReadLine integration script (add it to `$PROFILE`)
-5. `peanutbutter edit ...` — edit a snippet file in `$EDITOR`/`$VISUAL`
-6. `peanutbutter lint [--strict] [--json]` — check configured snippet roots for authoring problems
-7. `peanutbutter execute [--theme <name>]` — run the inline TUI; output can be piped, e.g. `peanutbutter execute | grep foo`
-8. `peanutbutter lsp` — start a Language Server Protocol server over stdio for editor integration (diagnostics, completions, hover, go-to-definition). See [docs/LSP.md](docs/LSP.md) for setup.
-
-All shell integrations install a `pb` alias and wire up `pb edit <TAB>` plus `--theme <TAB>` completion.
-
-`pb lint` is read-only. It reports broken frontmatter, unused frontmatter/config variables, duplicate snippet slugs, invalid dependent variable references, dry-run frecency GC orphans, and obvious static inline suggestion commands. It does not execute suggestion commands. Bare manual placeholders like `<@value>` are valid in normal mode. `--strict` adds style/structure checks such as undeclared manual placeholders, unbalanced fences, missing code-fence language tags, and confusing file-local variable overrides. Pretty output is written to stdout by default; `--json` writes a parseable object with stable `findings[].code` fields. Exit codes are `0` for no findings, `1` for lint findings, and `2` for operational failures that prevent lint from running.
-
-Frecency GC checks are dry-run only and never reattach, purge, save, or write backups.
-
-Pretty output example:
-
-```text
-/path/to/snippets.md
-  warning:3 lint/unused-variable: frontmatter variable 'env' is not referenced by any snippet in this file
-```
-
-JSON output example:
-
-```json
-{
-  "findings": [
-    {
-      "severity": "warning",
-      "code": "lint/unused-variable",
-      "path": "/path/to/snippets.md",
-      "line": 3,
-      "message": "frontmatter variable 'env' is not referenced by any snippet in this file"
-    }
-  ]
-}
-```
