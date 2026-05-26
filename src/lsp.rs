@@ -28,6 +28,7 @@ mod code_actions;
 mod completions;
 mod hover;
 mod navigation;
+mod semantic_tokens;
 
 /// Run the LSP server over stdio until the client disconnects.
 pub fn run_lsp_server() {
@@ -82,6 +83,17 @@ fn server_capabilities() -> ServerCapabilities {
         definition_provider: Some(OneOf::Left(true)),
         references_provider: Some(OneOf::Left(true)),
         code_action_provider: Some(CodeActionProviderCapability::Simple(true)),
+        semantic_tokens_provider: Some(SemanticTokensServerCapabilities::SemanticTokensOptions(
+            SemanticTokensOptions {
+                legend: SemanticTokensLegend {
+                    token_types: semantic_tokens::TOKEN_TYPES.to_vec(),
+                    token_modifiers: vec![],
+                },
+                full: Some(SemanticTokensFullOptions::Bool(true)),
+                range: Some(false),
+                ..Default::default()
+            },
+        )),
         ..Default::default()
     }
 }
@@ -216,6 +228,21 @@ impl LanguageServer for Backend {
             params.range,
             &self.config.variables,
         ))
+    }
+
+    async fn semantic_tokens_full(
+        &self,
+        params: SemanticTokensParams,
+    ) -> Result<Option<SemanticTokensResult>> {
+        let uri = &params.text_document.uri;
+        if find_marker_root(&uri_to_path(uri)).is_none() {
+            return Ok(None);
+        }
+        let docs = self.documents.read().await;
+        let Some(content) = docs.get(uri) else {
+            return Ok(None);
+        };
+        Ok(semantic_tokens::compute_semantic_tokens(content))
     }
 }
 
