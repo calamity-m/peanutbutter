@@ -324,11 +324,7 @@ pub fn run_new_command(
     name_opt: Option<String>,
     explicit_argv: Vec<String>,
 ) -> io::Result<()> {
-    let target_root = paths
-        .snippet_roots
-        .first()
-        .ok_or_else(|| io::Error::other("no snippet roots configured"))?;
-    let target = target_root.join("snippets.md");
+    let targets = new_target_choices(paths)?;
 
     let explicit_command = if explicit_argv.is_empty() {
         None
@@ -361,17 +357,18 @@ pub fn run_new_command(
         name_opt,
         theme,
         viewport_height,
-        target_display: target.display().to_string(),
+        targets,
     })?;
 
-    let (name, raw, accepted, first_token) = match outcome {
+    let (name, raw, accepted, first_token, target) = match outcome {
         crate::capture::CaptureOutcome::Cancelled => return Ok(()),
         crate::capture::CaptureOutcome::Accepted {
             name,
             raw,
             accepted,
             first_token,
-        } => (name, raw, accepted, first_token),
+            target,
+        } => (name, raw, accepted, first_token, target),
     };
 
     let accepted = bump_against_frontmatter(&target, accepted)?;
@@ -384,6 +381,70 @@ pub fn run_new_command(
         target_written.display()
     );
     Ok(())
+}
+
+/// Build the list of destination files offered by the `new` target picker.
+///
+/// Returns every existing snippet file under the configured roots, labelled by
+/// root-relative path (alias-prefixed when more than one root is configured).
+/// When no files exist yet, falls back to a single default
+/// `<first-root>/snippets.md` choice so the picker can be skipped.
+fn new_target_choices(paths: &Paths) -> io::Result<Vec<crate::capture::TargetChoice>> {
+    use crate::capture::TargetChoice;
+
+    let files = crate::discovery::discover_all(&paths.snippet_roots)?;
+    if files.is_empty() {
+        let root = paths
+            .snippet_roots
+            .first()
+            .ok_or_else(|| io::Error::other("no snippet roots configured"))?;
+        return Ok(vec![TargetChoice {
+            label: DEFAULT_EDIT_PATH.to_string(),
+            path: root.join(DEFAULT_EDIT_PATH),
+        }]);
+    }
+
+    let aliases = edit_root_aliases(paths);
+    let multi = paths.snippet_roots.len() > 1;
+    Ok(files
+        .into_iter()
+        .map(|file| {
+            let label = target_label(&file, &aliases, multi);
+            TargetChoice { label, path: file }
+        })
+        .collect())
+}
+
+/// Render a short, stable label for a discovered snippet file: its path
+/// relative to the owning root, prefixed with the root alias when multiple
+/// roots are configured.
+fn target_label(file: &Path, aliases: &[EditRootAlias], multi: bool) -> String {
+    let owner = aliases
+        .iter()
+        .filter(|entry| file.starts_with(&entry.root))
+        .max_by_key(|entry| entry.root.as_os_str().len());
+    match owner {
+        Some(entry) => {
+            let rel = file
+                .strip_prefix(&entry.root)
+                .unwrap_or(file)
+                .to_string_lossy()
+                .replace('\\', "/");
+            let rel = if rel.is_empty() {
+                file.file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default()
+            } else {
+                rel
+            };
+            if multi {
+                format!("{}/{rel}", entry.alias)
+            } else {
+                rel
+            }
+        }
+        None => file.to_string_lossy().replace('\\', "/"),
+    }
 }
 
 #[cfg(test)]
@@ -924,6 +985,43 @@ mod tests {
             state_file: first.join("state.tsv"),
             config_file: first.join("config.toml"),
         }
+    }
+
+    #[test]
+    fn target_label_uses_relative_path_for_single_root() {
+        let paths = test_paths_with_roots(vec![PathBuf::from("/home/me/snippets")]);
+        let aliases = edit_root_aliases(&paths);
+        assert_eq!(
+            target_label(Path::new("/home/me/snippets/work/db.md"), &aliases, false),
+            "work/db.md"
+        );
+    }
+
+    #[test]
+    fn target_label_prefixes_alias_for_multiple_roots() {
+        let paths = test_paths_with_roots(vec![
+            PathBuf::from("/home/me/snippets"),
+            PathBuf::from("/home/me/work"),
+        ]);
+        let aliases = edit_root_aliases(&paths);
+        assert_eq!(
+            target_label(Path::new("/home/me/work/db.md"), &aliases, true),
+            "work/db.md"
+        );
+        assert_eq!(
+            target_label(Path::new("/home/me/snippets/a.md"), &aliases, true),
+            "snippets/a.md"
+        );
+    }
+
+    #[test]
+    fn new_target_choices_falls_back_to_default_when_empty() {
+        let root = temp_dir("new-targets");
+        let paths = test_paths(&root);
+        let choices = new_target_choices(&paths).unwrap();
+        assert_eq!(choices.len(), 1);
+        assert_eq!(choices[0].label, DEFAULT_EDIT_PATH);
+        assert_eq!(choices[0].path, root.join(DEFAULT_EDIT_PATH));
     }
 
     #[test]

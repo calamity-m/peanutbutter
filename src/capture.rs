@@ -160,24 +160,11 @@ pub struct TokenConfirmState {
     /// True when a "secret remains literal" warning is shown and acceptance is
     /// awaiting a second confirmation.
     pub awaiting_secret_confirm: bool,
-    /// Display path of the snippet file the accepted body will be appended to.
-    pub target_display: String,
 }
 
 impl TokenConfirmState {
     /// Build a fresh confirm state.
     pub fn new(name_opt: Option<String>, raw: String, candidates: Vec<TokenCandidate>) -> Self {
-        Self::with_target(name_opt, raw, candidates, String::new())
-    }
-
-    /// Like [`Self::new`] but lets the caller supply the display path of the
-    /// destination file (shown in the `Target:` row).
-    pub fn with_target(
-        name_opt: Option<String>,
-        raw: String,
-        candidates: Vec<TokenCandidate>,
-        target_display: String,
-    ) -> Self {
         let selected: Vec<bool> = candidates.iter().map(|c| c.default_selected).collect();
         let names: Vec<String> = candidates
             .iter()
@@ -199,7 +186,6 @@ impl TokenConfirmState {
             rename_buffer: String::new(),
             hint: None,
             awaiting_secret_confirm: false,
-            target_display,
         }
     }
 
@@ -295,6 +281,15 @@ impl TokenConfirmState {
 // Terminal driver
 // =========================================================================
 
+/// A selectable destination file shown in the target-pick stage.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TargetChoice {
+    /// Short label shown in the picker (e.g. root-relative path).
+    pub label: String,
+    /// Absolute path the snippet will be appended to.
+    pub path: std::path::PathBuf,
+}
+
 /// Configuration for [`run_capture`].
 pub struct CaptureRun<'a> {
     pub history: Option<Vec<String>>,
@@ -302,9 +297,10 @@ pub struct CaptureRun<'a> {
     pub name_opt: Option<String>,
     pub theme: &'a Theme,
     pub viewport_height: u16,
-    /// Display path of the file the snippet will be written to (shown in the
-    /// confirm screen's `Target:` row).
-    pub target_display: String,
+    /// Candidate destination files. When more than one is present the user
+    /// picks one in a dedicated stage after accepting; a single entry is used
+    /// directly with no extra prompt.
+    pub targets: Vec<TargetChoice>,
 }
 
 /// Result of a full capture session.
@@ -315,6 +311,8 @@ pub enum CaptureOutcome {
         raw: String,
         accepted: Vec<(Span, String)>,
         first_token: Option<String>,
+        /// The destination file the user selected.
+        target: std::path::PathBuf,
     },
 }
 
@@ -347,7 +345,7 @@ pub fn run_capture(run: CaptureRun<'_>) -> io::Result<CaptureOutcome> {
         name_opt,
         theme,
         viewport_height,
-        target_display,
+        targets,
     } = run;
 
     let _raw = RawModeGuard::enter()?;
@@ -362,7 +360,7 @@ pub fn run_capture(run: CaptureRun<'_>) -> io::Result<CaptureOutcome> {
 
     let mut viewport_top: Option<u16> = None;
 
-    loop {
+    'outer: loop {
         // Stage 1: history picker (skipped when explicit_command is set).
         let raw_command = if let Some(cmd) = &explicit_command {
             cmd.clone()
@@ -379,28 +377,48 @@ pub fn run_capture(run: CaptureRun<'_>) -> io::Result<CaptureOutcome> {
         };
 
         let candidates = crate::capture_heuristics::detect_variables(&raw_command);
-        let mut state = TokenConfirmState::with_target(
-            name_opt.clone(),
-            raw_command.clone(),
-            candidates,
-            target_display.clone(),
-        );
-        match drive_confirm(&mut terminal, &mut state, theme, &mut viewport_top)? {
-            ConfirmOutcome::Cancel => {
-                cleanup_terminal(viewport_top)?;
-                return Ok(CaptureOutcome::Cancelled);
-            }
-            ConfirmOutcome::Back => continue,
-            ConfirmOutcome::Accept(accept) => {
-                let first_token = state.raw.split_whitespace().next().map(|s| s.to_string());
-                cleanup_terminal(viewport_top)?;
-                return Ok(CaptureOutcome::Accepted {
-                    name: accept.name,
-                    raw: state.raw.clone(),
-                    accepted: accept.accepted,
-                    first_token,
-                });
-            }
+        let mut state = TokenConfirmState::new(name_opt.clone(), raw_command.clone(), candidates);
+
+        // Stage 2 + 3 loop so the target picker can step back to confirm.
+        loop {
+            let accept = match drive_confirm(&mut terminal, &mut state, theme, &mut viewport_top)? {
+                ConfirmOutcome::Cancel => {
+                    cleanup_terminal(viewport_top)?;
+                    return Ok(CaptureOutcome::Cancelled);
+                }
+                ConfirmOutcome::Back => continue 'outer,
+                ConfirmOutcome::Accept(accept) => accept,
+            };
+
+            // Stage 3: target file picker. A single candidate is used directly.
+            let target = if targets.len() == 1 {
+                targets[0].path.clone()
+            } else {
+                let labels: Vec<String> = targets.iter().map(|t| t.label.clone()).collect();
+                let mut picker = HistoryPickerState::new(labels);
+                match drive_target_picker(&mut terminal, &mut picker, theme, &mut viewport_top)? {
+                    TargetPickOutcome::Cancel => {
+                        cleanup_terminal(viewport_top)?;
+                        return Ok(CaptureOutcome::Cancelled);
+                    }
+                    TargetPickOutcome::Back => continue,
+                    TargetPickOutcome::Pick(label) => targets
+                        .iter()
+                        .find(|t| t.label == label)
+                        .map(|t| t.path.clone())
+                        .expect("picked label maps to a known target"),
+                }
+            };
+
+            let first_token = state.raw.split_whitespace().next().map(|s| s.to_string());
+            cleanup_terminal(viewport_top)?;
+            return Ok(CaptureOutcome::Accepted {
+                name: accept.name,
+                raw: state.raw.clone(),
+                accepted: accept.accepted,
+                first_token,
+                target,
+            });
         }
     }
 }
@@ -429,7 +447,14 @@ fn drive_picker(
     loop {
         terminal.draw(|frame| {
             *viewport_top = viewport_top.or(Some(frame.area().y));
-            render_picker(frame.area(), frame.buffer_mut(), state, theme);
+            render_picker(
+                frame.area(),
+                frame.buffer_mut(),
+                state,
+                theme,
+                "pick a command",
+                "↑↓/jk move   enter pick   type to filter   esc cancel",
+            );
         })?;
         if !event::poll(Duration::from_millis(250))? {
             continue;
@@ -444,6 +469,97 @@ fn drive_picker(
             PickerAction::Continue => {}
             PickerAction::Cancel => return Ok(PickOutcome::Cancel),
             PickerAction::Pick(s) => return Ok(PickOutcome::Pick(s)),
+        }
+    }
+}
+
+/// Outcome of the target-file pick stage.
+enum TargetPickOutcome {
+    /// User cancelled the whole capture (Ctrl+C).
+    Cancel,
+    /// User stepped back to the confirm screen (Esc).
+    Back,
+    /// User picked a destination (carries the chosen label).
+    Pick(String),
+}
+
+enum TargetPickAction {
+    Continue,
+    Cancel,
+    Back,
+    Pick(String),
+}
+
+fn target_picker_key(state: &mut HistoryPickerState, key: KeyEvent) -> TargetPickAction {
+    match key.code {
+        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            TargetPickAction::Cancel
+        }
+        KeyCode::Esc => TargetPickAction::Back,
+        KeyCode::Enter => match state.pick() {
+            Some(s) if !s.trim().is_empty() => TargetPickAction::Pick(s),
+            _ => TargetPickAction::Continue,
+        },
+        KeyCode::Up => {
+            state.move_cursor(-1);
+            TargetPickAction::Continue
+        }
+        KeyCode::Down => {
+            state.move_cursor(1);
+            TargetPickAction::Continue
+        }
+        KeyCode::Char('k') if key.modifiers.is_empty() && state.filter().is_empty() => {
+            state.move_cursor(-1);
+            TargetPickAction::Continue
+        }
+        KeyCode::Char('j') if key.modifiers.is_empty() && state.filter().is_empty() => {
+            state.move_cursor(1);
+            TargetPickAction::Continue
+        }
+        KeyCode::Backspace => {
+            state.pop_filter();
+            TargetPickAction::Continue
+        }
+        KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+            state.append_filter(c);
+            TargetPickAction::Continue
+        }
+        _ => TargetPickAction::Continue,
+    }
+}
+
+fn drive_target_picker(
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    state: &mut HistoryPickerState,
+    theme: &Theme,
+    viewport_top: &mut Option<u16>,
+) -> io::Result<TargetPickOutcome> {
+    loop {
+        terminal.draw(|frame| {
+            *viewport_top = viewport_top.or(Some(frame.area().y));
+            render_picker(
+                frame.area(),
+                frame.buffer_mut(),
+                state,
+                theme,
+                "pick a destination file",
+                "↑↓/jk move   enter select   type to filter   esc back",
+            );
+        })?;
+        if !event::poll(Duration::from_millis(250))? {
+            continue;
+        }
+        let Event::Key(key) = event::read()? else {
+            continue;
+        };
+        if key.kind == KeyEventKind::Release {
+            continue;
+        }
+        match target_picker_key(state, key) {
+            TargetPickAction::Continue => {}
+            TargetPickAction::Cancel => return Ok(TargetPickOutcome::Cancel),
+            TargetPickAction::Back => return Ok(TargetPickOutcome::Back),
+            TargetPickAction::Pick(s) => return Ok(TargetPickOutcome::Pick(s)),
         }
     }
 }
@@ -495,13 +611,15 @@ fn render_picker(
     buf: &mut ratatui::buffer::Buffer,
     state: &HistoryPickerState,
     theme: &Theme,
+    title: &str,
+    footer: &str,
 ) {
     use ratatui::widgets::Widget;
     let content = crate::tui_chrome::Chrome {
         theme,
         mode: "pb new",
-        title: "pick a command",
-        footer: "↑↓/jk move   enter pick   type to filter   esc cancel",
+        title,
+        footer,
     }
     .render(area, buf);
     if content.height == 0 {
@@ -723,18 +841,17 @@ fn render_confirm(
         return;
     }
 
-    // Section heights — Header (Name + Target) and Preview (label + value) are
-    // fixed; Tokens takes the remainder. Each section has a divider row above
-    // it (except the first), drawn directly into the outer border.
-    let header_h: u16 = 2;
+    // Section heights — Header (Name) and Preview (label + value) are fixed;
+    // Tokens takes the remainder. Each section has a divider row above it
+    // (except the first), drawn directly into the outer border.
+    let header_h: u16 = 1;
     let preview_h: u16 = 2;
     let mut y = content.y;
     let render_section = |area: Rect, buf: &mut ratatui::buffer::Buffer, lines: Vec<Line>| {
         Paragraph::new(lines).render(area, buf);
     };
 
-    // 1. Header: Name + Target.
-    let target_path = state.target_display.clone();
+    // 1. Header: Name.
     let header_area = Rect {
         x: content.x,
         y,
@@ -746,17 +863,11 @@ fn render_confirm(
     } else {
         theme.emphasis
     };
-    let cursor = if state.focus == Focus::Name { "_" } else { "" };
-    let header_lines = vec![
-        Line::from(vec![
-            RtSpan::styled("Name:   ", theme.chrome),
-            RtSpan::styled(format!("{}{cursor}", state.name), name_style),
-        ]),
-        Line::from(vec![
-            RtSpan::styled("Target: ", theme.chrome),
-            RtSpan::styled(target_path, theme.chrome),
-        ]),
-    ];
+    let name_cursor = if state.focus == Focus::Name { "_" } else { "" };
+    let header_lines = vec![Line::from(vec![
+        RtSpan::styled("Name:   ", theme.chrome),
+        RtSpan::styled(format!("{}{name_cursor}", state.name), name_style),
+    ])];
     render_section(header_area, buf, header_lines);
     y += header_area.height;
 
@@ -954,5 +1065,38 @@ mod tests {
         state.rename_buffer = "bad name!".to_string();
         state.commit_rename();
         assert_eq!(state.names[0], "badname");
+    }
+
+    fn key(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    #[test]
+    fn target_picker_enter_picks_filtered_entry() {
+        let mut state = HistoryPickerState::new(vec![
+            "work/db.md".to_string(),
+            "personal/notes.md".to_string(),
+        ]);
+        for c in "notes".chars() {
+            state.append_filter(c);
+        }
+        match target_picker_key(&mut state, key(KeyCode::Enter)) {
+            TargetPickAction::Pick(s) => assert_eq!(s, "personal/notes.md"),
+            _ => panic!("expected pick"),
+        }
+    }
+
+    #[test]
+    fn target_picker_esc_steps_back_ctrl_c_cancels() {
+        let mut state = HistoryPickerState::new(vec!["a.md".to_string()]);
+        assert!(matches!(
+            target_picker_key(&mut state, key(KeyCode::Esc)),
+            TargetPickAction::Back
+        ));
+        let ctrl_c = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
+        assert!(matches!(
+            target_picker_key(&mut state, ctrl_c),
+            TargetPickAction::Cancel
+        ));
     }
 }
