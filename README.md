@@ -6,6 +6,8 @@
 
 A friendly terminal snippet management tool.
 
+![Peanutbutter demo: search for a snippet, fill a variable, and insert the command into the shell buffer](assets/imgs/demo.gif)
+
 ## Quick-Start
 
 New here? Run `pb init` once to scaffold starter snippets at the default XDG location; it points to [docs/SNIPPET_SYNTAX.md](docs/SNIPPET_SYNTAX.md) for the full snippet reference.
