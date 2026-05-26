@@ -321,7 +321,7 @@ fn box_top(title: &str) -> String {
     // ┌─ Title ─────...─┐
     let inner = BOX_WIDTH - 2; // excluding corner chars
     let title_part = format!("─ {title} ");
-    let remaining = inner.saturating_sub(title_part.len());
+    let remaining = inner.saturating_sub(title_part.chars().count());
     format!("┌{}{}┐", title_part, "─".repeat(remaining))
 }
 
