@@ -1,7 +1,7 @@
-//! Parsing and rendering of suggestion-command templates with `<#name>` /
-//! `<#name:raw>` dependent-variable references.
+//! Parsing and rendering of templates with `<#name>` / `<#name:raw>`
+//! dependent-variable references.
 //!
-//! A suggestion command may reference values the user has already confirmed
+//! A suggestion command or default may reference values the user has already confirmed
 //! for earlier variables. Dependence is explicit: a `<#bucket>` token expands
 //! to the shell-single-quoted form of the confirmed value for `bucket`; a
 //! `<#bucket:raw>` token splices the value verbatim (no quoting).
@@ -11,7 +11,7 @@
 use std::collections::BTreeSet;
 use std::fmt;
 
-/// One piece of a parsed suggestion-command template.
+/// One piece of a parsed dependent-reference template.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Fragment {
     /// Verbatim text. Backslash escapes for `\<#` have already been collapsed.
@@ -25,11 +25,11 @@ pub enum Fragment {
     },
 }
 
-/// Parsed suggestion-command template: an ordered sequence of literal runs
+/// Parsed dependent-reference template: an ordered sequence of literal runs
 /// and dependent `<#name>` / `<#name:raw>` references.
 pub type CommandTemplate = Vec<Fragment>;
 
-/// Failure to parse `<#...>` syntax in a command source.
+/// Failure to parse `<#...>` syntax in a template source.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ParseError {
     /// `<#` was opened but never closed by `>`.
@@ -173,7 +173,7 @@ pub fn is_dependent(template: &CommandTemplate) -> bool {
     template.iter().any(|f| matches!(f, Fragment::Ref { .. }))
 }
 
-/// Render `template` into a final command string using `confirmed` values.
+/// Render `template` into a final string using `confirmed` values.
 /// `<#name>` references are shell-single-quoted; `<#name:raw>` are spliced
 /// verbatim. Missing confirmed values yield `RenderError::MissingConfirmed`.
 pub fn render(

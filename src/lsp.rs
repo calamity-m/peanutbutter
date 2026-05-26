@@ -372,6 +372,20 @@ fn compute_completions(
                 }
             }
         }
+        if let Some(owner) = enclosing_placeholder_owner(before_cursor, at_pos)
+            && let Some(snippet) = snippet_at_line(content, line_idx)
+        {
+            let mut earlier = Vec::new();
+            for v in &snippet.variables {
+                if v.name == owner {
+                    break;
+                }
+                if !earlier.contains(&v.name) {
+                    earlier.push(v.name.clone());
+                }
+            }
+            names.retain(|name| earlier.contains(name));
+        }
         let items: Vec<CompletionItem> = names
             .into_iter()
             .filter(|name| name.starts_with(var_prefix))
@@ -721,6 +735,29 @@ fn compute_references(uri: &Url, content: &str, pos: Position) -> Option<Vec<Loc
 // Shared helpers
 // ---------------------------------------------------------------------------
 
+fn enclosing_placeholder_owner(before_cursor: &str, hash_pos: usize) -> Option<String> {
+    let at_pos = before_cursor[..hash_pos].rfind("<@")?;
+    let inner = &before_cursor[at_pos + 2..];
+    let name = inner.split(':').next()?.trim();
+    if name.is_empty() {
+        None
+    } else {
+        Some(name.to_string())
+    }
+}
+
+fn snippet_at_line(content: &str, line_idx: usize) -> Option<crate::domain::Snippet> {
+    let parsed = parser::parse_file(std::path::Path::new(""), std::path::Path::new(""), content);
+    let ranges = parser::snippet_line_ranges(std::path::Path::new(""), content);
+    let range = ranges
+        .iter()
+        .find(|range| line_idx >= range.start_line && line_idx < range.end_line)?;
+    parsed
+        .snippets
+        .into_iter()
+        .find(|snippet| snippet.id == range.id)
+}
+
 /// Marker file names that identify a directory tree as a peanutbutter snippet root.
 ///
 /// The server only activates for `.md` files that have one of these files in
@@ -1041,5 +1078,69 @@ mod dependent_lsp_tests {
         // Prefix "bu" matches only `bucket`, not `beach`.
         assert!(labels.contains(&"bucket"), "got {labels:?}");
         assert!(!labels.contains(&"beach"), "got {labels:?}");
+    }
+
+    #[test]
+    fn dependent_ref_at_finds_token_inside_default() {
+        let line = "<@out:?<#bucket:raw>.out>";
+        let (name, _, _, raw) = dependent_ref_at(line, line.find("bucket").unwrap()).unwrap();
+        assert_eq!(name, "bucket");
+        assert!(raw);
+    }
+
+    #[test]
+    fn hover_definition_and_references_work_inside_default() {
+        let content = "---\nvariables:\n  bucket:\n    suggestions: [a]\n---\n## D\n\n```bash\n<@bucket> <@out:?<#bucket:raw>.out>\n```\n";
+        let uri = Url::parse("file:///x.md").unwrap();
+        let line_idx = 8;
+        let line = content.lines().nth(line_idx).unwrap();
+        let col = line.find("<#bucket").unwrap() + 2;
+        let hover = compute_hover(
+            content,
+            pos(line_idx as u32, col as u32),
+            &empty_config_vars(),
+        )
+        .unwrap();
+        let HoverContents::Markup(markup) = hover.contents else {
+            panic!("expected markup");
+        };
+        assert!(markup.value.contains("raw splice"), "got {}", markup.value);
+
+        let def = compute_definition(
+            &uri,
+            content,
+            pos(line_idx as u32, col as u32),
+            &empty_app_config(),
+        )
+        .unwrap();
+        let GotoDefinitionResponse::Scalar(loc) = def else {
+            panic!("expected scalar");
+        };
+        assert_eq!(loc.range.start.line, 2);
+
+        let refs = compute_references(&uri, content, pos(line_idx as u32, col as u32)).unwrap();
+        let bodies: Vec<_> = refs.iter().filter(|l| l.range.start.line == 8).collect();
+        assert!(bodies.len() >= 2, "got {refs:?}");
+    }
+
+    #[test]
+    fn default_dependent_completion_uses_earlier_prompt_order() {
+        let content = "## D\n\n```bash\n<@a> <@out:?<#> <@later>\n```\n";
+        let line_idx = 3;
+        let line = content.lines().nth(line_idx).unwrap();
+        let col = line.find("<#").unwrap() + 2;
+        let resp = compute_completions(
+            content,
+            pos(line_idx as u32, col as u32),
+            &empty_config_vars(),
+        )
+        .unwrap();
+        let CompletionResponse::Array(items) = resp else {
+            panic!("expected array");
+        };
+        let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
+        assert!(labels.contains(&"a"), "got {labels:?}");
+        assert!(!labels.contains(&"out"), "got {labels:?}");
+        assert!(!labels.contains(&"later"), "got {labels:?}");
     }
 }

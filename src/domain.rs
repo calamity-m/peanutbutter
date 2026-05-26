@@ -1,3 +1,4 @@
+use crate::command_template::CommandTemplate;
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -63,7 +64,7 @@ pub enum VariableSource {
     /// Run `bash -c <command>` and split stdout into suggestion lines.
     Command(String),
     /// Pre-populated default value (`<@name:?default>`); can be overridden.
-    Default(String),
+    Default(CommandTemplate),
 }
 
 /// A single `<@name[:source]>` placeholder parsed from a snippet body.

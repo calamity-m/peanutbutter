@@ -208,6 +208,7 @@ pub trait SuggestionProvider {
         &self,
         variable: &Variable,
         local_variables: &std::collections::BTreeMap<String, VariableSpec>,
+        confirmed: &BTreeMap<String, String>,
     ) -> Option<String>;
     /// Return the raw suggestion-command source for `variable`, if any, by
     /// inspecting inline source, file-local spec, and config overrides in that
@@ -317,9 +318,10 @@ impl SuggestionProvider for SystemSuggestionProvider {
         &self,
         variable: &Variable,
         local_variables: &std::collections::BTreeMap<String, VariableSpec>,
+        confirmed: &BTreeMap<String, String>,
     ) -> Option<String> {
         match &variable.source {
-            VariableSource::Default(value) => Some(value.clone()),
+            VariableSource::Default(template) => command_template::render(template, confirmed).ok(),
             VariableSource::Command(_) => None,
             VariableSource::Free => local_variables
                 .get(&variable.name)

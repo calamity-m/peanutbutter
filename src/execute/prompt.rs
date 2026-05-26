@@ -1,4 +1,4 @@
-use crate::command_template::{CommandTemplate, parse_command_template, referenced_names};
+use crate::command_template::{CommandTemplate, parse_command_template, referenced_names, render};
 use crate::config::Theme;
 use crate::domain::{Variable, VariableSpec};
 use crate::index::SnippetIndex;
@@ -298,10 +298,7 @@ fn mark_downstream_dirty<P: SuggestionProvider>(
         .collect();
     for (offset, name) in names.iter().enumerate() {
         let variable = &prompt.variables[start + offset];
-        let Some(template) = parsed_command_template(provider, variable, &locals) else {
-            continue;
-        };
-        let refs = referenced_names(&template);
+        let refs = dependent_refs_for_variable(provider, variable, &locals);
         if refs.iter().any(|r| tainted.contains(r)) {
             prompt.dirty.insert(name.clone());
             tainted.insert(name.clone());
@@ -319,6 +316,21 @@ fn parsed_command_template<P: SuggestionProvider>(
 ) -> Option<CommandTemplate> {
     let source = provider.command_source(variable, local_variables)?;
     parse_command_template(&source).ok()
+}
+
+fn dependent_refs_for_variable<P: SuggestionProvider>(
+    provider: &P,
+    variable: &Variable,
+    local_variables: &BTreeMap<String, VariableSpec>,
+) -> BTreeSet<String> {
+    let mut refs = match &variable.source {
+        crate::domain::VariableSource::Default(template) => referenced_names(template),
+        _ => BTreeSet::new(),
+    };
+    if let Some(template) = parsed_command_template(provider, variable, local_variables) {
+        refs.extend(referenced_names(&template));
+    }
+    refs
 }
 
 fn cycle_prompt_variable<P: SuggestionProvider>(
@@ -355,8 +367,9 @@ pub(crate) fn load_prompt_state<P: SuggestionProvider>(
     prompt.input = if let Some(value) = prompt.values.get(&variable.name).cloned() {
         value
     } else {
-        default_input(&variable)
-            .or_else(|| provider.default_input(&variable, &prompt.local_variables))
+        let confirmed = confirmed_upstream(prompt);
+        default_input(&variable, &confirmed)
+            .or_else(|| provider.default_input(&variable, &prompt.local_variables, &confirmed))
             .unwrap_or_default()
     };
     prompt.error = None;
@@ -582,12 +595,12 @@ pub(crate) fn confirmed_upstream(prompt: &PromptState) -> BTreeMap<String, Strin
     out
 }
 
-fn default_input(variable: &Variable) -> Option<String> {
+fn default_input(variable: &Variable, confirmed: &BTreeMap<String, String>) -> Option<String> {
     match variable {
         Variable {
-            source: crate::domain::VariableSource::Default(value),
+            source: crate::domain::VariableSource::Default(template),
             ..
-        } => Some(value.clone()),
+        } => render(template, confirmed).ok(),
         _ => None,
     }
 }

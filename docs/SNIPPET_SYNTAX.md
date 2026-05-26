@@ -203,7 +203,9 @@ echo <@input>
 ```
 
 Pre-populates the prompt with `default`. The user can accept it or type a
-different value.
+different value. Defaults may include dependent references (`<#name>` and
+`<#name:raw>`) using the same grammar, ordering rules, and lint checks as
+suggestion commands; see [Dependent Variables](#dependent-variables).
 
 Example:
 
@@ -280,10 +282,10 @@ instead of config suggestions or command.
 
 ### Dependent Variables
 
-A suggestion command may reference values the user has already confirmed for
-earlier variables, using `<#name>` (shell-quoted) or `<#name:raw>` (literal
-splice) tokens inside the command source. This lets one variable's suggestion
-list depend on another.
+A suggestion command or default value may reference values the user has already
+confirmed for earlier variables, using `<#name>` (shell-quoted) or
+`<#name:raw>` (literal splice) tokens inside the command/default source. This
+lets one variable's suggestion list or pre-filled default depend on another.
 
 Worked example — pick a Kubernetes secret, then pick a key from that secret:
 
@@ -294,6 +296,16 @@ kubectl get secret <@secret:kubectl get secret -o name | sed 's#secret/##'> -o j
 When the user confirms `secret`, the `key` variable's command is re-evaluated
 with `<#secret>` substituted, so its suggestions are the data keys of the
 chosen secret.
+
+Worked default example — pre-fill an output path from earlier confirmed picks:
+
+```sh
+kubectl get secret <@secret> -o jsonpath='{.data.<@key>}' | tee <@output:?<#namespace:raw>.<#secret:raw>.<#key:raw>.out>
+```
+
+`:raw` is natural for path-style construction because the shell-quoted form
+would render pieces like `'<namespace>'.'<secret>'.out` instead of a plain file
+name. Use it only when the upstream values are trusted or constrained.
 
 **Quoting forms.**
 
@@ -324,10 +336,12 @@ errors.
 
 **Confirmed values only.** Only values the user has confirmed (moved past with
 Enter or Tab) are substituted. The in-flight input buffer is not visible to
-downstream commands. If the user revisits an upstream variable and changes
-its value, dependent descendants become *dirty*: their text is preserved for
-editing, but they are not treated as confirmed for later substitutions until
-the user revisits and reconfirms them.
+downstream commands or defaults. If a default references an upstream that is
+not currently confirmed, no dependent pre-fill is offered and the input buffer
+is left empty. If the user revisits an upstream variable and changes its value,
+dependent descendants become *dirty*: their text is preserved for editing, but
+they are not treated as confirmed for later substitutions until the user
+revisits and reconfirms them.
 
 **Latency.** Each dependent step is bounded by the per-command timeout
 (default 2000ms). Suggestion lists are cached per upstream snapshot, so
@@ -338,8 +352,10 @@ commands compound.
 **Security caveat for `:raw`.** Because `<#name:raw>` does not quote, a value
 containing shell metacharacters can change the semantics of the suggestion
 command — including arbitrary command execution if the upstream value comes
-from untrusted input. Restrict `:raw` consumption to variables whose upstream
-values come from a trusted source (suggestion lists you control), not
+from untrusted input. In defaults, `:raw` lands in the editable input buffer;
+if the user accepts it, the raw text reaches the shell. Restrict `:raw`
+consumption to variables whose upstream values come from a trusted or
+constrained source (defaults, suggestion lists, or commands you control), not
 free-form user input.
 
 **Failure UX.** If a dependent suggestion command exits non-zero, the error
@@ -351,14 +367,23 @@ cached — revisiting the variable retries them.
 
 - `lint/dependent-suggestion-skipped` — `pb lint` does not execute a command
   with `<#...>` references because there is no user input at lint time.
-  Suppress with `[lint.dependent-suggestion-skipped] ignore_command = "..."`.
+  Defaults are not commands and do not emit this lint. Suppress with
+  `[lint.dependent-suggestion-skipped] ignore_command = "..."`.
 - `lint/unknown-variable-reference` — `<#name>` points at a name that is not
   declared in the snippet, frontmatter, or config.
 - `lint/forward-variable-reference` — `<#name>` points at a variable that
   comes later in prompt order.
-- `lint/self-variable-reference` — a variable's command references itself.
+- `lint/self-variable-reference` — a variable's command or default references
+  itself.
 - `lint/invalid-dependent-reference` — the `<#...>` token cannot be parsed
   (unterminated, empty name, unknown modifier).
+- `lint/raw-default-untrusted-upstream` — a default uses `<#name:raw>` to
+  splice a free-form upstream value. Constrain the upstream, use `<#name>` for
+  shell quoting, or suppress the lint if the raw default is intentional.
+
+Existing command-based workarounds such as `<@name:echo <#a:raw>>` still work,
+but `<@name:?<#a:raw>>` is preferred for defaults: it avoids spawning a
+sub-shell and reads as a pre-fill rather than a suggestion command.
 
 ### Multi-line Values
 

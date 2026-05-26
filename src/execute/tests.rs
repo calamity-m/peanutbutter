@@ -1,4 +1,5 @@
 use super::app::Screen;
+use super::prompt::{PromptState, load_prompt_state};
 use super::*;
 use crate::domain::{Frontmatter, Snippet, SnippetFile, Variable, VariableSource, VariableSpec};
 use crate::frecency::FrecencyStore;
@@ -81,6 +82,7 @@ impl SuggestionProvider for TestProvider {
         &self,
         _variable: &Variable,
         _local_variables: &BTreeMap<String, VariableSpec>,
+        _confirmed: &BTreeMap<String, String>,
     ) -> Option<String> {
         None
     }
@@ -1035,7 +1037,9 @@ fn selected_snippet_is_none_for_empty_tag_drill() {
 fn variable_flow_accepts_default_and_emits_rendered_command() {
     let variables = vec![Variable {
         name: "target".to_string(),
-        source: VariableSource::Default("world".to_string()),
+        source: VariableSource::Default(vec![crate::command_template::Fragment::Literal(
+            "world".to_string(),
+        )]),
     }];
     let mut app = app_with_body(
         "echo hello <@target:?world>",
@@ -1230,7 +1234,9 @@ fn file_local_suggestions_without_default_leave_input_empty() {
 fn inline_default_overrides_config_default() {
     let variables = vec![Variable {
         name: "namespace".to_string(),
-        source: VariableSource::Default("inline-default".to_string()),
+        source: VariableSource::Default(vec![crate::command_template::Fragment::Literal(
+            "inline-default".to_string(),
+        )]),
     }];
     let mut configured = BTreeMap::new();
     configured.insert(
@@ -1267,7 +1273,9 @@ fn inline_default_overrides_config_default() {
 fn inline_default_overrides_file_local_default() {
     let variables = vec![Variable {
         name: "namespace".to_string(),
-        source: VariableSource::Default("inline-default".to_string()),
+        source: VariableSource::Default(vec![crate::command_template::Fragment::Literal(
+            "inline-default".to_string(),
+        )]),
     }];
     let mut frontmatter = Frontmatter::default();
     frontmatter.variables.insert(
@@ -1721,7 +1729,9 @@ fn paste_on_select_screen_is_dropped() {
 fn inline_default_with_embedded_newline_is_preserved() {
     let variables = vec![Variable {
         name: "block".to_string(),
-        source: VariableSource::Default("line1\nline2".to_string()),
+        source: VariableSource::Default(vec![crate::command_template::Fragment::Literal(
+            "line1\nline2".to_string(),
+        )]),
     }];
     let mut app = app_with_body(
         "cat <<EOF\n<@block:?ignored>\nEOF",
@@ -1867,7 +1877,9 @@ fn independent_variables_still_each_get_fresh_suggestions() {
 fn default_input_still_used_on_first_entry_to_default_variable() {
     let variables = vec![Variable {
         name: "kind".to_string(),
-        source: VariableSource::Default("pod".to_string()),
+        source: VariableSource::Default(vec![crate::command_template::Fragment::Literal(
+            "pod".to_string(),
+        )]),
     }];
     let mut app = app_with_body("kubectl get <@kind>", variables, TestProvider::default());
     let _ = app.handle_key(press(KeyCode::Enter));
@@ -1875,6 +1887,149 @@ fn default_input_still_used_on_first_entry_to_default_variable() {
         panic!("expected prompt");
     };
     assert_eq!(prompt.input, "pod");
+}
+
+#[test]
+fn dependent_default_renders_confirmed_upstreams_on_first_entry() {
+    let variables = vec![
+        Variable {
+            name: "namespace".to_string(),
+            source: VariableSource::Free,
+        },
+        Variable {
+            name: "secret".to_string(),
+            source: VariableSource::Free,
+        },
+        Variable {
+            name: "key".to_string(),
+            source: VariableSource::Free,
+        },
+        Variable {
+            name: "out".to_string(),
+            source: VariableSource::Default(
+                crate::command_template::parse_command_template(
+                    "<#namespace:raw>.<#secret:raw>.<#key:raw>.out",
+                )
+                .unwrap(),
+            ),
+        },
+    ];
+    let mut app = app_with_body(
+        "<@namespace> <@secret> <@key> <@out>",
+        variables,
+        TestProvider::default(),
+    );
+    let _ = app.handle_key(press(KeyCode::Enter));
+    for value in ["ns", "sec", "key"] {
+        for c in value.chars() {
+            let _ = app.handle_key(press(KeyCode::Char(c)));
+        }
+        let _ = app.handle_key(press(KeyCode::Tab));
+    }
+    let Screen::Prompt(prompt) = &app.screen else {
+        panic!("expected prompt");
+    };
+    assert_eq!(prompt.current_variable().name, "out");
+    assert_eq!(prompt.input, "ns.sec.key.out");
+}
+
+#[test]
+fn dependent_default_missing_upstream_yields_empty_input() {
+    let variables = vec![
+        Variable {
+            name: "a".to_string(),
+            source: VariableSource::Free,
+        },
+        Variable {
+            name: "b".to_string(),
+            source: VariableSource::Default(
+                crate::command_template::parse_command_template("<#a:raw>.out").unwrap(),
+            ),
+        },
+    ];
+    let mut prompt = PromptState::new(
+        crate::domain::SnippetId::new("test.md", "missing-default"),
+        variables,
+        BTreeMap::new(),
+    );
+    prompt.index = 1;
+    load_prompt_state(&mut prompt, &TestProvider::default(), Path::new("."));
+    assert_eq!(prompt.input, "");
+    assert!(!prompt.values.contains_key("b"));
+
+    prompt.values.insert("a".to_string(), "up".to_string());
+    prompt.index = 1;
+    load_prompt_state(&mut prompt, &TestProvider::default(), Path::new("."));
+    assert_eq!(prompt.input, "up.out");
+}
+
+#[test]
+fn dependent_default_quoted_form_matches_command_quoting() {
+    let variables = vec![
+        Variable {
+            name: "name".to_string(),
+            source: VariableSource::Free,
+        },
+        Variable {
+            name: "out".to_string(),
+            source: VariableSource::Default(
+                crate::command_template::parse_command_template("<#name>").unwrap(),
+            ),
+        },
+    ];
+    let mut prompt = PromptState::new(
+        crate::domain::SnippetId::new("test.md", "quoted-default"),
+        variables,
+        BTreeMap::new(),
+    );
+    prompt
+        .values
+        .insert("name".to_string(), "O'Brien's".to_string());
+    prompt.index = 1;
+    load_prompt_state(&mut prompt, &TestProvider::default(), Path::new("."));
+    assert_eq!(prompt.input, "'O'\\''Brien'\\''s'");
+}
+
+#[test]
+fn changing_upstream_dirties_dependent_default_and_preserves_input() {
+    let variables = vec![
+        Variable {
+            name: "a".to_string(),
+            source: VariableSource::Free,
+        },
+        Variable {
+            name: "out".to_string(),
+            source: VariableSource::Default(
+                crate::command_template::parse_command_template("<#a:raw>.out").unwrap(),
+            ),
+        },
+    ];
+    let mut app = app_with_body("<@a> <@out>", variables, TestProvider::default());
+
+    let _ = app.handle_key(press(KeyCode::Enter));
+    for c in "A".chars() {
+        let _ = app.handle_key(press(KeyCode::Char(c)));
+    }
+    let _ = app.handle_key(press(KeyCode::Tab));
+    {
+        let Screen::Prompt(prompt) = &app.screen else {
+            panic!("expected prompt");
+        };
+        assert_eq!(prompt.input, "A.out");
+    }
+    let _ = app.handle_key(press(KeyCode::BackTab));
+    let _ = app.handle_key(press(KeyCode::Backspace));
+    for c in "B".chars() {
+        let _ = app.handle_key(press(KeyCode::Char(c)));
+    }
+    let _ = app.handle_key(press(KeyCode::Tab));
+
+    let Screen::Prompt(prompt) = &app.screen else {
+        panic!("expected prompt");
+    };
+    assert_eq!(prompt.current_variable().name, "out");
+    assert!(prompt.dirty.contains("out"));
+    assert_eq!(prompt.input, "A.out");
 }
 
 // ---------------------------------------------------------------------------

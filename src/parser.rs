@@ -604,7 +604,13 @@ fn parse_variable_inner(inner: &str) -> Option<Variable> {
     let (name, source) = match inner.split_once(':') {
         Some((name, rest)) => {
             let source = if let Some(default) = rest.strip_prefix('?') {
-                VariableSource::Default(default.to_string())
+                let template = crate::command_template::parse_command_template(default)
+                    .unwrap_or_else(|_| {
+                        vec![crate::command_template::Fragment::Literal(
+                            default.to_string(),
+                        )]
+                    });
+                VariableSource::Default(template)
             } else {
                 VariableSource::Command(rest.to_string())
             };
@@ -742,12 +748,59 @@ variables:
         assert_eq!(vars[0].name, "file");
         assert_eq!(vars[0].source, VariableSource::Free);
         assert_eq!(vars[1].name, "pattern");
-        assert_eq!(vars[1].source, VariableSource::Default("hi".to_string()));
+        assert_eq!(
+            vars[1].source,
+            VariableSource::Default(vec![crate::command_template::Fragment::Literal(
+                "hi".to_string()
+            )])
+        );
         assert_eq!(vars[2].name, "cmd");
         assert_eq!(
             vars[2].source,
             VariableSource::Command("rg . --files".to_string())
         );
+    }
+
+    #[test]
+    fn parses_dependent_default_template() {
+        let vars = parse_variables("tee <@out:?<#a:raw>.<#b:raw>.out>");
+        assert_eq!(vars.len(), 1);
+        assert_eq!(vars[0].name, "out");
+        assert_eq!(
+            vars[0].source,
+            VariableSource::Default(vec![
+                crate::command_template::Fragment::Ref {
+                    name: "a".to_string(),
+                    raw: true,
+                },
+                crate::command_template::Fragment::Literal(".".to_string()),
+                crate::command_template::Fragment::Ref {
+                    name: "b".to_string(),
+                    raw: true,
+                },
+                crate::command_template::Fragment::Literal(".out".to_string()),
+            ])
+        );
+    }
+
+    #[test]
+    fn parses_plain_default_as_literal_template() {
+        let vars = parse_variables("echo <@p:?plain>");
+        assert_eq!(
+            vars[0].source,
+            VariableSource::Default(vec![crate::command_template::Fragment::Literal(
+                "plain".to_string()
+            )])
+        );
+    }
+
+    #[test]
+    fn placeholder_end_skips_nested_dependent_refs_in_defaults() {
+        let body = "tee <@out:?<#a:raw>.<#b:raw>.out> done";
+        let start = body.find("<@out:").unwrap() + 2;
+        let end = find_placeholder_end(body, start).unwrap();
+        assert_eq!(&body[end..=end], ">");
+        assert_eq!(&body[start..end], "out:?<#a:raw>.<#b:raw>.out");
     }
 
     #[test]

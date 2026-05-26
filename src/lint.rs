@@ -45,8 +45,10 @@ pub const CODE_UNKNOWN_VARIABLE_REFERENCE: &str = "lint/unknown-variable-referen
 pub const CODE_FORWARD_VARIABLE_REFERENCE: &str = "lint/forward-variable-reference";
 /// `<#name>` references the variable whose own command it sits inside.
 pub const CODE_SELF_VARIABLE_REFERENCE: &str = "lint/self-variable-reference";
-/// A suggestion command's `<#...>` syntax could not be parsed.
+/// A suggestion command or default's `<#...>` syntax could not be parsed.
 pub const CODE_INVALID_DEPENDENT_REFERENCE: &str = "lint/invalid-dependent-reference";
+/// Raw default splice references an upstream free-form value.
+pub const CODE_RAW_DEFAULT_UNTRUSTED_UPSTREAM: &str = "lint/raw-default-untrusted-upstream";
 /// The same variable name and command appear inline in multiple snippets in the same file.
 pub const CODE_DUPLICATE_INLINE_COMMAND: &str = "lint/duplicate-inline-command";
 
@@ -632,7 +634,7 @@ fn lint_dependent_references(
     file: &FileContext,
     globals: &BTreeMap<String, VariableInputConfig>,
 ) -> Vec<LintFinding> {
-    use crate::command_template::{parse_command_template, referenced_names};
+    use crate::command_template::{Fragment, parse_command_template};
     let mut out = Vec::new();
 
     // Pre-scan the file content for all <#name> spans so we can attach
@@ -670,14 +672,41 @@ fn lint_dependent_references(
         declared.insert("file".to_string());
         declared.insert("directory".to_string());
 
+        let mut templates = Vec::new();
         for (owner, command) in
             command_sources(snippet, &file.parsed.frontmatter.variables, globals)
         {
-            let Ok(template) = parse_command_template(&command) else {
-                continue;
-            };
-            let refs = referenced_names(&template);
-            for ref_name in &refs {
+            if let Ok(template) = parse_command_template(&command) {
+                templates.push((owner, command, template, false));
+            }
+        }
+        for (owner, default) in default_sources(snippet) {
+            match parse_command_template(&default) {
+                Ok(template) => templates.push((owner, default, template, true)),
+                Err(err) => out.push(
+                    finding(
+                        LintSeverity::Error,
+                        CODE_INVALID_DEPENDENT_REFERENCE,
+                        file.path.clone(),
+                        None,
+                        Some(snippet.id.clone()),
+                        format!("default for variable '{owner}' has an invalid <# reference"),
+                        Some(err.to_string()),
+                    )
+                    .with_suppress_command(default),
+                ),
+            }
+        }
+
+        for (owner, source, template, is_default) in templates {
+            for fragment in &template {
+                let Fragment::Ref {
+                    name: ref_name,
+                    raw,
+                } = fragment
+                else {
+                    continue;
+                };
                 let span = take_span(ref_name);
                 if ref_name == &owner {
                     let mut f = finding(
@@ -689,7 +718,7 @@ fn lint_dependent_references(
                         format!("variable '{owner}' references itself via <#{ref_name}>"),
                         None,
                     )
-                    .with_suppress_command(command.clone());
+                    .with_suppress_command(source.clone());
                     if let Some((l, c0, c1)) = span {
                         f = f.with_span(l, c0, c1);
                     }
@@ -706,7 +735,7 @@ fn lint_dependent_references(
                         format!("variable '{owner}' references unknown <#{ref_name}>"),
                         Some("declare it with an inline placeholder, frontmatter variable, or config override".to_string()),
                     )
-                    .with_suppress_command(command.clone());
+                    .with_suppress_command(source.clone());
                     if let Some((l, c0, c1)) = span {
                         f = f.with_span(l, c0, c1);
                     }
@@ -728,7 +757,34 @@ fn lint_dependent_references(
                         ),
                         None,
                     )
-                    .with_suppress_command(command.clone());
+                    .with_suppress_command(source.clone());
+                    if let Some((l, c0, c1)) = span {
+                        f = f.with_span(l, c0, c1);
+                    }
+                    out.push(f);
+                    continue;
+                }
+                if is_default
+                    && *raw
+                    && is_free_form_upstream(
+                        ref_name,
+                        snippet,
+                        &file.parsed.frontmatter.variables,
+                        globals,
+                    )
+                {
+                    let mut f = finding(
+                        LintSeverity::Warning,
+                        CODE_RAW_DEFAULT_UNTRUSTED_UPSTREAM,
+                        file.path.clone(),
+                        None,
+                        Some(snippet.id.clone()),
+                        format!(
+                            "default for variable '{owner}' raw-splices free-form upstream <#{ref_name}:raw>"
+                        ),
+                        Some("use <#name> for shell quoting, constrain the upstream with a default/suggestions/command, or suppress this lint if the raw splice is intentional".to_string()),
+                    )
+                    .with_suppress_command(source.clone());
                     if let Some((l, c0, c1)) = span {
                         f = f.with_span(l, c0, c1);
                     }
@@ -738,6 +794,66 @@ fn lint_dependent_references(
         }
     }
     out
+}
+
+fn default_sources(snippet: &crate::domain::Snippet) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    let mut seen = HashSet::new();
+    let body = snippet.body.as_str();
+    let bytes = body.as_bytes();
+    let mut i = 0;
+    while i + 1 < bytes.len() {
+        if bytes[i] == b'<' && bytes[i + 1] == b'@' {
+            let inner_start = i + 2;
+            if let Some(inner_end) = parser::find_placeholder_end(body, inner_start) {
+                let inner = &body[inner_start..inner_end];
+                if let Some((name, rest)) = inner.split_once(':')
+                    && let Some(default) = rest.strip_prefix('?')
+                {
+                    let name = name.trim();
+                    if seen.insert(name.to_string()) {
+                        out.push((name.to_string(), default.to_string()));
+                    }
+                }
+                i = inner_end + 1;
+                continue;
+            }
+        }
+        i += 1;
+    }
+    out
+}
+
+fn is_free_form_upstream(
+    name: &str,
+    snippet: &crate::domain::Snippet,
+    locals: &BTreeMap<String, VariableSpec>,
+    globals: &BTreeMap<String, VariableInputConfig>,
+) -> bool {
+    if matches!(name, "file" | "directory") {
+        return false;
+    }
+    let Some(variable) = snippet
+        .variables
+        .iter()
+        .find(|variable| variable.name == name)
+    else {
+        return false;
+    };
+    if !matches!(variable.source, VariableSource::Free) {
+        return false;
+    }
+    let constrained_locally = locals.get(name).is_some_and(variable_spec_constrains);
+    let constrained_globally = globals.get(name).is_some_and(variable_input_constrains);
+    !(constrained_locally || constrained_globally)
+}
+
+fn variable_spec_constrains(spec: &VariableSpec) -> bool {
+    spec.default.is_some() || !spec.suggestions.is_empty() || spec.command.is_some()
+}
+
+fn variable_input_constrains(spec: &VariableInputConfig) -> bool {
+    spec.default.is_some() || !spec.suggestions.is_empty() || spec.command.is_some()
 }
 
 fn command_sources(
@@ -1712,6 +1828,108 @@ mod dependent_tests {
                 .iter()
                 .any(|f| f.code == CODE_DEPENDENT_SUGGESTION_SKIPPED),
             "suppression should hide finding, got: {:?}",
+            result.findings
+        );
+    }
+
+    #[test]
+    fn unknown_dependent_default_reference_is_flagged() {
+        let root = temp_dir("default-unknown");
+        fs::write(
+            root.join("snippets.md"),
+            "## Demo\n\n```bash\n<@b:?<#nope>>\n```\n",
+        )
+        .unwrap();
+        let result = lint(root);
+        assert!(
+            result
+                .findings
+                .iter()
+                .any(|f| f.code == CODE_UNKNOWN_VARIABLE_REFERENCE),
+            "got {:?}",
+            result.findings
+        );
+    }
+
+    #[test]
+    fn forward_and_self_dependent_default_references_are_flagged() {
+        let root = temp_dir("default-order");
+        fs::write(
+            root.join("snippets.md"),
+            "## Demo\n\n```bash\n<@a:?<#b>> <@b> <@c:?<#c>>\n```\n",
+        )
+        .unwrap();
+        let result = lint(root);
+        assert!(
+            result
+                .findings
+                .iter()
+                .any(|f| f.code == CODE_FORWARD_VARIABLE_REFERENCE),
+            "got {:?}",
+            result.findings
+        );
+        assert!(
+            result
+                .findings
+                .iter()
+                .any(|f| f.code == CODE_SELF_VARIABLE_REFERENCE),
+            "got {:?}",
+            result.findings
+        );
+    }
+
+    #[test]
+    fn escaped_default_reference_is_not_flagged_or_skipped() {
+        let root = temp_dir("default-escaped");
+        fs::write(
+            root.join("snippets.md"),
+            "## Demo\n\n```bash\n<@b:?\\<#nope>>\n```\n",
+        )
+        .unwrap();
+        let result = lint(root);
+        assert!(
+            !result
+                .findings
+                .iter()
+                .any(|f| f.code == CODE_UNKNOWN_VARIABLE_REFERENCE
+                    || f.code == CODE_DEPENDENT_SUGGESTION_SKIPPED),
+            "got {:?}",
+            result.findings
+        );
+    }
+
+    #[test]
+    fn raw_default_untrusted_upstream_warns_only_for_free_form_raw() {
+        let root = temp_dir("raw-default");
+        fs::write(
+            root.join("snippets.md"),
+            "## Demo\n\n```bash\n<@a> <@b:?<#a:raw>> <@c:?host> <@d:?<#c:raw>> <@e:?<#a>>\n```\n",
+        )
+        .unwrap();
+        let result = lint(root);
+        let warnings: Vec<_> = result
+            .findings
+            .iter()
+            .filter(|f| f.code == CODE_RAW_DEFAULT_UNTRUSTED_UPSTREAM)
+            .collect();
+        assert_eq!(warnings.len(), 1, "got {:?}", result.findings);
+    }
+
+    #[test]
+    fn dependent_default_does_not_emit_suggestion_skipped() {
+        let root = temp_dir("default-not-skip");
+        fs::write(
+            root.join("snippets.md"),
+            "## Demo\n\n```bash\n<@a:?x> <@b:?<#a>>\n```\n",
+        )
+        .unwrap();
+        let result = lint(root);
+        assert!(
+            !result
+                .findings
+                .iter()
+                .any(|f| f.code == CODE_DEPENDENT_SUGGESTION_SKIPPED),
+            "got {:?}",
             result.findings
         );
     }
