@@ -59,7 +59,7 @@ In an attempt to help address the above understandings, peanutbutter has three s
 2. File-based - essentially a dumb file tree, which is counterintuitively, at least to me, sometimes more efficient for finding particular commands to run
 3. Tag mode - tags are fun, we tag everything - why the fuck does nobody seem to make it possible to list and search by tags in a tree-like view?
 
-In all modes, the basic concept of being able to backout is maintained - cycle with `Ctrl+T` safely, enter into snippets, half-fill them and press escape to go back to the viewer.
+In all modes, the basic concept of being able to backout is maintained - cycle with `Ctrl+T` safely, enter into snippets, half-fill them and press escape to go back to the viewer. You won't get stuck and can always go back.
 
 ## Curating, Editing and Maintaining Snippets
 
@@ -93,8 +93,6 @@ but enough that I've thought about it for years.
 
 Code probably shit - but the code would be shit if I wrote every single line myself too. Use it like I do, or burn it at the stake. You have free-will right? ;)
 
-I use the tool regularly anyway.
-
 ## Snippet Specification
 
 For a stricter syntax reference, see [docs/SNIPPET_SYNTAX.md](docs/SNIPPET_SYNTAX.md).
@@ -105,7 +103,7 @@ A `##` heading, followed below by some ` ` code wrapping block. If multiple code
 are present, only the first non-`text` fenced block will be considered the snippet. Otherwise, anything between the code wrapping block
 and the heading is considered description/preview data.
 
-Important: bare `text` fences are reserved for picker-visible examples in the description. They are rendered in the preview and deliberately ignored as executable snippet bodies. If a section only contains `text` fences, peanutbutter does not create a snippet from it. Existing executable snippets that used ````text` should be migrated to an untagged fence or another language tag.
+Important: bare `text` fences are reserved for picker-visible examples in the description. They are rendered in the preview and deliberately ignored as executable snippet bodies. If a section only contains `text` fences, peanutbutter does not create a snippet from it.
 
 ````markdown
 ## Preview an example before running
