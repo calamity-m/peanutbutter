@@ -371,6 +371,9 @@ pub struct ExecutionApp<P = SystemSuggestionProvider> {
     pub(crate) tags_list: ListState,
     pub(crate) search_config: SearchConfig,
     pub(crate) theme: Theme,
+    /// Shell buffer content to seed into the first variable of the next
+    /// selected snippet, if any. `None` when invoked without a buffer.
+    pub(crate) initial_buffer: Option<String>,
 }
 
 /// Outcome returned by [`ExecutionApp::handle_key`] after processing one key event.
@@ -416,7 +419,15 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
             tags_list: ListState::default(),
             search_config,
             theme,
+            initial_buffer: None,
         }
+    }
+
+    /// Seed the shell buffer to be fed into the first variable of the next
+    /// selected snippet. Empty/`None` leaves the default (insert) behavior.
+    pub fn with_initial_buffer(mut self, buffer: Option<String>) -> Self {
+        self.initial_buffer = buffer.filter(|s| !s.is_empty());
+        self
     }
 
     pub fn navigation_mode(&self) -> NavigationMode {
@@ -806,14 +817,24 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
         };
         let variables = unique_variables(&snippet.snippet.variables);
         if variables.is_empty() {
+            // No variable to absorb the buffer, so it is not consumed; the shell
+            // keeps its insert-at-cursor behavior.
             return AppEvent::Completed(ExecutionOutcome {
                 snippet_id,
                 command: snippet.body().to_string(),
+                consumed_buffer: false,
             });
         }
         let mut prompt =
             PromptState::new(snippet_id, variables, snippet.frontmatter.variables.clone());
         load_prompt_state(&mut prompt, &self.provider, &self.cwd);
+        // Feed the shell buffer into the first variable's editable input,
+        // overriding any default. Marks the eventual outcome as consuming the
+        // buffer so the shell replaces the whole line instead of inserting.
+        if let Some(buffer) = self.initial_buffer.clone() {
+            prompt.input = buffer;
+            prompt.seeded_from_buffer = true;
+        }
         self.status = prompt.error.clone();
         self.screen = Screen::Prompt(Box::new(prompt));
         AppEvent::Continue

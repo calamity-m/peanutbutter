@@ -1065,6 +1065,38 @@ fn variable_flow_accepts_default_suggestion() {
 }
 
 #[test]
+fn initial_buffer_seeds_first_variable_and_marks_consumed() {
+    let variables = vec![Variable {
+        name: "command".to_string(),
+        source: VariableSource::Free,
+    }];
+    let mut app = app_with_body(
+        "<@command> | xclip -selection clipboard",
+        variables,
+        TestProvider::default(),
+    )
+    .with_initial_buffer(Some("echo \"hello world\"".to_string()));
+    // First Enter selects the snippet (seeds the buffer into the first
+    // variable's input); second Enter confirms and completes.
+    let _ = app.handle_key(press(KeyCode::Enter));
+    let outcome = completed(app.handle_key(press(KeyCode::Enter)));
+    assert_eq!(
+        outcome.command,
+        "echo \"hello world\" | xclip -selection clipboard"
+    );
+    assert!(outcome.consumed_buffer);
+}
+
+#[test]
+fn no_variable_snippet_does_not_consume_buffer() {
+    let mut app = app_with_body("ls -la", vec![], TestProvider::default())
+        .with_initial_buffer(Some("echo hi".to_string()));
+    let outcome = completed(app.handle_key(press(KeyCode::Enter)));
+    assert_eq!(outcome.command, "ls -la");
+    assert!(!outcome.consumed_buffer);
+}
+
+#[test]
 fn variable_flow_uses_config_defined_inputs() {
     let variables = vec![Variable {
         name: "http_method".to_string(),

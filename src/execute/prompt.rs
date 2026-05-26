@@ -49,6 +49,9 @@ pub(crate) struct PromptState {
     /// Suggestion cache for dependent commands keyed on the upstream snapshot
     /// they were computed from. Non-dependent commands bypass this cache.
     pub(crate) suggestion_cache: HashMap<String, CachedSuggestions>,
+    /// `true` when the first variable was pre-filled from the shell buffer, so
+    /// the completed outcome should signal the shell to replace the whole line.
+    pub(crate) seeded_from_buffer: bool,
 }
 
 /// Cached suggestion list for one dependent variable, alongside the upstream
@@ -83,6 +86,7 @@ impl PromptState {
             selection: None,
             dirty: BTreeSet::new(),
             suggestion_cache: HashMap::new(),
+            seeded_from_buffer: false,
         }
     }
 
@@ -252,6 +256,7 @@ pub(crate) fn handle_prompt_key<P: SuggestionProvider>(
                 PromptTransition::Completed(ExecutionOutcome {
                     snippet_id: prompt.snippet_id.clone(),
                     command: render_command(snippet.body(), &prompt.values),
+                    consumed_buffer: prompt.seeded_from_buffer,
                 })
             } else {
                 PromptTransition::Stay

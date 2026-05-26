@@ -79,7 +79,8 @@ pub fn run_execute_with_provider<P: SuggestionProvider>(
         options.search,
         options.theme,
         provider,
-    );
+    )
+    .with_initial_buffer(options.initial_buffer);
     let _stdout_guard = StdoutTtyGuard::enter()?;
     let tui_output = TuiOutputKind::detect();
     let mut raw_mode = RawModeGuard::enter(tui_output)?;

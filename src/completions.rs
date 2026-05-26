@@ -5,7 +5,7 @@
 //! key binding that runs the peanutbutter TUI and injects the selected command
 //! into the shell's readline buffer, plus tab-completion for `peanutbutter edit`.
 
-use crate::{BASH_ALIAS_NAME, BINARY_NAME};
+use crate::{BASH_ALIAS_NAME, BINARY_NAME, REPLACE_BUFFER_EXIT_CODE};
 use std::env;
 use std::io;
 use std::path::Path;
@@ -25,6 +25,7 @@ pub fn bash_integration_script(binding: &str, executable: &Path) -> io::Result<S
     let binding = readline_binding(binding)
         .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err))?;
     let executable = shell_quote(&executable.to_string_lossy());
+    let replace_code = REPLACE_BUFFER_EXIT_CODE;
     Ok(format!(
         r#"\builtin unalias {BASH_ALIAS_NAME} &>/dev/null || \builtin true
 __pb_dispatch() {{
@@ -40,8 +41,13 @@ __pb_dispatch() {{
 {BINARY_NAME}() {{ __pb_dispatch "$@"; }}
 __pb_insert_command() {{
   local __pb_cmd
-  __pb_cmd=$({executable} execute)
+  __pb_cmd=$(PEANUTBUTTER_BUFFER="$READLINE_LINE" {executable} execute)
   local __pb_status=$?
+  if [[ $__pb_status -eq {replace_code} ]]; then
+    READLINE_LINE="$__pb_cmd"
+    READLINE_POINT=${{#__pb_cmd}}
+    return 0
+  fi
   if [[ $__pb_status -ne 0 ]]; then
     return $__pb_status
   fi
@@ -92,6 +98,7 @@ pub fn zsh_integration_script(binding: &str, executable: &Path) -> io::Result<St
     let binding = zsh_bindkey_binding(binding)
         .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err))?;
     let executable = shell_quote(&executable.to_string_lossy());
+    let replace_code = REPLACE_BUFFER_EXIT_CODE;
     Ok(format!(
         r#"\builtin unalias {BASH_ALIAS_NAME} 2>/dev/null; \builtin true
 __pb_dispatch() {{
@@ -107,8 +114,14 @@ __pb_dispatch() {{
 {BINARY_NAME}() {{ __pb_dispatch "$@"; }}
 __pb_insert_command() {{
   local __pb_cmd
-  __pb_cmd=$({executable} execute)
+  __pb_cmd=$(PEANUTBUTTER_BUFFER="$BUFFER" {executable} execute)
   local __pb_status=$?
+  if (( __pb_status == {replace_code} )); then
+    BUFFER="$__pb_cmd"
+    CURSOR=${{#__pb_cmd}}
+    zle reset-prompt
+    return 0
+  fi
   if (( __pb_status != 0 )); then
     zle reset-prompt
     return $__pb_status
@@ -155,12 +168,17 @@ pub fn fish_integration_script(binding: &str, executable: &Path) -> io::Result<S
     let binding =
         fish_bind_key(binding).map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err))?;
     let executable = shell_quote(&executable.to_string_lossy());
+    let replace_code = REPLACE_BUFFER_EXIT_CODE;
     // The complete-edit helper is extracted into a named function so the
     // single-quoted executable path doesn't conflict with fish's -a '...' quoting.
     Ok(format!(
         r#"function __pb_insert_command
+  set -lx PEANUTBUTTER_BUFFER (commandline)
   set -l __pb_cmd ({executable} execute)
-  if test -n "$__pb_cmd"
+  set -l __pb_status $status
+  if test $__pb_status -eq {replace_code}
+    commandline -r -- $__pb_cmd
+  else if test $__pb_status -eq 0 -a -n "$__pb_cmd"
     commandline -i -- $__pb_cmd
   end
   commandline -f repaint
@@ -304,6 +322,17 @@ mod tests {
         assert!(script.contains("'/tmp/peanutbutter' execute"));
         assert!(script.contains("READLINE_LINE=\"${READLINE_LINE}\""));
         assert!(script.contains("READLINE_POINT=${READLINE_POINT}"));
+        // Buffer is passed as a one-shot command-prefix assignment (no bare
+        // export that would leak into the interactive shell), and the replace
+        // exit code drives a whole-line replacement.
+        assert!(
+            script.contains("PEANUTBUTTER_BUFFER=\"$READLINE_LINE\" '/tmp/peanutbutter' execute")
+        );
+        assert!(!script.contains("export PEANUTBUTTER_BUFFER"));
+        assert!(script.contains(&format!(
+            "if [[ $__pb_status -eq {REPLACE_BUFFER_EXIT_CODE} ]]"
+        )));
+        assert!(script.contains("READLINE_LINE=\"$__pb_cmd\""));
     }
 
     #[test]
@@ -341,6 +370,12 @@ mod tests {
         assert!(script.contains("'/tmp/peanutbutter' execute"));
         assert!(script.contains("BUFFER="));
         assert!(script.contains("CURSOR="));
+        assert!(script.contains("PEANUTBUTTER_BUFFER=\"$BUFFER\" '/tmp/peanutbutter' execute"));
+        assert!(!script.contains("export PEANUTBUTTER_BUFFER"));
+        assert!(script.contains(&format!(
+            "if (( __pb_status == {REPLACE_BUFFER_EXIT_CODE} ))"
+        )));
+        assert!(script.contains("BUFFER=\"$__pb_cmd\""));
     }
 
     #[test]
@@ -372,6 +407,11 @@ mod tests {
         assert!(script.contains("commandline -i -- $__pb_cmd"));
         assert!(script.contains("commandline -f repaint"));
         assert!(script.contains("'/tmp/peanutbutter' execute"));
+        // Function-local export (`set -lx`) so the var does not persist after
+        // the binding returns; replace path uses `commandline -r`.
+        assert!(script.contains("set -lx PEANUTBUTTER_BUFFER (commandline)"));
+        assert!(script.contains(&format!("test $__pb_status -eq {REPLACE_BUFFER_EXIT_CODE}")));
+        assert!(script.contains("commandline -r -- $__pb_cmd"));
     }
 
     #[test]

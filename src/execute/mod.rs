@@ -37,6 +37,9 @@ pub struct ExecutionOutcome {
     pub snippet_id: SnippetId,
     /// The command body after substituting all variable values.
     pub command: String,
+    /// `true` if the shell buffer was fed into the snippet's first variable, so
+    /// the shell integration should replace the whole line instead of inserting.
+    pub consumed_buffer: bool,
 }
 
 /// Configuration passed into the execute TUI session.
@@ -61,6 +64,9 @@ pub struct ExecuteOptions {
     pub snippet_roots: Vec<PathBuf>,
     /// Controls how suggestion commands are executed (timeout, allow/deny).
     pub suggestion_commands: config::SuggestionCommandsConfig,
+    /// Current shell buffer content (from `PEANUTBUTTER_BUFFER`), used to
+    /// pre-fill the selected snippet's first variable. `None` when empty.
+    pub initial_buffer: Option<String>,
 }
 
 impl Default for ExecuteOptions {
@@ -74,6 +80,7 @@ impl Default for ExecuteOptions {
             variables: std::collections::BTreeMap::new(),
             snippet_roots: Vec::new(),
             suggestion_commands: config::SuggestionCommandsConfig::default(),
+            initial_buffer: None,
         }
     }
 }

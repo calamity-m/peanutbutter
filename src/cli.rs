@@ -126,6 +126,9 @@ pub struct ExecuteCommandResult {
     pub emitted: bool,
     /// Non-fatal warning shown when the frecency state could not be saved.
     pub persist_warning: Option<String>,
+    /// `true` if the emitted command consumed the shell buffer into its first
+    /// variable; the caller should signal the shell to replace the whole line.
+    pub replace_buffer: bool,
 }
 
 /// Produce dynamic help content for resolved snippet roots and config/state
@@ -281,6 +284,9 @@ where
         variables: app_config.variables.clone(),
         snippet_roots: paths.snippet_roots.clone(),
         suggestion_commands: app_config.suggestion_commands.clone(),
+        initial_buffer: env::var("PEANUTBUTTER_BUFFER")
+            .ok()
+            .filter(|s| !s.is_empty()),
         ..ExecuteOptions::default()
     };
     let outcome = runner(index, store.clone(), options)?;
@@ -288,8 +294,10 @@ where
         return Ok(ExecuteCommandResult {
             emitted: false,
             persist_warning: None,
+            replace_buffer: false,
         });
     };
+    let replace_buffer = outcome.consumed_buffer;
 
     writer.write_all(outcome.command.as_bytes())?;
     writer.write_all(b"\n")?;
@@ -303,6 +311,7 @@ where
     Ok(ExecuteCommandResult {
         emitted: true,
         persist_warning,
+        replace_buffer,
     })
 }
 
@@ -1440,16 +1449,39 @@ mod tests {
                 Ok(Some(ExecutionOutcome {
                     snippet_id: SnippetId::new("snippets.md", "echo"),
                     command: "echo hi".to_string(),
+                    consumed_buffer: false,
                 }))
             })
             .unwrap();
 
         assert!(result.emitted);
+        assert!(!result.replace_buffer);
         assert!(result.persist_warning.is_none());
         assert_eq!(String::from_utf8(out).unwrap(), "echo hi\n");
         let saved = FrecencyStore::load(&paths.state_file).unwrap();
         assert_eq!(saved.events().len(), 1);
         assert_eq!(saved.events()[0].id.as_str(), "snippets.md#echo");
+    }
+
+    #[test]
+    fn run_execute_command_signals_replace_when_buffer_consumed() {
+        let root = temp_dir("execute-replace");
+        fs::write(root.join("snippets.md"), "## Echo\n\n```\necho hi\n```\n").unwrap();
+        let paths = test_paths(&root);
+
+        let mut out = Vec::new();
+        let result =
+            run_execute_command_with(&paths, &mut out, None, |_index, _store, _options| {
+                Ok(Some(ExecutionOutcome {
+                    snippet_id: SnippetId::new("snippets.md", "echo"),
+                    command: "echo hi | xclip".to_string(),
+                    consumed_buffer: true,
+                }))
+            })
+            .unwrap();
+
+        assert!(result.emitted);
+        assert!(result.replace_buffer);
     }
 
     #[test]
@@ -1596,6 +1628,7 @@ mod tests {
                 Ok(Some(ExecutionOutcome {
                     snippet_id: SnippetId::new("snippets.md", "echo"),
                     command: "echo hi".to_string(),
+                    consumed_buffer: false,
                 }))
             })
             .unwrap_err();

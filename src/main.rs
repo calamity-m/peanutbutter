@@ -87,6 +87,9 @@ fn main() {
                     if let Some(warning) = result.persist_warning {
                         eprintln!("{BINARY_NAME}: warning: could not save frecency: {warning}");
                     }
+                    if result.replace_buffer {
+                        std::process::exit(peanutbutter::REPLACE_BUFFER_EXIT_CODE);
+                    }
                     Ok(())
                 }
                 Err(err) => Err(err),

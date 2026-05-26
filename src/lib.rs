@@ -52,3 +52,8 @@ pub mod tui_chrome;
 pub const BINARY_NAME: &str = "peanutbutter";
 /// The shell alias installed by `peanutbutter bash`.
 pub const BASH_ALIAS_NAME: &str = "pb";
+
+/// Exit status emitted by `execute` when the selected snippet consumed the
+/// shell buffer into its first variable. The shell integration interprets this
+/// as "replace the whole line" rather than the default insert-at-cursor.
+pub const REPLACE_BUFFER_EXIT_CODE: i32 = 10;
