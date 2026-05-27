@@ -13,7 +13,7 @@ A friendly terminal snippet management tool.
 
 ### Find snippets three ways
 
-Fuzzy search highlights matches across names, tags, paths, and bodies; `Ctrl+T` switches to file and tag browsing.
+Fuzzy search highlights matches across names, tags, paths, and bodies; `Ctrl+t` switches to file and tag browsing.
 
 ![Peanutbutter demo: fuzzy search, file browsing, and tag browsing](assets/imgs/demo-modes.gif)
 
