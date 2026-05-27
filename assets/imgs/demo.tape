@@ -1,4 +1,4 @@
-Output assets/demo.gif
+Output assets/imgs/demo.gif
 
 Require ./target/debug/peanutbutter
 

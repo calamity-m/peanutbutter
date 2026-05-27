@@ -8,6 +8,35 @@ A friendly terminal snippet management tool.
 
 ![Peanutbutter demo: search for a snippet, fill a variable, and insert the command into the shell buffer](assets/imgs/demo.gif)
 
+<details>
+<summary>More demos</summary>
+
+### Find snippets three ways
+
+Fuzzy search highlights matches across names, tags, paths, and bodies; `Ctrl+T` switches to file and tag browsing.
+
+![Peanutbutter demo: fuzzy search, file browsing, and tag browsing](assets/imgs/demo-modes.gif)
+
+### Smarter prompts
+
+Prompts can use suggestions, dependent values, and editable defaults.
+
+![Peanutbutter demo: suggestions and dependent prompt defaults](assets/imgs/demo-prompts.gif)
+
+### Save a command as a snippet
+
+`pb new` opens a TUI over recent shell history, lets you choose placeholder tokens, and writes the snippet.
+
+![Peanutbutter demo: capture a recent command with pb new](assets/imgs/demo-new.gif)
+
+### Edit in flow
+
+`Ctrl+E` opens the selected snippet in `$VISUAL` or `$EDITOR`, then returns to the refreshed picker.
+
+![Peanutbutter demo: edit the selected snippet from the picker](assets/imgs/demo-edit.gif)
+
+</details>
+
 ## Quick-Start
 
 New here? Run `pb init` once to scaffold starter snippets at the default XDG location.
