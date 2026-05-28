@@ -1,6 +1,6 @@
 use crate::config;
 use crate::domain::SnippetId;
-use crate::editor;
+use crate::edit::editor;
 use crate::frecency::FrecencyStore;
 use crate::index::IndexedSnippet;
 use crate::index::SnippetIndex;

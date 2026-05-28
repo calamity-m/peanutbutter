@@ -17,10 +17,15 @@
 //! | [`lint`] | Read-only snippet authoring checks |
 //! | [`gc`] | Frecency garbage collection |
 //! | [`stats`] | Usage statistics from frecency history |
+//! | [`edit`] | Snippet file target resolution and editor launch for `pb edit` |
 //! | [`new`] | Command capture and snippet creation |
+//! | [`command_template`] | Placeholder parsing and command rendering |
+//! | [`completions`] | Shell integration and completion scripts |
 //! | [`fuzzy`] | nucleo-backed fuzzy matching |
 //! | [`search`] | Combined fuzzy + frecency ranking |
 //! | [`browse`] | Directory-tree navigation state |
+//! | [`tree_picker`] | Reusable tree-navigation picker state |
+//! | [`tui_chrome`] | Shared TUI frame and theme drawing helpers |
 //! | [`config`] | TOML config loading and theme |
 //! | [`cli`] | Argument parsing and command dispatch |
 //! | [`execute`] | Interactive TUI (ratatui, crossterm) |
@@ -33,7 +38,7 @@ pub mod completions;
 pub mod config;
 pub mod discovery;
 pub mod domain;
-pub mod editor;
+pub mod edit;
 pub mod execute;
 pub mod frecency;
 pub mod fuzzy;

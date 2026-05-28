@@ -95,12 +95,12 @@ fn new_target_choices(paths: &Paths) -> io::Result<Vec<TargetChoice>> {
             .first()
             .ok_or_else(|| io::Error::other("no snippet roots configured"))?;
         return Ok(vec![TargetChoice {
-            label: crate::cli::DEFAULT_EDIT_PATH.to_string(),
-            path: root.join(crate::cli::DEFAULT_EDIT_PATH),
+            label: crate::edit::DEFAULT_EDIT_PATH.to_string(),
+            path: root.join(crate::edit::DEFAULT_EDIT_PATH),
         }]);
     }
 
-    let aliases = crate::cli::edit_root_aliases(paths);
+    let aliases = crate::edit::edit_root_aliases(paths);
     let multi = paths.snippet_roots.len() > 1;
     Ok(files
         .into_iter()
@@ -114,7 +114,7 @@ fn new_target_choices(paths: &Paths) -> io::Result<Vec<TargetChoice>> {
 /// Render a short, stable label for a discovered snippet file: its path
 /// relative to the owning root, prefixed with the root alias when multiple
 /// roots are configured.
-fn target_label(file: &Path, aliases: &[crate::cli::EditRootAlias], multi: bool) -> String {
+fn target_label(file: &Path, aliases: &[crate::edit::EditRootAlias], multi: bool) -> String {
     let owner = aliases
         .iter()
         .filter(|entry| file.starts_with(&entry.root))
@@ -349,7 +349,7 @@ mod tests {
     #[test]
     fn target_label_uses_relative_path_for_single_root() {
         let paths = test_paths_with_roots(vec![PathBuf::from("/home/me/snippets")]);
-        let aliases = crate::cli::edit_root_aliases(&paths);
+        let aliases = crate::edit::edit_root_aliases(&paths);
         assert_eq!(
             target_label(Path::new("/home/me/snippets/work/db.md"), &aliases, false),
             "work/db.md"
@@ -362,7 +362,7 @@ mod tests {
             PathBuf::from("/home/me/snippets"),
             PathBuf::from("/home/me/work"),
         ]);
-        let aliases = crate::cli::edit_root_aliases(&paths);
+        let aliases = crate::edit::edit_root_aliases(&paths);
         assert_eq!(
             target_label(Path::new("/home/me/work/db.md"), &aliases, true),
             "work/db.md"
@@ -379,8 +379,8 @@ mod tests {
         let paths = test_paths(&root);
         let choices = new_target_choices(&paths).unwrap();
         assert_eq!(choices.len(), 1);
-        assert_eq!(choices[0].label, crate::cli::DEFAULT_EDIT_PATH);
-        assert_eq!(choices[0].path, root.join(crate::cli::DEFAULT_EDIT_PATH));
+        assert_eq!(choices[0].label, crate::edit::DEFAULT_EDIT_PATH);
+        assert_eq!(choices[0].path, root.join(crate::edit::DEFAULT_EDIT_PATH));
     }
 
     #[test]

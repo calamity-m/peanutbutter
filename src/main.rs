@@ -137,7 +137,9 @@ fn main() {
                 Err(err) => Err(err),
             }
         }
-        cli::Command::Edit { path } => cli::run_edit_command(&paths, path.as_deref()).map(|_| ()),
+        cli::Command::Edit { path } => {
+            peanutbutter::edit::run_edit_command(&paths, path.as_deref()).map(|_| ())
+        }
         cli::Command::New { name, command } => match peanutbutter::new::run_new_command(
             &paths,
             &app_config.theme,
@@ -201,7 +203,7 @@ fn main() {
             )
         }
         cli::Command::CompleteEdit { current } => {
-            match cli::complete_edit(&paths, current.as_deref().unwrap_or("")) {
+            match peanutbutter::edit::complete_edit(&paths, current.as_deref().unwrap_or("")) {
                 Ok(candidates) => {
                     for candidate in candidates {
                         println!("{candidate}");
