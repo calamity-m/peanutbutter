@@ -1,14 +1,24 @@
+//! Helpers for applying fuzzy-search highlights to ratatui text.
+//!
+//! Search matching reports character positions in plain strings, while previews
+//! often arrive as styled `Text`. This module bridges those shapes without
+//! dropping syntax highlighting or markdown styling that was already present.
+
 use crate::fuzzy::{FuzzyScorer, build_pattern};
 use crate::search;
 use nucleo_matcher::pattern::Pattern;
 use ratatui::style::Style;
 use ratatui::text::{Line, Span, Text};
 
+/// A compiled search term plus the field it should highlight, if any.
 pub(super) struct HighlightPattern {
+    /// The query field this pattern is scoped to.
     pub(super) field: Option<search::QueryField>,
+    /// The fuzzy matcher pattern built from the user-entered term.
     pub(super) pattern: Pattern,
 }
 
+/// Compiles the current query into field-aware highlight patterns.
 pub(super) fn compile_highlight_patterns(query: &str) -> Vec<HighlightPattern> {
     search::highlight_terms(query)
         .into_iter()
@@ -19,6 +29,10 @@ pub(super) fn compile_highlight_patterns(query: &str) -> Vec<HighlightPattern> {
         .collect()
 }
 
+/// Returns sorted, deduplicated character positions matched in `haystack`.
+///
+/// Patterns scoped to a different field are skipped. Unscoped patterns apply to
+/// every field so broad fuzzy searches still highlight preview text.
 pub(super) fn match_positions(
     scorer: &mut FuzzyScorer,
     patterns: &[HighlightPattern],
@@ -39,6 +53,7 @@ pub(super) fn match_positions(
     indices
 }
 
+/// Converts plain text into spans with `highlight_style` patched onto matches.
 pub(super) fn highlighted_spans(
     text: &str,
     indices: &[usize],
@@ -82,12 +97,16 @@ pub(super) fn highlighted_spans(
     spans
 }
 
+/// A single rendered character with its resolved style.
 #[derive(Clone, Copy)]
 pub(super) struct StyledChar {
+    /// The rendered character.
     pub(super) ch: char,
+    /// The effective style for the character after line/span styles are merged.
     pub(super) style: Style,
 }
 
+/// Applies highlights to existing styled text while preserving prior styling.
 pub(super) fn highlight_text(
     text: Text<'static>,
     indices: &[usize],
@@ -102,12 +121,14 @@ pub(super) fn highlight_text(
         if let Some(styled) = chars.get_mut(*idx)
             && styled.ch != '\n'
         {
+            // Preserve syntax/markdown styling and layer the search highlight on top.
             styled.style = styled.style.patch(highlight_style);
         }
     }
     styled_chars_to_text(chars)
 }
 
+/// Flattens ratatui text into its visible plain-text representation.
 pub(super) fn text_plain(text: &Text<'_>) -> String {
     text_to_styled_chars(text)
         .into_iter()
@@ -115,6 +136,7 @@ pub(super) fn text_plain(text: &Text<'_>) -> String {
         .collect()
 }
 
+/// Flattens ratatui text into per-character style records.
 pub(super) fn text_to_styled_chars(text: &Text<'_>) -> Vec<StyledChar> {
     let mut chars = Vec::new();
     for (line_idx, line) in text.lines.iter().enumerate() {
@@ -134,12 +156,15 @@ pub(super) fn text_to_styled_chars(text: &Text<'_>) -> Vec<StyledChar> {
     chars
 }
 
+/// Rebuilds ratatui text from per-character style records.
 pub(super) fn styled_chars_to_text(chars: Vec<StyledChar>) -> Text<'static> {
     let mut lines = vec![Line::default()];
     let mut current = String::new();
     let mut current_style = Style::default();
     let mut has_style = false;
 
+    // Coalesce adjacent characters with the same style back into spans so the
+    // rebuilt `Text` stays compact enough for repeated preview rendering.
     let flush = |lines: &mut Vec<Line<'static>>,
                  current: &mut String,
                  current_style: &mut Style,

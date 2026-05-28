@@ -1,3 +1,9 @@
+//! Preview text rendering for the execute picker.
+//!
+//! Picker previews combine snippet metadata, markdown descriptions, syntax
+//! highlighted shell bodies, and fuzzy match overlays. The functions here return
+//! ratatui `Text` so the root renderer can focus on layout.
+
 use ansi_to_tui::IntoText;
 use ratatui::text::{Line, Span, Text};
 
@@ -13,12 +19,17 @@ use super::highlight::{
     HighlightPattern, highlight_text, highlighted_spans, match_positions, text_plain,
 };
 
+/// The preview content selected by the active navigation mode.
 pub(super) enum PickerPreview<'a> {
+    /// A real snippet preview with metadata, description, and body.
     Snippet(&'a IndexedSnippet),
+    /// Already assembled markdown for synthetic previews such as directories.
     Markdown(String),
+    /// Empty selection placeholder.
     Empty,
 }
 
+/// Renders picker preview content into terminal text.
 pub(super) fn picker_preview_text(
     preview: PickerPreview<'_>,
     width: usize,
@@ -35,6 +46,10 @@ pub(super) fn picker_preview_text(
     }
 }
 
+/// Renders the full preview for a snippet row.
+///
+/// The preview includes searchable metadata first, then markdown description
+/// text, then the shell-highlighted snippet body.
 pub(super) fn render_snippet_preview_text(
     snippet: &IndexedSnippet,
     width: usize,
@@ -44,6 +59,8 @@ pub(super) fn render_snippet_preview_text(
 ) -> Text<'static> {
     let mut text = Text::default();
 
+    // Title and metadata use field-scoped highlights so operators such as
+    // `name:foo` and `path:bar` only mark the intended preview sections.
     let mut title = vec![Span::styled("▍ ".to_string(), theme.fuzzy_highlight)];
     title.extend(highlighted_spans(
         snippet.name(),
@@ -119,6 +136,8 @@ pub(super) fn render_snippet_preview_text(
         text.lines.push(Line::default());
         let description_text = render_markdown_text(description, width);
         let description_display = text_plain(&description_text);
+        // Match against rendered markdown text, not the raw source, so character
+        // indices line up with the ratatui spans we are about to restyle.
         text.extend(highlight_text(
             description_text,
             &match_positions(scorer, patterns, None, &description_display),
@@ -142,6 +161,7 @@ pub(super) fn render_snippet_preview_text(
     text
 }
 
+/// Renders markdown into ratatui text sized for the preview pane.
 pub(super) fn render_markdown_text(markdown: &str, width: usize) -> Text<'static> {
     let skin = preview_skin();
     let markdown = markdown_links_for_terminal(markdown);
@@ -151,6 +171,7 @@ pub(super) fn render_markdown_text(markdown: &str, width: usize) -> Text<'static
         .unwrap_or_else(|_| Text::from(ansi.clone()))
 }
 
+/// Builds a markdown preview for a directory or markdown container node.
 pub(super) fn container_preview_markdown(name: &str, path: &[String], node: &DirNode) -> String {
     let mut md = String::new();
     md.push_str("# ");
@@ -178,6 +199,7 @@ pub(super) fn container_preview_markdown(name: &str, path: &[String], node: &Dir
     md
 }
 
+/// Creates the markdown skin used by picker previews.
 fn preview_skin() -> termimad::MadSkin {
     let mut skin = termimad::MadSkin::default();
     for h in &mut skin.headers {
@@ -192,6 +214,10 @@ fn preview_skin() -> termimad::MadSkin {
     skin
 }
 
+/// Rewrites markdown links into terminal-visible text.
+///
+/// `termimad` may otherwise render labels without enough context for URLs. This
+/// keeps links useful inside a plain terminal preview pane.
 fn markdown_links_for_terminal(markdown: &str) -> String {
     let mut out = String::with_capacity(markdown.len());
     let mut rest = markdown;
@@ -234,6 +260,7 @@ fn markdown_links_for_terminal(markdown: &str) -> String {
     out
 }
 
+/// Renders a metadata row with a label and inline-code-style value.
 fn metadata_line(label: &str, mut value: Vec<Span<'static>>, theme: &Theme) -> Line<'static> {
     let mut spans = vec![
         Span::styled(format!("{label} "), theme.chrome),
@@ -244,6 +271,7 @@ fn metadata_line(label: &str, mut value: Vec<Span<'static>>, theme: &Theme) -> L
     Line::from(spans)
 }
 
+/// Renders the short markdown-style divider used inside previews.
 fn divider_line(theme: &Theme) -> Line<'static> {
     Line::from(vec![Span::styled("---".to_string(), theme.divider)])
 }

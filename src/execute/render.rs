@@ -1,3 +1,9 @@
+//! Rendering for the interactive execute UI.
+//!
+//! This module owns the high-level screen layout and delegates reusable drawing
+//! details to focused submodules: fuzzy highlight handling, preview text
+//! generation, and tag picker rendering.
+
 mod highlight;
 mod preview;
 mod tags;
@@ -23,6 +29,7 @@ use preview::{PickerPreview, container_preview_markdown, picker_preview_text};
 use tags::{RenderChrome, TagView, render_tag_view, tags_prompt, tags_prompt_prefix_len};
 
 impl<P: SuggestionProvider> ExecutionApp<P> {
+    /// Renders the current execute screen into the provided terminal frame.
     pub fn render(&mut self, frame: &mut Frame<'_>) {
         if matches!(self.screen, Screen::Select) {
             self.render_select(frame);
@@ -34,6 +41,7 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
         self.render_prompt(frame, prompt);
     }
 
+    /// Renders the snippet picker screen for fuzzy, browse, and tag navigation.
     fn render_select(&mut self, frame: &mut Frame<'_>) {
         let outer = frame.area();
         let border = Block::default()
@@ -72,6 +80,8 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
             x: main[1].x,
             y: outer.y,
         }) {
+            // The preview pane's left border intersects the header border; patch
+            // the shared cell so the box drawing remains continuous.
             cell.set_char('┬').set_style(self.theme.border);
         }
 
@@ -115,6 +125,8 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
                 let padding = (main[0].height as usize).saturating_sub(total);
                 let mut items: Vec<ListItem<'_>> =
                     (0..padding).map(|_| ListItem::new("")).collect();
+                // The picker is bottom-aligned, so rows are rendered in reverse
+                // and the selected logical index is translated to visual space.
                 for (idx, hit) in fuzzy_hits.iter().enumerate().rev() {
                     let content = fuzzy_snippet_row_spans(
                         &self.theme,
@@ -144,6 +156,8 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
                 let mut items: Vec<ListItem<'_>> =
                     (0..padding).map(|_| ListItem::new("")).collect();
                 let current_dir = self.tree.get(self.browse.path());
+                // Keep browse mode visually aligned with fuzzy mode by anchoring
+                // short lists at the bottom of the pane.
                 items.extend(browse_visible.iter().enumerate().rev().map(|(idx, entry)| {
                     let label = match entry {
                         BrowseEntry::Directory(name) => {
@@ -290,6 +304,7 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
         }
     }
 
+    /// Renders the variable-entry prompt for a selected snippet.
     fn render_prompt(&self, frame: &mut Frame<'_>, prompt: &PromptState) {
         let outer = frame.area();
         let border = Block::default()
@@ -414,6 +429,7 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
         );
     }
 
+    /// Builds the command preview shown while a prompt variable is being edited.
     fn prompt_preview_text(&self, prompt: &PromptState) -> Text<'static> {
         let Some(snippet) = self.index.get(&prompt.snippet_id) else {
             return Text::default();
@@ -433,6 +449,7 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
         )
     }
 
+    /// Builds preview markdown for the currently selected tag row.
     fn tag_list_preview<'a>(&'a self, visible: &[super::app::TagListEntry]) -> PickerPreview<'a> {
         let Some(entry) = visible.get(self.tags.list_selection().unwrap_or(0)) else {
             return PickerPreview::Empty;
@@ -458,6 +475,7 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
         PickerPreview::Markdown(md)
     }
 
+    /// Builds the preview for the selected browse tree entry.
     fn browse_preview<'a>(&'a self, visible: &[BrowseEntry]) -> PickerPreview<'a> {
         let Some(entry) = visible.get(self.browse.selection().unwrap_or(0)) else {
             return PickerPreview::Empty;
@@ -480,12 +498,14 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
     }
 }
 
+/// Creates a one-line chrome paragraph for status, help, and context bars.
 fn chrome_line<'a, T: Into<Text<'a>>>(theme: &crate::config::Theme, text: T) -> Paragraph<'a> {
     Paragraph::new(text)
         .style(theme.chrome)
         .wrap(Wrap { trim: true })
 }
 
+/// Renders the picker header containing the query, result count, and active mode.
 fn select_header(
     theme: &crate::config::Theme,
     prompt: &str,
@@ -522,6 +542,7 @@ fn select_header(
     Paragraph::new(Text::from(vec![status_line, prompt_line]))
 }
 
+/// Renders the prompt progress/status line.
 fn prompt_status_line(
     theme: &crate::config::Theme,
     idx: usize,
@@ -540,6 +561,7 @@ fn prompt_status_line(
     ]
 }
 
+/// Renders one numbered picker row with the selected row marker when needed.
 fn snippet_list_line<'a>(
     theme: &crate::config::Theme,
     idx: usize,
@@ -565,10 +587,12 @@ fn snippet_list_line<'a>(
     }
 }
 
+/// Returns the number of decimal digits needed to display `n`.
 fn digits(n: usize) -> usize {
     if n == 0 { 1 } else { n.ilog10() as usize + 1 }
 }
 
+/// Keeps a ratatui list offset inside the current item and viewport bounds.
 fn clamp_list_offset(state: &mut ratatui::widgets::ListState, items_len: usize, height: usize) {
     let max_offset = items_len.saturating_sub(height);
     if *state.offset_mut() > max_offset {
@@ -576,6 +600,7 @@ fn clamp_list_offset(state: &mut ratatui::widgets::ListState, items_len: usize, 
     }
 }
 
+/// Renders fuzzy picker row text with field-aware query highlights.
 fn fuzzy_snippet_row_spans(
     theme: &crate::config::Theme,
     snippet: &IndexedSnippet,
