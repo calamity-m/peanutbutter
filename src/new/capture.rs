@@ -4,8 +4,8 @@
 //! terminal. Tests drive these states directly; the [`run_capture`] entry
 //! point wraps them with crossterm/ratatui plumbing.
 
-use crate::capture_heuristics::{Span, TokenCandidate};
 use crate::config::Theme;
+use crate::new::capture_heuristics::{Span, TokenCandidate};
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use crossterm::{cursor, execute, terminal::ClearType};
@@ -198,7 +198,7 @@ impl TokenConfirmState {
             .filter(|(i, _)| self.selected[*i])
             .map(|(i, c)| (c.span, self.names[i].clone()))
             .collect();
-        crate::capture_heuristics::render_with_placeholders(&self.raw, &accepted)
+        crate::new::capture_heuristics::render_with_placeholders(&self.raw, &accepted)
     }
 
     /// Toggle the focused token's selection.
@@ -241,7 +241,7 @@ impl TokenConfirmState {
     /// Whether any secret-flagged candidate is currently unselected.
     pub fn has_unselected_secret(&self) -> bool {
         self.candidates.iter().enumerate().any(|(i, c)| {
-            c.kind == crate::capture_heuristics::TokenKind::Secret && !self.selected[i]
+            c.kind == crate::new::capture_heuristics::TokenKind::Secret && !self.selected[i]
         })
     }
 
@@ -376,7 +376,7 @@ pub fn run_capture(run: CaptureRun<'_>) -> io::Result<CaptureOutcome> {
             }
         };
 
-        let candidates = crate::capture_heuristics::detect_variables(&raw_command);
+        let candidates = crate::new::capture_heuristics::detect_variables(&raw_command);
         let mut state = TokenConfirmState::new(name_opt.clone(), raw_command.clone(), candidates);
 
         // Stage 2 + 3 loop so the target picker can step back to confirm.
@@ -909,7 +909,7 @@ fn render_confirm(
                 state.names[i].as_str()
             };
             let label = match cand.kind {
-                crate::capture_heuristics::TokenKind::Secret => " (secret)",
+                crate::new::capture_heuristics::TokenKind::Secret => " (secret)",
                 _ => "",
             };
             let prefix = if state.focus == Focus::TokenList && state.cursor == i {
@@ -920,7 +920,7 @@ fn render_confirm(
                 "    "
             };
             let mut name_style = Style::default();
-            if cand.kind == crate::capture_heuristics::TokenKind::Secret {
+            if cand.kind == crate::new::capture_heuristics::TokenKind::Secret {
                 name_style = theme.error;
             }
             if state.cursor == i
@@ -993,14 +993,14 @@ mod tests {
 
     fn ssh_state() -> TokenConfirmState {
         let raw = "ssh root@10.0.0.4 'systemctl restart nginx'".to_string();
-        let candidates = crate::capture_heuristics::detect_variables(&raw);
+        let candidates = crate::new::capture_heuristics::detect_variables(&raw);
         TokenConfirmState::new(Some("deploy".to_string()), raw, candidates)
     }
 
     #[test]
     fn confirm_empty_name_re_focuses_name() {
         let raw = "echo hi".to_string();
-        let cands = crate::capture_heuristics::detect_variables(&raw);
+        let cands = crate::new::capture_heuristics::detect_variables(&raw);
         let mut state = TokenConfirmState::new(None, raw, cands);
         state.focus = Focus::TokenList;
         let r = state.try_accept();
@@ -1022,11 +1022,11 @@ mod tests {
     #[test]
     fn confirm_warns_then_writes_when_secret_left_literal() {
         let raw = "curl --token=abc123XYZdef456ghijk http://x".to_string();
-        let cands = crate::capture_heuristics::detect_variables(&raw);
+        let cands = crate::new::capture_heuristics::detect_variables(&raw);
         let mut state = TokenConfirmState::new(Some("call".to_string()), raw, cands);
         // Deselect the secret.
         for (i, c) in state.candidates.iter().enumerate() {
-            if c.kind == crate::capture_heuristics::TokenKind::Secret {
+            if c.kind == crate::new::capture_heuristics::TokenKind::Secret {
                 state.selected[i] = false;
             }
         }
@@ -1039,7 +1039,7 @@ mod tests {
     #[test]
     fn confirm_preview_reflects_selection() {
         let raw = "echo 'hello world'".to_string();
-        let cands = crate::capture_heuristics::detect_variables(&raw);
+        let cands = crate::new::capture_heuristics::detect_variables(&raw);
         let mut state = TokenConfirmState::new(Some("greet".to_string()), raw, cands);
         for s in state.selected.iter_mut() {
             *s = true;

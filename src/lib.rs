@@ -17,6 +17,7 @@
 //! | [`lint`] | Read-only snippet authoring checks |
 //! | [`gc`] | Frecency garbage collection |
 //! | [`stats`] | Usage statistics from frecency history |
+//! | [`new`] | Command capture and snippet creation |
 //! | [`fuzzy`] | nucleo-backed fuzzy matching |
 //! | [`search`] | Combined fuzzy + frecency ranking |
 //! | [`browse`] | Directory-tree navigation state |
@@ -26,8 +27,6 @@
 //! | [`lsp`] | Language Server Protocol server (diagnostics, completions, hover, go-to-def) |
 
 pub mod browse;
-pub mod capture;
-pub mod capture_heuristics;
 pub mod cli;
 pub mod command_template;
 pub mod completions;
@@ -42,6 +41,7 @@ pub mod gc;
 pub mod index;
 pub mod lint;
 pub mod lsp;
+pub mod new;
 pub mod parser;
 pub mod search;
 pub(crate) mod shell;

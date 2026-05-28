@@ -138,7 +138,7 @@ fn main() {
             }
         }
         cli::Command::Edit { path } => cli::run_edit_command(&paths, path.as_deref()).map(|_| ()),
-        cli::Command::New { name, command } => match cli::run_new_command(
+        cli::Command::New { name, command } => match peanutbutter::new::run_new_command(
             &paths,
             &app_config.theme,
             app_config.ui.height,
