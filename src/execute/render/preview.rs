@@ -6,6 +6,7 @@
 
 use ansi_to_tui::IntoText;
 use ratatui::text::{Line, Span, Text};
+use std::path::Path;
 
 use crate::browse::DirNode;
 use crate::config::Theme;
@@ -75,6 +76,10 @@ pub(super) fn render_snippet_preview_text(
     ));
     text.lines.push(Line::from(title));
     text.lines.push(Line::default());
+
+    let root = shorten_home(snippet.root_dir());
+    text.lines
+        .push(metadata_line("root", vec![Span::raw(root)], theme));
 
     let path = snippet.relative_path_display();
     text.lines.push(metadata_line(
@@ -172,11 +177,21 @@ pub(super) fn render_markdown_text(markdown: &str, width: usize) -> Text<'static
 }
 
 /// Builds a markdown preview for a directory or markdown container node.
-pub(super) fn container_preview_markdown(name: &str, path: &[String], node: &DirNode) -> String {
+pub(super) fn container_preview_markdown(
+    name: &str,
+    path: &[String],
+    node: &DirNode,
+    root: Option<&Path>,
+) -> String {
     let mut md = String::new();
     md.push_str("# ");
     md.push_str(name);
     md.push_str("/\n\n");
+    if let Some(r) = root {
+        md.push_str("**root** `");
+        md.push_str(&shorten_home(r));
+        md.push_str("`\n\n");
+    }
     md.push_str("**path** `/");
     md.push_str(&path.join("/"));
     md.push_str("/`\n\n---\n\n");
@@ -274,4 +289,16 @@ fn metadata_line(label: &str, mut value: Vec<Span<'static>>, theme: &Theme) -> L
 /// Renders the short markdown-style divider used inside previews.
 fn divider_line(theme: &Theme) -> Line<'static> {
     Line::from(vec![Span::styled("---".to_string(), theme.divider)])
+}
+
+/// Replaces the home directory prefix with `~` for compact display.
+fn shorten_home(path: &Path) -> String {
+    let s = path.to_string_lossy();
+    if let Some(home) = std::env::var_os("HOME") {
+        let home = home.to_string_lossy();
+        if let Some(rest) = s.strip_prefix(home.as_ref()) {
+            return format!("~{rest}");
+        }
+    }
+    s.into_owned()
 }

@@ -16,7 +16,8 @@ use ratatui::style::Style;
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Wrap};
 
-use crate::browse::BrowseEntry;
+use crate::browse::{BrowseEntry, DirNode};
+use crate::domain::SnippetId;
 use crate::fuzzy::FuzzyScorer;
 use crate::index::IndexedSnippet;
 use crate::search;
@@ -492,10 +493,32 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
                 let Some(node) = self.tree.get(&path) else {
                     return PickerPreview::Empty;
                 };
-                PickerPreview::Markdown(container_preview_markdown(name, &path, node))
+                let root = first_snippet_in_node(node)
+                    .and_then(|id| self.index.get(id))
+                    .map(|s| s.root_dir().to_path_buf());
+                PickerPreview::Markdown(container_preview_markdown(
+                    name,
+                    &path,
+                    node,
+                    root.as_deref(),
+                ))
             }
         }
     }
+}
+
+/// Finds the first snippet id in a DirNode subtree (breadth-first through snippets
+/// then children), used to derive the root directory for directory previews.
+fn first_snippet_in_node(node: &DirNode) -> Option<&SnippetId> {
+    if let Some(s) = node.snippets.first() {
+        return Some(&s.id);
+    }
+    for child in node.children.values() {
+        if let Some(id) = first_snippet_in_node(child) {
+            return Some(id);
+        }
+    }
+    None
 }
 
 /// Creates a one-line chrome paragraph for status, help, and context bars.

@@ -61,6 +61,16 @@ impl IndexedSnippet {
     pub fn relative_path_display(&self) -> String {
         self.relative_path.to_string_lossy().replace('\\', "/")
     }
+
+    /// The snippet root directory — the ancestor of `path` obtained by
+    /// stripping the `relative_path` suffix.
+    pub fn root_dir(&self) -> &Path {
+        let depth = self.relative_path.components().count();
+        self.path
+            .ancestors()
+            .nth(depth)
+            .unwrap_or(self.path.as_path())
+    }
 }
 
 /// In-memory collection of all parsed snippets, with O(1) lookup by id.
