@@ -376,8 +376,8 @@ fn ctrl_e_from_fuzzy_requests_edit_for_selected_snippet() {
 fn ctrl_e_from_browse_requests_edit_for_selected_snippet() {
     let mut app = app_with_body("echo hi", vec![], TestProvider::default());
     app.nav_mode = NavigationMode::Browse;
-    app.browse.path = vec!["x.md".to_string()];
-    app.browse.selection = Some(0);
+    app.browse.set_path(vec!["x.md".to_string()]);
+    app.browse.set_selection(Some(0));
 
     let id =
         edit_requested(app.handle_key(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL)));
@@ -388,23 +388,24 @@ fn ctrl_e_from_browse_requests_edit_for_selected_snippet() {
 fn esc_in_browse_climbs_path_when_nested() {
     let mut app = app_with_body("echo hi", vec![], TestProvider::default());
     app.nav_mode = NavigationMode::Browse;
-    app.browse.path = vec!["git".to_string(), "commits.md".to_string()];
-    app.browse.input = "foo".to_string();
-    app.browse.selection = Some(2);
+    app.browse
+        .set_path(vec!["git".to_string(), "commits.md".to_string()]);
+    app.browse.set_input("foo".to_string());
+    app.browse.set_selection(Some(2));
 
     let event = app.handle_key(press(KeyCode::Esc));
 
     assert!(matches!(event, AppEvent::Continue));
-    assert_eq!(app.browse.path, vec!["git".to_string()]);
-    assert_eq!(app.browse.input, "");
-    assert_eq!(app.browse.selection, Some(0));
+    assert_eq!(app.browse.path(), vec!["git".to_string()]);
+    assert_eq!(app.browse.input(), "");
+    assert_eq!(app.browse.selection(), Some(0));
 }
 
 #[test]
 fn esc_in_browse_at_root_cancels() {
     let mut app = app_with_body("echo hi", vec![], TestProvider::default());
     app.nav_mode = NavigationMode::Browse;
-    app.browse.path = Vec::new();
+    app.browse.set_path(Vec::new());
 
     let event = app.handle_key(press(KeyCode::Esc));
     assert!(matches!(event, AppEvent::Cancelled));
@@ -414,11 +415,11 @@ fn esc_in_browse_at_root_cancels() {
 fn ctrl_e_from_browse_directory_does_not_request_edit() {
     let mut app = app_with_body("echo hi", vec![], TestProvider::default());
     app.nav_mode = NavigationMode::Browse;
-    app.browse.selection = Some(0);
+    app.browse.set_selection(Some(0));
 
     let event = app.handle_key(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL));
     assert!(matches!(event, AppEvent::Continue));
-    assert_eq!(app.browse.path, Vec::<String>::new());
+    assert_eq!(app.browse.path(), Vec::<String>::new());
 }
 
 #[test]
@@ -522,8 +523,9 @@ fn replace_index_selects_previous_browse_snippet_when_still_visible() {
         TestProvider::default(),
     );
     app.nav_mode = NavigationMode::Browse;
-    app.browse.path = vec!["git".to_string(), "commands.md".to_string()];
-    app.browse.selection = Some(0);
+    app.browse
+        .set_path(vec!["git".to_string(), "commands.md".to_string()]);
+    app.browse.set_selection(Some(0));
     let previous_id = crate::domain::SnippetId::new("git/commands.md", "status");
 
     let found = app.replace_index(
@@ -560,8 +562,9 @@ fn replace_index_climbs_missing_browse_directory() {
         TestProvider::default(),
     );
     app.nav_mode = NavigationMode::Browse;
-    app.browse.path = vec!["old".to_string(), "place.md".to_string()];
-    app.browse.selection = Some(0);
+    app.browse
+        .set_path(vec!["old".to_string(), "place.md".to_string()]);
+    app.browse.set_selection(Some(0));
     let previous_id = crate::domain::SnippetId::new("old/place.md", "demo");
 
     let found = app.replace_index(
@@ -575,8 +578,8 @@ fn replace_index_climbs_missing_browse_directory() {
     );
 
     assert!(!found);
-    assert_eq!(app.browse.path, Vec::<String>::new());
-    assert_eq!(app.browse.selection, Some(0));
+    assert_eq!(app.browse.path(), Vec::<String>::new());
+    assert_eq!(app.browse.selection(), Some(0));
 }
 
 #[test]
@@ -625,9 +628,10 @@ fn prompt_esc_in_browse_mode_preserves_browse_position() {
         TestProvider::default(),
     );
     app.nav_mode = NavigationMode::Browse;
-    app.browse.path = vec!["git".to_string(), "commits.md".to_string()];
-    app.browse.input = String::new();
-    app.browse.selection = Some(0);
+    app.browse
+        .set_path(vec!["git".to_string(), "commits.md".to_string()]);
+    app.browse.set_input(String::new());
+    app.browse.set_selection(Some(0));
 
     let _ = app.handle_key(press(KeyCode::Enter));
     assert!(matches!(app.screen, Screen::Prompt(_)));
@@ -635,11 +639,11 @@ fn prompt_esc_in_browse_mode_preserves_browse_position() {
     let _ = app.handle_key(press(KeyCode::Esc));
     assert!(matches!(app.screen, Screen::Select));
     assert_eq!(
-        app.browse.path,
+        app.browse.path(),
         vec!["git".to_string(), "commits.md".to_string()]
     );
-    assert_eq!(app.browse.input, "");
-    assert_eq!(app.browse.selection, Some(0));
+    assert_eq!(app.browse.input(), "");
+    assert_eq!(app.browse.selection(), Some(0));
 }
 
 #[test]
@@ -657,8 +661,9 @@ fn ctrl_t_cycles_between_search_browse_and_tags() {
 fn ctrl_t_cycle_preserves_browse_state() {
     let mut app = app_with_body("echo hi", vec![], TestProvider::default());
     let _ = app.handle_key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::CONTROL));
-    app.browse.path = vec!["git".to_string(), "commits.md".to_string()];
-    app.browse.selection = Some(3);
+    app.browse
+        .set_path(vec!["git".to_string(), "commits.md".to_string()]);
+    app.browse.set_selection(Some(3));
 
     let _ = app.handle_key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::CONTROL));
     assert_eq!(app.navigation_mode(), NavigationMode::Tags);
@@ -668,10 +673,10 @@ fn ctrl_t_cycle_preserves_browse_state() {
 
     assert_eq!(app.navigation_mode(), NavigationMode::Browse);
     assert_eq!(
-        app.browse.path,
+        app.browse.path(),
         vec!["git".to_string(), "commits.md".to_string()]
     );
-    assert_eq!(app.browse.selection, Some(3));
+    assert_eq!(app.browse.selection(), Some(3));
 }
 
 #[test]
@@ -755,8 +760,7 @@ fn tags_filter_matches_untagged_label() {
         TestProvider::default(),
     );
     app.nav_mode = NavigationMode::Tags;
-    app.tags.filter = "untagged".to_string();
-    app.tags.cursor = app.tags.filter.len();
+    app.tags.set_filter("untagged".to_string());
 
     let labels: Vec<_> = app
         .visible_tags()
@@ -797,9 +801,8 @@ fn ctrl_t_cycle_preserves_tags_filter_and_selection() {
     let mut app = app_with_body("echo hi", vec![], TestProvider::default());
     let _ = app.handle_key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::CONTROL));
     let _ = app.handle_key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::CONTROL));
-    app.tags.filter = "git".to_string();
-    app.tags.cursor = app.tags.filter.len();
-    app.tags.list_selection = Some(2);
+    app.tags.set_filter("git".to_string());
+    app.tags.set_list_selection(Some(2));
 
     let _ = app.handle_key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::CONTROL));
     assert_eq!(app.navigation_mode(), NavigationMode::Fuzzy);
@@ -808,8 +811,8 @@ fn ctrl_t_cycle_preserves_tags_filter_and_selection() {
     let _ = app.handle_key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::CONTROL));
 
     assert_eq!(app.navigation_mode(), NavigationMode::Tags);
-    assert_eq!(app.tags.filter, "git");
-    assert_eq!(app.tags.list_selection, Some(2));
+    assert_eq!(app.tags.filter(), "git");
+    assert_eq!(app.tags.list_selection(), Some(2));
 }
 
 #[test]
@@ -824,7 +827,8 @@ fn replace_index_rebuilds_visible_tags() {
         TestProvider::default(),
     );
     app.nav_mode = NavigationMode::Tags;
-    app.tags.drill = Some(crate::index::TagKey::Tag("old".to_string()));
+    app.tags
+        .enter_drill(crate::index::TagKey::Tag("old".to_string()));
 
     app.replace_index(
         SnippetIndex::from_files([snippet_file_with_tags("new.md", "new", "New", &["new"])]),
@@ -837,7 +841,7 @@ fn replace_index_rebuilds_visible_tags() {
         .map(|entry| entry.label)
         .collect();
     assert_eq!(labels, vec!["new"]);
-    assert_eq!(app.tags.drill, None);
+    assert_eq!(app.tags.drill(), None);
 }
 
 #[test]
@@ -860,8 +864,8 @@ fn enter_on_tag_then_snippet_completes_selected_snippet() {
 
     let _ = app.handle_key(press(KeyCode::Enter));
     assert_eq!(
-        app.tags.drill,
-        Some(crate::index::TagKey::Tag("git".to_string()))
+        app.tags.drill(),
+        Some(&crate::index::TagKey::Tag("git".to_string()))
     );
     assert!(app.selected_snippet().is_some());
 
@@ -892,7 +896,46 @@ fn esc_from_tag_drill_returns_to_tag_list() {
     assert!(matches!(event, AppEvent::Continue));
     assert!(matches!(app.screen, Screen::Select));
     assert_eq!(app.navigation_mode(), NavigationMode::Tags);
-    assert_eq!(app.tags.drill, None);
+    assert_eq!(app.tags.drill(), None);
+}
+
+#[test]
+fn esc_from_tag_drill_restores_cursor_onto_drilled_tag() {
+    // Three tags so "first by accident" can't pass.
+    let mut app = ExecutionApp::new(
+        SnippetIndex::from_files([
+            snippet_file_with_tags("a.md", "a", "A", &["alpha"]),
+            snippet_file_with_tags("b.md", "b", "B", &["beta"]),
+            snippet_file_with_tags("g.md", "g", "G", &["git"]),
+        ]),
+        FrecencyStore::new(),
+        PathBuf::from("."),
+        0,
+        crate::config::SearchConfig::default(),
+        crate::config::Theme::default(),
+        TestProvider::default(),
+    );
+    app.nav_mode = NavigationMode::Tags;
+    // Place cursor on "git" (index depends on alpha order: alpha=0, beta=1, git=2).
+    let git_idx = app
+        .visible_tags()
+        .iter()
+        .position(|e| matches!(&e.key, crate::index::TagKey::Tag(t) if t == "git"))
+        .unwrap();
+    app.tags.set_list_selection(Some(git_idx));
+
+    let _ = app.handle_key(press(KeyCode::Enter));
+    assert_eq!(
+        app.tags.drill(),
+        Some(&crate::index::TagKey::Tag("git".to_string()))
+    );
+
+    let _ = app.handle_key(press(KeyCode::Esc));
+    assert_eq!(app.tags.drill(), None);
+    // Cursor must be back on "git", not reset to 0.
+    let landed = app.tags.list_selection().expect("selection present");
+    let visible = app.visible_tags();
+    assert!(matches!(&visible[landed].key, crate::index::TagKey::Tag(t) if t == "git"));
 }
 
 #[test]
@@ -911,7 +954,7 @@ fn backspace_from_tag_drill_returns_to_tag_list() {
 
     let _ = app.handle_key(press(KeyCode::Backspace));
 
-    assert_eq!(app.tags.drill, None);
+    assert_eq!(app.tags.drill(), None);
 }
 
 #[test]
@@ -983,11 +1026,11 @@ fn backspace_in_tag_drill_clears_filter_before_popping() {
     let _ = app.handle_key(press(KeyCode::Char('g')));
 
     let _ = app.handle_key(press(KeyCode::Backspace));
-    assert_eq!(app.tags.drill_filter, "");
-    assert!(app.tags.drill.is_some());
+    assert_eq!(app.tags.drill_filter(), "");
+    assert!(app.tags.drill().is_some());
 
     let _ = app.handle_key(press(KeyCode::Backspace));
-    assert_eq!(app.tags.drill, None);
+    assert_eq!(app.tags.drill(), None);
 }
 
 #[test]
@@ -1006,7 +1049,7 @@ fn ctrl_t_cycle_preserves_tag_drill_state() {
     );
     app.nav_mode = NavigationMode::Tags;
     let _ = app.handle_key(press(KeyCode::Enter));
-    app.tags.drill_selection = Some(1);
+    app.tags.set_drill_selection(Some(1));
 
     let _ = app.handle_key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::CONTROL));
     assert_eq!(app.navigation_mode(), NavigationMode::Fuzzy);
@@ -1016,17 +1059,18 @@ fn ctrl_t_cycle_preserves_tag_drill_state() {
 
     assert_eq!(app.navigation_mode(), NavigationMode::Tags);
     assert_eq!(
-        app.tags.drill,
-        Some(crate::index::TagKey::Tag("git".to_string()))
+        app.tags.drill(),
+        Some(&crate::index::TagKey::Tag("git".to_string()))
     );
-    assert_eq!(app.tags.drill_selection, Some(1));
+    assert_eq!(app.tags.drill_selection(), Some(1));
 }
 
 #[test]
 fn selected_snippet_is_none_for_empty_tag_drill() {
     let mut app = app_with_body("echo hi", vec![], TestProvider::default());
     app.nav_mode = NavigationMode::Tags;
-    app.tags.drill = Some(crate::index::TagKey::Tag("empty".to_string()));
+    app.tags
+        .enter_drill(crate::index::TagKey::Tag("empty".to_string()));
     app.tag_index
         .insert(crate::index::TagKey::Tag("empty".to_string()), Vec::new());
 
@@ -1563,7 +1607,7 @@ fn browse_typing_resets_preview_scroll() {
 fn browse_backspace_resets_preview_scroll() {
     let mut app = app_with_body("echo hi", vec![], TestProvider::default());
     app.nav_mode = NavigationMode::Browse;
-    app.browse.input = "x".to_string();
+    app.browse.set_input("x".to_string());
     app.preview_scroll = 9;
     let _ = app.handle_key(press(KeyCode::Backspace));
     assert_eq!(app.preview_scroll, 0);
@@ -1596,7 +1640,7 @@ fn browse_tab_resets_preview_scroll() {
         TestProvider::default(),
     );
     app.nav_mode = NavigationMode::Browse;
-    app.browse.input = "g".to_string();
+    app.browse.set_input("g".to_string());
     app.preview_scroll = 9;
     let _ = app.handle_key(press(KeyCode::Tab));
     assert_eq!(app.preview_scroll, 0);
@@ -1639,7 +1683,7 @@ fn browse_entering_directory_resets_preview_scroll() {
     app.nav_mode = NavigationMode::Browse;
     app.preview_scroll = 9;
     let _ = app.handle_key(press(KeyCode::Enter));
-    assert_eq!(app.browse.path, vec!["git".to_string()]);
+    assert_eq!(app.browse.path(), vec!["git".to_string()]);
     assert_eq!(app.preview_scroll, 0);
 }
 

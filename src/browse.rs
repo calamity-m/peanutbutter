@@ -1,5 +1,6 @@
 use crate::domain::SnippetId;
 use crate::index::SnippetIndex;
+use crate::tree_picker::TreePicker;
 use std::collections::BTreeMap;
 use std::path::{Component, Path};
 
@@ -111,70 +112,99 @@ impl BrowseEntry {
     }
 }
 
-/// Browse mode state: the path from the root to the current directory, the
-/// typed input used for filtering and tab-completion, and the selected list
-/// index. `path` is analogous to `cwd`: typing narrows visible children,
-/// `tab` descends into a unique matching directory, and `backspace` walks back
-/// out.
+/// Browse mode state: a [`TreePicker`] keyed by directory name. Each level
+/// has its own filter buffer and remembered child, so going back up (Esc /
+/// Backspace-at-empty) restores the cursor onto the directory you came from
+/// without losing the parent's typed filter.
 #[derive(Debug, Default)]
 pub struct BrowseState {
-    pub path: Vec<String>,
-    pub input: String,
-    pub selection: Option<usize>,
+    pub picker: TreePicker<String>,
 }
 
 impl BrowseState {
     pub fn new() -> Self {
         Self {
-            path: Vec::new(),
-            input: String::new(),
-            selection: Some(0),
+            picker: TreePicker::new(),
         }
     }
 
+    pub fn path(&self) -> &[String] {
+        self.picker.path()
+    }
+
+    pub fn input(&self) -> &str {
+        self.picker.filter()
+    }
+
+    pub fn selection(&self) -> Option<usize> {
+        self.picker.selection()
+    }
+
+    pub fn set_selection(&mut self, selection: Option<usize>) {
+        self.picker.set_selection(selection);
+    }
+
     pub fn path_display(&self) -> String {
-        if self.path.is_empty() {
+        let path = self.picker.path();
+        if path.is_empty() {
             "/".to_string()
         } else {
-            format!("/{}/", self.path.join("/"))
+            format!("/{}/", path.join("/"))
         }
     }
 
     pub fn type_char(&mut self, c: char) {
-        self.input.push(c);
-        self.selection = Some(0);
+        self.picker.type_char(c);
     }
 
     /// Backspace behaviour: first delete the typed input character by
-    /// character; once input is empty, pop a directory off the path. This
-    /// means holding backspace walks back out of nested directories in a
-    /// single predictable motion.
-    pub fn backspace(&mut self) -> bool {
-        if self.input.pop().is_some() {
-            self.selection = Some(0);
+    /// character; once input is empty, ascend one level and restore the
+    /// cursor onto the directory we descended into. Returns `true` if
+    /// anything changed.
+    pub fn backspace(&mut self, tree: &BrowseTree) -> bool {
+        if self.picker.input_backspace() {
             return true;
         }
-        if self.path.pop().is_some() {
-            self.selection = Some(0);
-            return true;
+        self.ascend(tree)
+    }
+
+    /// Pop one level off the path and restore the cursor onto the directory
+    /// we just came from in the parent listing. Used by both Backspace (when
+    /// the filter is empty) and Esc. Returns `false` at the root.
+    pub fn ascend(&mut self, tree: &BrowseTree) -> bool {
+        if self.picker.ascend().is_none() {
+            return false;
         }
-        false
+        let visible = self.visible(tree);
+        self.picker
+            .restore_selection(&visible, |entry| match entry {
+                BrowseEntry::Directory(name) => Some(name.clone()),
+                BrowseEntry::Snippet(_) => None,
+            });
+        true
     }
 
     pub fn reset(&mut self) {
-        self.path.clear();
-        self.input.clear();
-        self.selection = Some(0);
+        self.picker.reset();
     }
 
-    /// Entries visible at the current cursor, filtered by `input`. Directory
-    /// names match by case-insensitive prefix (matching tab-completion
-    /// semantics); snippet names match by case-insensitive substring.
+    /// Truncate `path` to the deepest still-existing prefix in `tree`. Used
+    /// after an index rebuild that may have removed directories.
+    pub fn trim_missing_path(&mut self, tree: &BrowseTree) {
+        while !self.picker.path().is_empty() && tree.get(self.picker.path()).is_none() {
+            self.picker.ascend();
+        }
+    }
+
+    /// Entries visible at the current cursor, filtered by the typed input.
+    /// Directory names match by case-insensitive prefix (matching
+    /// tab-completion semantics); snippet names match by case-insensitive
+    /// substring.
     pub fn visible(&self, tree: &BrowseTree) -> Vec<BrowseEntry> {
-        let Some(node) = tree.get(&self.path) else {
+        let Some(node) = tree.get(self.picker.path()) else {
             return Vec::new();
         };
-        let input_lc = self.input.to_lowercase();
+        let input_lc = self.picker.filter().to_lowercase();
         let mut out = Vec::new();
         for name in node.children.keys() {
             if input_lc.is_empty() || name.to_lowercase().starts_with(&input_lc) {
@@ -193,13 +223,13 @@ impl BrowseState {
     /// `true` if state changed.
     ///
     /// - Zero matches: no-op.
-    /// - One match: descend into it, clear input.
+    /// - One match: descend into it (filter is consumed by the new frame).
     /// - Many matches: extend input to the longest common prefix.
     pub fn tab_complete(&mut self, tree: &BrowseTree) -> bool {
-        let Some(node) = tree.get(&self.path) else {
+        let Some(node) = tree.get(self.picker.path()) else {
             return false;
         };
-        let input_lc = self.input.to_lowercase();
+        let input_lc = self.picker.filter().to_lowercase();
         let matches: Vec<&String> = node
             .children
             .keys()
@@ -209,16 +239,16 @@ impl BrowseState {
             0 => false,
             1 => {
                 let only = matches[0].clone();
-                self.path.push(only);
-                self.input.clear();
-                self.selection = Some(0);
+                self.picker.descend(only);
                 true
             }
             _ => {
                 let lcp = longest_common_prefix(matches.iter().map(|s| s.as_str()));
-                if lcp.len() > self.input.len() {
-                    self.input = lcp;
-                    self.selection = Some(0);
+                if lcp.len() > self.picker.filter().len() {
+                    let frame = self.picker.current_mut();
+                    frame.filter = lcp;
+                    frame.cursor = frame.filter.len();
+                    frame.selection = Some(0);
                     true
                 } else {
                     false
@@ -231,13 +261,11 @@ impl BrowseState {
     /// into, snippets return their id for the caller to handle.
     pub fn activate(&mut self, tree: &BrowseTree) -> Option<SnippetId> {
         let entries = self.visible(tree);
-        let selected = self.selection.unwrap_or(0);
+        let selected = self.picker.selection().unwrap_or(0);
         let entry = entries.get(selected)?;
         match entry {
             BrowseEntry::Directory(name) => {
-                self.path.push(name.clone());
-                self.input.clear();
-                self.selection = Some(0);
+                self.picker.descend(name.clone());
                 None
             }
             BrowseEntry::Snippet(s) => Some(s.id.clone()),
@@ -245,13 +273,31 @@ impl BrowseState {
     }
 
     pub fn move_cursor(&mut self, delta: i32, visible_len: usize) {
-        if visible_len == 0 {
-            self.selection = None;
-            return;
+        self.picker.move_selection(delta, visible_len);
+    }
+
+    /// Test/setup helper: forcibly set the path by descending into each
+    /// segment in turn (no remembered-child markers). Resets the picker
+    /// first so the resulting state is `path = segments`, empty filter at
+    /// each level.
+    pub fn set_path(&mut self, segments: Vec<String>) {
+        self.picker.reset();
+        for segment in segments {
+            self.picker.descend(segment);
         }
-        let current = self.selection.unwrap_or(0) as i32;
-        let next = (current + delta).clamp(0, visible_len as i32 - 1);
-        self.selection = Some(next as usize);
+        // descend leaves a `descended_from` on each non-root frame; clear
+        // them so an ascent from this synthetic state falls back to 0
+        // rather than chasing a phantom child.
+        for frame in self.picker.frames_mut() {
+            frame.descended_from = None;
+        }
+    }
+
+    /// Test/setup helper: overwrite the typed filter at the current level.
+    pub fn set_input(&mut self, input: String) {
+        let frame = self.picker.current_mut();
+        frame.cursor = input.len();
+        frame.filter = input;
     }
 }
 
@@ -370,8 +416,8 @@ mod tests {
         state.type_char('s');
         let changed = state.tab_complete(&tree);
         assert!(changed);
-        assert_eq!(state.path, vec!["simple".to_string()]);
-        assert!(state.input.is_empty());
+        assert_eq!(state.path(), &["simple".to_string()][..]);
+        assert!(state.input().is_empty());
     }
 
     #[test]
@@ -384,35 +430,33 @@ mod tests {
         state.type_char('g');
         let changed = state.tab_complete(&tree);
         assert!(changed);
-        assert_eq!(state.input, "git");
-        assert!(state.path.is_empty());
+        assert_eq!(state.input(), "git");
+        assert!(state.path().is_empty());
     }
 
     #[test]
     fn backspace_empties_input_then_climbs_path() {
         let tree = example_tree();
         let mut state = BrowseState::new();
-        state.path.push("nested".into());
-        state.path.push("docker".into());
+        state.set_path(vec!["nested".into(), "docker".into()]);
         state.type_char('c');
         state.type_char('o');
-        assert!(state.backspace());
-        assert_eq!(state.input, "c");
-        assert!(state.backspace());
-        assert_eq!(state.input, "");
-        assert!(state.backspace());
-        assert_eq!(state.path, vec!["nested".to_string()]);
-        assert!(state.backspace());
-        assert!(state.path.is_empty());
-        assert!(!state.backspace());
-        let _ = tree; // silence unused in this branch
+        assert!(state.backspace(&tree));
+        assert_eq!(state.input(), "c");
+        assert!(state.backspace(&tree));
+        assert_eq!(state.input(), "");
+        assert!(state.backspace(&tree));
+        assert_eq!(state.path(), &["nested".to_string()][..]);
+        assert!(state.backspace(&tree));
+        assert!(state.path().is_empty());
+        assert!(!state.backspace(&tree));
     }
 
     #[test]
     fn visible_filters_directories_by_prefix() {
         let tree = example_tree();
         let mut state = BrowseState::new();
-        state.path.push("nested".into());
+        state.set_path(vec!["nested".into()]);
         state.type_char('d');
         let names: Vec<String> = state
             .visible(&tree)
@@ -427,10 +471,81 @@ mod tests {
     fn activate_descends_into_directory_entries() {
         let tree = example_tree();
         let mut state = BrowseState::new();
-        // First child at root should be a directory entry given example corpus.
-        state.selection = Some(0);
+        state.set_selection(Some(0));
         let id = state.activate(&tree);
         assert!(id.is_none(), "activating a directory returns no snippet id");
-        assert_eq!(state.path.len(), 1);
+        assert_eq!(state.path().len(), 1);
+    }
+
+    #[test]
+    fn ascend_restores_cursor_onto_descended_child() {
+        // Build a tree with several siblings so "first/last by accident"
+        // can't pass the test.
+        let mut root = DirNode::default();
+        root.children.insert("alpha".into(), DirNode::default());
+        root.children.insert("docker".into(), DirNode::default());
+        root.children.insert("nested".into(), DirNode::default());
+        let tree = BrowseTree { root };
+
+        let mut state = BrowseState::new();
+        // descend into "docker" via activate, after positioning the cursor
+        let visible = state.visible(&tree);
+        let docker_idx = visible
+            .iter()
+            .position(|e| matches!(e, BrowseEntry::Directory(n) if n == "docker"))
+            .unwrap();
+        state.set_selection(Some(docker_idx));
+        assert!(state.activate(&tree).is_none());
+        assert_eq!(state.path(), &["docker".to_string()][..]);
+
+        // Now ascend (Backspace at empty filter); cursor must land on "docker".
+        assert!(state.backspace(&tree));
+        let visible_after = state.visible(&tree);
+        let landed = state.selection().expect("selection present");
+        assert!(matches!(&visible_after[landed], BrowseEntry::Directory(n) if n == "docker"));
+    }
+
+    #[test]
+    fn ascend_preserves_parent_filter_text() {
+        let mut root = DirNode::default();
+        root.children.insert("alpha".into(), DirNode::default());
+        root.children.insert("docker".into(), DirNode::default());
+        let tree = BrowseTree { root };
+
+        let mut state = BrowseState::new();
+        state.type_char('d');
+        // Tab-complete descends into "docker" since it is the unique match.
+        assert!(state.tab_complete(&tree));
+        assert_eq!(state.path(), &["docker".to_string()][..]);
+
+        // Ascend; the parent's "d" must come back, and cursor must be on "docker".
+        assert!(state.backspace(&tree));
+        assert_eq!(state.input(), "d");
+        let visible = state.visible(&tree);
+        let landed = state.selection().expect("selection present");
+        assert!(matches!(&visible[landed], BrowseEntry::Directory(n) if n == "docker"));
+    }
+
+    #[test]
+    fn ascend_falls_back_to_zero_when_child_missing() {
+        let mut root = DirNode::default();
+        root.children.insert("alpha".into(), DirNode::default());
+        root.children.insert("gone".into(), DirNode::default());
+        let mut tree = BrowseTree { root };
+
+        let mut state = BrowseState::new();
+        let idx = state
+            .visible(&tree)
+            .iter()
+            .position(|e| matches!(e, BrowseEntry::Directory(n) if n == "gone"))
+            .unwrap();
+        state.set_selection(Some(idx));
+        assert!(state.activate(&tree).is_none());
+
+        // Remove the child between descend and ascend.
+        tree.root.children.remove("gone");
+
+        assert!(state.backspace(&tree));
+        assert_eq!(state.selection(), Some(0));
     }
 }

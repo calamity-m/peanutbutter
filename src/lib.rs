@@ -46,6 +46,7 @@ pub mod parser;
 pub mod search;
 pub(crate) mod shell;
 pub mod stats;
+pub mod tree_picker;
 pub mod tui_chrome;
 
 /// The binary name used in help text and warning messages.

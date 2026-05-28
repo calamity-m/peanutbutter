@@ -88,16 +88,15 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
                 "Fuzzy",
             ),
             NavigationMode::Browse => (
-                format!("{}{}", self.browse.path_display(), self.browse.input),
+                format!("{}{}", self.browse.path_display(), self.browse.input()),
                 browse_visible.len().to_string(),
                 "Browse",
             ),
             NavigationMode::Tags => (
-                tags_prompt(self.tags.drill.as_ref(), &self.tags.drill_filter)
-                    .unwrap_or_else(|| self.tags.filter.clone()),
+                tags_prompt(self.tags.drill(), self.tags.drill_filter())
+                    .unwrap_or_else(|| self.tags.filter().to_string()),
                 self.tags
-                    .drill
-                    .as_ref()
+                    .drill()
                     .map(|_| tag_snippets.len().to_string())
                     .unwrap_or_else(|| format!("{}/{}", tags_visible.len(), self.tag_index.len())),
                 "Tags",
@@ -146,11 +145,11 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
             }
             NavigationMode::Browse => {
                 let total = browse_visible.len();
-                let selected = self.browse.selection.unwrap_or(0);
+                let selected = self.browse.selection().unwrap_or(0);
                 let padding = (main[0].height as usize).saturating_sub(total);
                 let mut items: Vec<ListItem<'_>> =
                     (0..padding).map(|_| ListItem::new("")).collect();
-                let current_dir = self.tree.get(&self.browse.path);
+                let current_dir = self.tree.get(self.browse.path());
                 items.extend(browse_visible.iter().enumerate().rev().map(|(idx, entry)| {
                     let label = match entry {
                         BrowseEntry::Directory(name) => {
@@ -187,9 +186,9 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
                     TagView {
                         visible: &tags_visible,
                         snippets: &tag_snippets,
-                        list_selected: self.tags.list_selection.unwrap_or(0),
-                        drill_selected: self.tags.drill_selection.unwrap_or(0),
-                        drill: self.tags.drill.as_ref(),
+                        list_selected: self.tags.list_selection().unwrap_or(0),
+                        drill_selected: self.tags.drill_selection().unwrap_or(0),
+                        drill: self.tags.drill(),
                         only_untagged: self.tag_index.len() == 1
                             && self.tag_index.contains_key(&crate::index::TagKey::Untagged),
                     },
@@ -210,10 +209,15 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
                     .unwrap_or(PickerPreview::Empty)
             }
             NavigationMode::Browse => self.browse_preview(&browse_visible),
-            NavigationMode::Tags => self
-                .selected_tag_snippet()
-                .map(PickerPreview::Snippet)
-                .unwrap_or(PickerPreview::Empty),
+            NavigationMode::Tags => {
+                if self.tags.drill().is_some() {
+                    self.selected_tag_snippet()
+                        .map(PickerPreview::Snippet)
+                        .unwrap_or(PickerPreview::Empty)
+                } else {
+                    self.tag_list_preview(&tags_visible)
+                }
+            }
         };
         frame.render_widget(
             Block::default()
@@ -252,7 +256,7 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
                 }
                 NavigationMode::Browse => {
                     let selected_is_dir = browse_visible
-                        .get(self.browse.selection.unwrap_or(0))
+                        .get(self.browse.selection().unwrap_or(0))
                         .map(|e| matches!(e, BrowseEntry::Directory(_)))
                         .unwrap_or(false);
                     if selected_is_dir {
@@ -263,7 +267,7 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
                     }
                 }
                 NavigationMode::Tags => {
-                    if self.tags.drill.is_some() {
+                    if self.tags.drill().is_some() {
                         "type filter  enter accept  esc tags  backspace clear/back  ctrl+t search"
                             .to_string()
                     } else {
@@ -278,7 +282,7 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
         if matches!(self.nav_mode, NavigationMode::Fuzzy | NavigationMode::Tags) {
             let cursor_col = match self.nav_mode {
                 NavigationMode::Fuzzy => self.fuzzy.cursor_col(),
-                NavigationMode::Tags => self.tags.drill.as_ref().map_or_else(
+                NavigationMode::Tags => self.tags.drill().map_or_else(
                     || self.tags.cursor_col(),
                     |tag| tags_prompt_prefix_len(tag) + self.tags.drill_cursor_col(),
                 ),
@@ -435,8 +439,33 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
         )
     }
 
+    fn tag_list_preview<'a>(&'a self, visible: &[super::app::TagListEntry]) -> PickerPreview<'a> {
+        let Some(entry) = visible.get(self.tags.list_selection().unwrap_or(0)) else {
+            return PickerPreview::Empty;
+        };
+        let Some(ids) = self.tag_index.get(&entry.key) else {
+            return PickerPreview::Empty;
+        };
+        let mut md = String::new();
+        md.push_str("# ");
+        md.push_str(tag_label(&entry.key));
+        md.push_str(&format!(" ({})\n\n---\n\n", ids.len()));
+        if ids.is_empty() {
+            md.push_str("_(no snippets)_\n");
+            return PickerPreview::Markdown(md);
+        }
+        for id in ids {
+            if let Some(snippet) = self.index.get(id) {
+                md.push_str("- ");
+                md.push_str(snippet.name());
+                md.push('\n');
+            }
+        }
+        PickerPreview::Markdown(md)
+    }
+
     fn browse_preview<'a>(&'a self, visible: &[BrowseEntry]) -> PickerPreview<'a> {
-        let Some(entry) = visible.get(self.browse.selection.unwrap_or(0)) else {
+        let Some(entry) = visible.get(self.browse.selection().unwrap_or(0)) else {
             return PickerPreview::Empty;
         };
         match entry {
@@ -446,7 +475,7 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
                 .map(PickerPreview::Snippet)
                 .unwrap_or(PickerPreview::Empty),
             BrowseEntry::Directory(name) => {
-                let mut path = self.browse.path.clone();
+                let mut path = self.browse.path().to_vec();
                 path.push(name.clone());
                 let Some(node) = self.tree.get(&path) else {
                     return PickerPreview::Empty;

@@ -30,143 +30,143 @@ pub enum NavigationMode {
     Tags,
 }
 
-/// State for the tag-based picker view.
-///
-/// The tag view keeps its own filter buffer so it does not inherit fuzzy-search
-/// ranking or cursor behavior. `drill` records whether the user is looking at
-/// the tag list or the snippets for one tag.
-#[derive(Debug, Default, Clone, PartialEq, Eq)]
+/// State for the tag-based picker view, backed by a [`TreePicker`] with at
+/// most two levels: the tag list at depth 0 and a drilled snippet list at
+/// depth 1. Going up (Esc / Backspace at empty filter) restores the cursor
+/// onto the tag the user drilled into.
+#[derive(Debug, Default, Clone)]
 pub struct TagsState {
-    /// Case-sensitive tag-list filter.
-    pub filter: String,
-    /// Cursor position inside `filter`.
-    pub cursor: usize,
-    /// Highlighted row in the tag-list phase.
-    pub list_selection: Option<usize>,
-    /// Active drilled tag, or `None` while showing the tag list.
-    pub drill: Option<TagKey>,
-    /// Case-insensitive snippet-name filter while drilled into one tag.
-    pub drill_filter: String,
-    /// Cursor position inside `drill_filter`.
-    pub drill_cursor: usize,
-    /// Highlighted row in the drilled snippet-list phase.
-    pub drill_selection: Option<usize>,
+    pub picker: crate::tree_picker::TreePicker<TagKey>,
 }
 
 impl TagsState {
     pub fn new() -> Self {
         Self {
-            filter: String::new(),
-            cursor: 0,
-            list_selection: Some(0),
-            drill: None,
-            drill_filter: String::new(),
-            drill_cursor: 0,
-            drill_selection: Some(0),
+            picker: crate::tree_picker::TreePicker::new(),
+        }
+    }
+
+    pub fn drill(&self) -> Option<&TagKey> {
+        self.picker.path().first()
+    }
+
+    pub fn filter(&self) -> &str {
+        if self.picker.depth() == 0 {
+            self.picker.filter()
+        } else {
+            ""
+        }
+    }
+
+    pub fn list_selection(&self) -> Option<usize> {
+        if self.picker.depth() == 0 {
+            self.picker.selection()
+        } else {
+            None
+        }
+    }
+
+    pub fn drill_filter(&self) -> &str {
+        if self.picker.depth() >= 1 {
+            self.picker.filter()
+        } else {
+            ""
+        }
+    }
+
+    pub fn drill_selection(&self) -> Option<usize> {
+        if self.picker.depth() >= 1 {
+            self.picker.selection()
+        } else {
+            None
         }
     }
 
     pub fn type_char(&mut self, c: char) {
-        self.filter.insert(self.cursor, c);
-        self.cursor += c.len_utf8();
-        self.list_selection = Some(0);
+        self.picker.type_char(c);
     }
 
     pub fn backspace(&mut self) -> bool {
-        if self.cursor == 0 {
-            return false;
-        }
-        let prev = self.filter[..self.cursor]
-            .char_indices()
-            .next_back()
-            .map(|(i, _)| i)
-            .unwrap_or(0);
-        self.filter.remove(prev);
-        self.cursor = prev;
-        self.list_selection = Some(0);
-        true
+        self.picker.input_backspace()
     }
 
     pub fn cursor_left(&mut self) {
-        if self.cursor == 0 {
-            return;
-        }
-        self.cursor = self.filter[..self.cursor]
-            .char_indices()
-            .next_back()
-            .map(|(i, _)| i)
-            .unwrap_or(0);
+        self.picker.cursor_left();
     }
 
     pub fn cursor_right(&mut self) {
-        if self.cursor >= self.filter.len() {
-            return;
-        }
-        let c = self.filter[self.cursor..].chars().next().unwrap();
-        self.cursor += c.len_utf8();
+        self.picker.cursor_right();
     }
 
     pub fn move_cursor(&mut self, delta: i32, visible_len: usize) {
-        if visible_len == 0 {
-            self.list_selection = None;
-            return;
-        }
-        let current = self.list_selection.unwrap_or(0) as i32;
-        let next = (current + delta).clamp(0, visible_len as i32 - 1);
-        self.list_selection = Some(next as usize);
+        self.picker.move_selection(delta, visible_len);
     }
 
     pub fn type_drill_char(&mut self, c: char) {
-        self.drill_filter.insert(self.drill_cursor, c);
-        self.drill_cursor += c.len_utf8();
-        self.drill_selection = Some(0);
+        self.picker.type_char(c);
     }
 
     pub fn drill_backspace(&mut self) -> bool {
-        if self.drill_cursor == 0 {
-            return false;
-        }
-        let prev = self.drill_filter[..self.drill_cursor]
-            .char_indices()
-            .next_back()
-            .map(|(i, _)| i)
-            .unwrap_or(0);
-        self.drill_filter.remove(prev);
-        self.drill_cursor = prev;
-        self.drill_selection = Some(0);
-        true
+        self.picker.input_backspace()
     }
 
     pub fn drill_cursor_left(&mut self) {
-        if self.drill_cursor == 0 {
-            return;
-        }
-        self.drill_cursor = self.drill_filter[..self.drill_cursor]
-            .char_indices()
-            .next_back()
-            .map(|(i, _)| i)
-            .unwrap_or(0);
+        self.picker.cursor_left();
     }
 
     pub fn drill_cursor_right(&mut self) {
-        if self.drill_cursor >= self.drill_filter.len() {
-            return;
-        }
-        let c = self.drill_filter[self.drill_cursor..]
-            .chars()
-            .next()
-            .unwrap();
-        self.drill_cursor += c.len_utf8();
+        self.picker.cursor_right();
     }
 
-    /// Display-column offset of the cursor within the tag filter.
+    /// Display-column offset of the cursor at the current level.
     pub fn cursor_col(&self) -> usize {
-        self.filter[..self.cursor].chars().count()
+        self.picker.cursor_col()
     }
 
-    /// Display-column offset of the cursor within the drilled snippet filter.
     pub fn drill_cursor_col(&self) -> usize {
-        self.drill_filter[..self.drill_cursor].chars().count()
+        self.picker.cursor_col()
+    }
+
+    /// Descend into `tag`, recording it on the tag-list frame so a later
+    /// ascend restores the cursor.
+    pub fn enter_drill(&mut self, tag: TagKey) {
+        // Only meaningful at the tag-list level.
+        if self.picker.depth() == 0 {
+            self.picker.descend(tag);
+        }
+    }
+
+    /// Exit the drilled-snippet level. Caller is responsible for calling
+    /// [`restore_after_drill_exit`] with the parent's visible tag list to
+    /// restore the cursor onto the previously-drilled tag.
+    pub fn exit_drill(&mut self) -> bool {
+        self.picker.ascend().is_some()
+    }
+
+    /// After [`exit_drill`](Self::exit_drill), restore selection onto the
+    /// tag we drilled into.
+    pub(crate) fn restore_after_drill_exit(&mut self, visible: &[TagListEntry]) {
+        self.picker
+            .restore_selection(visible, |entry| Some(entry.key.clone()));
+    }
+
+    pub fn set_list_selection(&mut self, selection: Option<usize>) {
+        if self.picker.depth() == 0 {
+            self.picker.set_selection(selection);
+        }
+    }
+
+    pub fn set_drill_selection(&mut self, selection: Option<usize>) {
+        if self.picker.depth() >= 1 {
+            self.picker.set_selection(selection);
+        }
+    }
+
+    /// Test/setup helper: overwrite the current level's filter text.
+    pub fn set_filter(&mut self, filter: String) {
+        let frame = self.picker.current_mut();
+        frame.cursor = filter.len();
+        frame.filter = filter;
     }
 }
 
@@ -486,12 +486,10 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
         self.tag_index = index.tag_index();
         if self
             .tags
-            .drill
-            .as_ref()
+            .drill()
             .is_some_and(|tag| !self.tag_index.contains_key(tag))
         {
-            self.tags.drill = None;
-            self.tags.drill_selection = Some(0);
+            self.tags.exit_drill();
         }
         self.index = index;
         self.screen = Screen::Select;
@@ -561,14 +559,12 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
     fn handle_select_key(&mut self, key: KeyEvent) -> AppEvent {
         if matches!(key.code, KeyCode::Esc) {
             // Tag-drill handles esc in its own key handler (climbs out of drill).
-            if matches!(self.nav_mode, NavigationMode::Tags) && self.tags.drill.is_some() {
+            if matches!(self.nav_mode, NavigationMode::Tags) && self.tags.drill().is_some() {
                 // fall through to mode-specific handler
             } else if matches!(self.nav_mode, NavigationMode::Browse)
-                && !self.browse.path.is_empty()
+                && !self.browse.path().is_empty()
             {
-                self.browse.path.pop();
-                self.browse.input.clear();
-                self.browse.selection = Some(0);
+                self.browse.ascend(&self.tree);
                 self.preview_scroll = 0;
                 self.status = None;
                 return AppEvent::Continue;
@@ -669,7 +665,7 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
                 self.preview_scroll = 0;
             }
             KeyCode::Backspace => {
-                self.browse.backspace();
+                self.browse.backspace(&self.tree);
                 self.preview_scroll = 0;
             }
             KeyCode::Tab => {
@@ -686,13 +682,13 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
             }
             KeyCode::PageUp => {
                 if !visible.is_empty() {
-                    self.browse.selection = Some(visible.len() - 1);
+                    self.browse.set_selection(Some(visible.len() - 1));
                 }
                 self.preview_scroll = 0;
             }
             KeyCode::PageDown => {
                 if !visible.is_empty() {
-                    self.browse.selection = Some(0);
+                    self.browse.set_selection(Some(0));
                 }
                 self.preview_scroll = 0;
             }
@@ -709,11 +705,11 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
     }
 
     fn handle_tags_key(&mut self, key: KeyEvent) -> AppEvent {
-        if self.tags.drill.is_some() {
+        if self.tags.drill().is_some() {
             let visible = self.visible_tag_snippets();
             match key.code {
                 KeyCode::Esc => {
-                    self.tags.drill = None;
+                    self.exit_tag_drill();
                     self.preview_scroll = 0;
                 }
                 KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -722,29 +718,29 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
                 }
                 KeyCode::Backspace => {
                     if !self.tags.drill_backspace() {
-                        self.tags.drill = None;
+                        self.exit_tag_drill();
                     }
                     self.preview_scroll = 0;
                 }
                 KeyCode::Left => self.tags.drill_cursor_left(),
                 KeyCode::Right => self.tags.drill_cursor_right(),
                 KeyCode::Up => {
-                    move_selection(&mut self.tags.drill_selection, 1, visible.len());
+                    self.tags.move_cursor(1, visible.len());
                     self.preview_scroll = 0;
                 }
                 KeyCode::Down => {
-                    move_selection(&mut self.tags.drill_selection, -1, visible.len());
+                    self.tags.move_cursor(-1, visible.len());
                     self.preview_scroll = 0;
                 }
                 KeyCode::PageUp => {
                     if !visible.is_empty() {
-                        self.tags.drill_selection = Some(visible.len() - 1);
+                        self.tags.set_drill_selection(Some(visible.len() - 1));
                     }
                     self.preview_scroll = 0;
                 }
                 KeyCode::PageDown => {
                     if !visible.is_empty() {
-                        self.tags.drill_selection = Some(0);
+                        self.tags.set_drill_selection(Some(0));
                     }
                     self.preview_scroll = 0;
                 }
@@ -782,23 +778,20 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
             }
             KeyCode::PageUp => {
                 if !visible.is_empty() {
-                    self.tags.list_selection = Some(visible.len() - 1);
+                    self.tags.set_list_selection(Some(visible.len() - 1));
                 }
                 self.preview_scroll = 0;
             }
             KeyCode::PageDown => {
                 if !visible.is_empty() {
-                    self.tags.list_selection = Some(0);
+                    self.tags.set_list_selection(Some(0));
                 }
                 self.preview_scroll = 0;
             }
             KeyCode::Enter => {
-                let selected = self.tags.list_selection.unwrap_or(0);
+                let selected = self.tags.list_selection().unwrap_or(0);
                 if let Some(entry) = visible.get(selected) {
-                    self.tags.drill = Some(entry.key.clone());
-                    self.tags.drill_filter.clear();
-                    self.tags.drill_cursor = 0;
-                    self.tags.drill_selection = Some(0);
+                    self.tags.enter_drill(entry.key.clone());
                     self.preview_scroll = 0;
                     self.status = None;
                 }
@@ -806,6 +799,16 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
             _ => {}
         }
         AppEvent::Continue
+    }
+
+    /// Ascend out of the drilled tag, restoring the cursor in the tag list
+    /// onto the tag we drilled into.
+    fn exit_tag_drill(&mut self) {
+        if !self.tags.exit_drill() {
+            return;
+        }
+        let visible = self.visible_tags();
+        self.tags.restore_after_drill_exit(&visible);
     }
 
     /// Transition to the prompt screen, or complete immediately if the snippet
@@ -859,7 +862,7 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
 
     pub(crate) fn selected_browse_snippet(&self) -> Option<&IndexedSnippet> {
         let visible = self.browse.visible(&self.tree);
-        let idx = self.browse.selection.unwrap_or(0);
+        let idx = self.browse.selection().unwrap_or(0);
         let entry = visible.get(idx)?;
         match entry {
             BrowseEntry::Snippet(snippet) => self.index.get(&snippet.id),
@@ -868,7 +871,7 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
     }
 
     pub(crate) fn selected_tag_snippet(&self) -> Option<&IndexedSnippet> {
-        let idx = self.tags.drill_selection.unwrap_or(0);
+        let idx = self.tags.drill_selection().unwrap_or(0);
         let entry = self.visible_tag_snippets().get(idx)?.clone();
         self.index.get(&entry.id)
     }
@@ -878,7 +881,7 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
             .iter()
             .filter_map(|(key, ids)| {
                 let label = tag_label(key);
-                if tag_matches_filter(key, &self.tags.filter) {
+                if tag_matches_filter(key, self.tags.filter()) {
                     Some(TagListEntry {
                         key: key.clone(),
                         label: label.to_string(),
@@ -892,7 +895,7 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
     }
 
     pub(crate) fn visible_tag_snippets(&self) -> Vec<TagSnippetEntry> {
-        let Some(tag) = self.tags.drill.as_ref() else {
+        let Some(tag) = self.tags.drill() else {
             return Vec::new();
         };
         let Some(ids) = self.tag_index.get(tag) else {
@@ -906,11 +909,11 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
                 })
             })
             .filter(|entry| {
-                self.tags.drill_filter.is_empty()
+                self.tags.drill_filter().is_empty()
                     || entry
                         .name
                         .to_lowercase()
-                        .contains(&self.tags.drill_filter.to_lowercase())
+                        .contains(&self.tags.drill_filter().to_lowercase())
             })
             .collect()
     }
@@ -936,12 +939,10 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
     }
 
     fn restore_browse_selection(&mut self, preferred_id: Option<&SnippetId>) {
-        while !self.browse.path.is_empty() && self.tree.get(&self.browse.path).is_none() {
-            self.browse.path.pop();
-        }
+        self.browse.trim_missing_path(&self.tree);
         let visible = self.browse.visible(&self.tree);
         if visible.is_empty() {
-            self.browse.selection = None;
+            self.browse.set_selection(None);
             return;
         }
         if let Some(position) = preferred_id.and_then(|id| {
@@ -950,32 +951,36 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
                 BrowseEntry::Directory(_) => false,
             })
         }) {
-            self.browse.selection = Some(position);
+            self.browse.set_selection(Some(position));
             return;
         }
-        let current = self.browse.selection.unwrap_or(0).min(visible.len() - 1);
-        self.browse.selection = Some(current);
+        let current = self.browse.selection().unwrap_or(0).min(visible.len() - 1);
+        self.browse.set_selection(Some(current));
     }
 
     fn restore_tags_selection(&mut self) {
-        if self.tags.drill.is_some() {
+        if self.tags.drill().is_some() {
             let visible_len = self.visible_tag_snippets().len();
             if visible_len == 0 {
-                self.tags.drill_selection = None;
+                self.tags.set_drill_selection(None);
                 return;
             }
-            let current = self.tags.drill_selection.unwrap_or(0).min(visible_len - 1);
-            self.tags.drill_selection = Some(current);
+            let current = self
+                .tags
+                .drill_selection()
+                .unwrap_or(0)
+                .min(visible_len - 1);
+            self.tags.set_drill_selection(Some(current));
             return;
         }
 
         let visible_len = self.visible_tags().len();
         if visible_len == 0 {
-            self.tags.list_selection = None;
+            self.tags.set_list_selection(None);
             return;
         }
-        let current = self.tags.list_selection.unwrap_or(0).min(visible_len - 1);
-        self.tags.list_selection = Some(current);
+        let current = self.tags.list_selection().unwrap_or(0).min(visible_len - 1);
+        self.tags.set_list_selection(Some(current));
     }
 }
 
@@ -1002,14 +1007,4 @@ fn tag_matches_filter(key: &TagKey, filter: &str) -> bool {
         TagKey::Tag(tag) => filter.is_empty() || tag.contains(filter),
         TagKey::Untagged => filter.is_empty() || tag_label(key).contains(filter),
     }
-}
-
-fn move_selection(selection: &mut Option<usize>, delta: i32, visible_len: usize) {
-    if visible_len == 0 {
-        *selection = None;
-        return;
-    }
-    let current = selection.unwrap_or(0) as i32;
-    let next = (current + delta).clamp(0, visible_len as i32 - 1);
-    *selection = Some(next as usize);
 }
