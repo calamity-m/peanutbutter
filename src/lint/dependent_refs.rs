@@ -4,10 +4,10 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-use crate::command_template::{Fragment, parse_command_template};
 use crate::config::VariableInputConfig;
 use crate::domain::{Snippet, VariableSource, VariableSpec};
 use crate::parser;
+use crate::syntax::{Fragment, parse_command_template};
 
 use super::{
     CODE_FORWARD_VARIABLE_REFERENCE, CODE_INVALID_DEPENDENT_REFERENCE,

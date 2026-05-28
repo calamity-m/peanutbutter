@@ -1,5 +1,3 @@
-use crate::browse::{BrowseEntry, BrowseState, BrowseTree};
-use crate::command_template;
 use crate::config::{SearchConfig, SuggestionCommandsConfig, Theme, VariableInputConfig};
 use crate::domain::{SnippetId, Variable, VariableSource, VariableSpec};
 use crate::frecency::FrecencyStore;
@@ -12,10 +10,12 @@ use std::collections::BTreeMap;
 use std::io;
 use std::path::{Path, PathBuf};
 
+use super::browse::{BrowseEntry, BrowseState, BrowseTree};
 use super::prompt::{
     PromptState, PromptTransition, handle_prompt_key, load_prompt_state, unique_variables,
 };
 use super::{ExecutionOutcome, render_command};
+use crate::syntax as command_template;
 
 /// Navigation mode currently active in the select screen.
 ///
@@ -36,13 +36,13 @@ pub enum NavigationMode {
 /// onto the tag the user drilled into.
 #[derive(Debug, Default, Clone)]
 pub struct TagsState {
-    pub picker: crate::tree_picker::TreePicker<TagKey>,
+    pub picker: super::tree_picker::TreePicker<TagKey>,
 }
 
 impl TagsState {
     pub fn new() -> Self {
         Self {
-            picker: crate::tree_picker::TreePicker::new(),
+            picker: super::tree_picker::TreePicker::new(),
         }
     }
 

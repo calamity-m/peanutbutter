@@ -19,21 +19,16 @@
 //! | [`stats`] | Usage statistics from frecency history |
 //! | [`edit`] | Snippet file target resolution and editor launch for `pb edit` |
 //! | [`new`] | Command capture and snippet creation |
-//! | [`command_template`] | Placeholder parsing and command rendering |
+//! | [`syntax`] | Snippet syntax helpers and command-template rendering |
 //! | [`completions`] | Shell integration and completion scripts |
 //! | [`fuzzy`] | nucleo-backed fuzzy matching |
 //! | [`search`] | Combined fuzzy + frecency ranking |
-//! | [`browse`] | Directory-tree navigation state |
-//! | [`tree_picker`] | Reusable tree-navigation picker state |
-//! | [`tui_chrome`] | Shared TUI frame and theme drawing helpers |
 //! | [`config`] | TOML config loading and theme |
 //! | [`cli`] | Argument parsing and command dispatch |
 //! | [`execute`] | Interactive TUI (ratatui, crossterm) |
 //! | [`lsp`] | Language Server Protocol server (diagnostics, completions, hover, go-to-def) |
 
-pub mod browse;
 pub mod cli;
-pub mod command_template;
 pub mod completions;
 pub mod config;
 pub mod discovery;
@@ -51,8 +46,8 @@ pub mod parser;
 pub mod search;
 pub(crate) mod shell;
 pub mod stats;
-pub mod tree_picker;
-pub mod tui_chrome;
+pub mod syntax;
+pub(crate) mod tui;
 
 /// The binary name used in help text and warning messages.
 pub const BINARY_NAME: &str = "peanutbutter";

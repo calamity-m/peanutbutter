@@ -18,10 +18,12 @@ use crate::{config, config::VariableInputConfig};
 use std::path::PathBuf;
 
 mod app;
+mod browse;
 mod highlight;
 mod prompt;
 mod render;
 mod terminal;
+mod tree_picker;
 
 pub use app::{
     AppEvent, ExecutionApp, NavigationMode, SuggestionProvider, SystemSuggestionProvider,

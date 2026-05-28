@@ -1,4 +1,4 @@
-use crate::command_template::CommandTemplate;
+use crate::syntax::CommandTemplate;
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::path::PathBuf;

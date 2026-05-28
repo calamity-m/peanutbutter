@@ -615,7 +615,7 @@ fn render_picker(
     footer: &str,
 ) {
     use ratatui::widgets::Widget;
-    let content = crate::tui_chrome::Chrome {
+    let content = crate::tui::chrome::Chrome {
         theme,
         mode: "pb new",
         title,
@@ -649,7 +649,7 @@ fn render_picker(
         },
         buf,
     );
-    crate::tui_chrome::draw_divider(area, divider_y, buf, theme);
+    crate::tui::chrome::draw_divider(area, divider_y, buf, theme);
 
     let visible = state.visible();
     let max = list_area.height as usize;
@@ -830,7 +830,7 @@ fn render_confirm(
         }
         Focus::TokenEdit => "type new name   enter commit   esc cancel".to_string(),
     };
-    let content = crate::tui_chrome::Chrome {
+    let content = crate::tui::chrome::Chrome {
         theme,
         mode: "pb new",
         title: "",
@@ -873,7 +873,7 @@ fn render_confirm(
 
     // 2. Preview section.
     if y + 1 < content.y + content.height {
-        crate::tui_chrome::draw_divider(area, y, buf, theme);
+        crate::tui::chrome::draw_divider(area, y, buf, theme);
         y += 1;
         let preview_area = Rect {
             x: content.x,
@@ -891,7 +891,7 @@ fn render_confirm(
 
     // 3. Tokens section.
     if y + 1 < content.y + content.height {
-        crate::tui_chrome::draw_divider(area, y, buf, theme);
+        crate::tui::chrome::draw_divider(area, y, buf, theme);
         y += 1;
         let tokens_area = Rect {
             x: content.x,

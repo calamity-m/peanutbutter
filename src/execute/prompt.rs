@@ -1,7 +1,7 @@
-use crate::command_template::{CommandTemplate, parse_command_template, referenced_names, render};
 use crate::config::Theme;
 use crate::domain::{Variable, VariableSpec};
 use crate::index::SnippetIndex;
+use crate::syntax::{CommandTemplate, parse_command_template, referenced_names, render};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span, Text};

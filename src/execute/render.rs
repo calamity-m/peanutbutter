@@ -16,13 +16,13 @@ use ratatui::style::Style;
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Wrap};
 
-use crate::browse::{BrowseEntry, DirNode};
 use crate::domain::SnippetId;
 use crate::fuzzy::FuzzyScorer;
 use crate::index::IndexedSnippet;
 use crate::search;
 
 use super::app::{ExecutionApp, NavigationMode, Screen, SuggestionProvider, tag_label};
+use super::browse::{BrowseEntry, DirNode};
 use super::prompt::{PromptState, cursor_in_template, render_command_text};
 
 use highlight::{HighlightPattern, compile_highlight_patterns, highlighted_spans, match_positions};

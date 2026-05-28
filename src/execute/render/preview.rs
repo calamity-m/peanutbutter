@@ -8,12 +8,12 @@ use ansi_to_tui::IntoText;
 use ratatui::text::{Line, Span, Text};
 use std::path::Path;
 
-use crate::browse::DirNode;
 use crate::config::Theme;
 use crate::fuzzy::FuzzyScorer;
 use crate::index::IndexedSnippet;
 use crate::search;
 
+use super::super::browse::DirNode;
 use super::super::highlight::highlight_shell;
 use super::super::prompt::unique_variables;
 use super::highlight::{

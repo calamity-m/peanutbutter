@@ -1081,7 +1081,7 @@ fn selected_snippet_is_none_for_empty_tag_drill() {
 fn variable_flow_accepts_default_and_emits_rendered_command() {
     let variables = vec![Variable {
         name: "target".to_string(),
-        source: VariableSource::Default(vec![crate::command_template::Fragment::Literal(
+        source: VariableSource::Default(vec![crate::syntax::Fragment::Literal(
             "world".to_string(),
         )]),
     }];
@@ -1310,7 +1310,7 @@ fn file_local_suggestions_without_default_leave_input_empty() {
 fn inline_default_overrides_config_default() {
     let variables = vec![Variable {
         name: "namespace".to_string(),
-        source: VariableSource::Default(vec![crate::command_template::Fragment::Literal(
+        source: VariableSource::Default(vec![crate::syntax::Fragment::Literal(
             "inline-default".to_string(),
         )]),
     }];
@@ -1349,7 +1349,7 @@ fn inline_default_overrides_config_default() {
 fn inline_default_overrides_file_local_default() {
     let variables = vec![Variable {
         name: "namespace".to_string(),
-        source: VariableSource::Default(vec![crate::command_template::Fragment::Literal(
+        source: VariableSource::Default(vec![crate::syntax::Fragment::Literal(
             "inline-default".to_string(),
         )]),
     }];
@@ -1805,7 +1805,7 @@ fn paste_on_select_screen_is_dropped() {
 fn inline_default_with_embedded_newline_is_preserved() {
     let variables = vec![Variable {
         name: "block".to_string(),
-        source: VariableSource::Default(vec![crate::command_template::Fragment::Literal(
+        source: VariableSource::Default(vec![crate::syntax::Fragment::Literal(
             "line1\nline2".to_string(),
         )]),
     }];
@@ -1905,7 +1905,7 @@ fn dependent_command_sees_confirmed_upstream_value() {
 fn raw_modifier_splices_verbatim_into_command() {
     // Verify the splice form works end-to-end: the second variable's command
     // contains `<#verb:raw>` and should be rendered without quotes.
-    use crate::command_template::{parse_command_template, render};
+    use crate::syntax::{parse_command_template, render};
     let tmpl = parse_command_template("kubectl <#verb:raw> -o name").unwrap();
     let mut confirmed = std::collections::BTreeMap::new();
     confirmed.insert("verb".to_string(), "get pods".to_string());
@@ -1917,7 +1917,7 @@ fn raw_modifier_splices_verbatim_into_command() {
 
 #[test]
 fn quoted_form_handles_apostrophes_in_confirmed_value() {
-    use crate::command_template::{parse_command_template, render};
+    use crate::syntax::{parse_command_template, render};
     let tmpl = parse_command_template("greet <#name>").unwrap();
     let mut confirmed = std::collections::BTreeMap::new();
     confirmed.insert("name".to_string(), "O'Brien".to_string());
@@ -1953,9 +1953,7 @@ fn independent_variables_still_each_get_fresh_suggestions() {
 fn default_input_still_used_on_first_entry_to_default_variable() {
     let variables = vec![Variable {
         name: "kind".to_string(),
-        source: VariableSource::Default(vec![crate::command_template::Fragment::Literal(
-            "pod".to_string(),
-        )]),
+        source: VariableSource::Default(vec![crate::syntax::Fragment::Literal("pod".to_string())]),
     }];
     let mut app = app_with_body("kubectl get <@kind>", variables, TestProvider::default());
     let _ = app.handle_key(press(KeyCode::Enter));
@@ -1983,7 +1981,7 @@ fn dependent_default_renders_confirmed_upstreams_on_first_entry() {
         Variable {
             name: "out".to_string(),
             source: VariableSource::Default(
-                crate::command_template::parse_command_template(
+                crate::syntax::parse_command_template(
                     "<#namespace:raw>.<#secret:raw>.<#key:raw>.out",
                 )
                 .unwrap(),
@@ -2019,7 +2017,7 @@ fn dependent_default_missing_upstream_yields_empty_input() {
         Variable {
             name: "b".to_string(),
             source: VariableSource::Default(
-                crate::command_template::parse_command_template("<#a:raw>.out").unwrap(),
+                crate::syntax::parse_command_template("<#a:raw>.out").unwrap(),
             ),
         },
     ];
@@ -2049,7 +2047,7 @@ fn dependent_default_quoted_form_matches_command_quoting() {
         Variable {
             name: "out".to_string(),
             source: VariableSource::Default(
-                crate::command_template::parse_command_template("<#name>").unwrap(),
+                crate::syntax::parse_command_template("<#name>").unwrap(),
             ),
         },
     ];
@@ -2076,7 +2074,7 @@ fn changing_upstream_dirties_dependent_default_and_preserves_input() {
         Variable {
             name: "out".to_string(),
             source: VariableSource::Default(
-                crate::command_template::parse_command_template("<#a:raw>.out").unwrap(),
+                crate::syntax::parse_command_template("<#a:raw>.out").unwrap(),
             ),
         },
     ];

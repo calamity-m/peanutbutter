@@ -1,6 +1,6 @@
+use super::tree_picker::TreePicker;
 use crate::domain::SnippetId;
 use crate::index::SnippetIndex;
-use crate::tree_picker::TreePicker;
 use std::collections::BTreeMap;
 use std::path::{Component, Path};
 
