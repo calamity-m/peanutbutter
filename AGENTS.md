@@ -84,6 +84,7 @@ Do not comment what the code already says plainly.
 This repo uses [`prek`](https://github.com/calam1/prek) (configured in `prek.toml`). Run `prek install` once per checkout to activate hooks. Configured hooks:
 - **pre-commit**: `cargo fmt --check`, `cargo build`, `cargo test`, `cargo clippy -- -D warnings`
 - **pre-push to main**: `cargo clippy -- -D warnings`
+- **manual**: `cargo tarpaulin --out Html` — run on demand with `prek run --stage manual cargo-coverage`; requires `cargo install cargo-tarpaulin` once
 
 If the user continually asks to run the same check → suggest adding it to `prek.toml` as a pre-commit hook.
 

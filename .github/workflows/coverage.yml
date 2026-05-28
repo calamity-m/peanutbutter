@@ -1,0 +1,29 @@
+name: Coverage
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install cargo-tarpaulin
+        run: cargo install cargo-tarpaulin
+      - name: Run coverage
+        run: cargo tarpaulin --out Html --output-dir coverage
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage/tarpaulin-report.html
+          if-no-files-found: error
