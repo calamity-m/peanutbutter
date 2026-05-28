@@ -1,10 +1,16 @@
 //! Read-only snippet linting.
 
-use crate::config::{AppConfig, LintConfig, Paths, VariableInputConfig};
-use crate::domain::{SnippetFile, SnippetId, VariableSource, VariableSpec};
+mod commands;
+mod dependent_refs;
+mod frontmatter;
+mod gc;
+mod output;
+mod structure;
+mod suppression;
+
+use crate::config::AppConfig;
 use crate::{discovery, parser};
 use serde::Serialize;
-use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -109,10 +115,11 @@ impl LintResult {
     }
 }
 
-struct FileContext {
+/// Per-file state threaded through all lint rule functions.
+pub(super) struct FileContext {
     path: PathBuf,
     content: String,
-    parsed: SnippetFile,
+    parsed: crate::domain::SnippetFile,
 }
 
 /// Run lint over the configured snippet roots and write the selected output
@@ -154,35 +161,47 @@ pub fn run<W: Write>(
     }
 
     for file in &files {
-        findings.extend(lint_frontmatter_source(&file.path, &file.content));
-        findings.extend(lint_duplicate_slugs(&file.path, &file.content));
-        findings.extend(lint_unused_file_variables(file));
-        findings.extend(lint_static_inline_commands(file));
-        findings.extend(lint_duplicate_inline_commands(file));
-        findings.extend(lint_dependent_references(file, &config.variables));
+        findings.extend(frontmatter::lint_frontmatter_source(
+            &file.path,
+            &file.content,
+        ));
+        findings.extend(structure::lint_duplicate_slugs(&file.path, &file.content));
+        findings.extend(frontmatter::lint_unused_file_variables(file));
+        findings.extend(commands::lint_static_inline_commands(file));
+        findings.extend(commands::lint_duplicate_inline_commands(file));
+        findings.extend(dependent_refs::lint_dependent_references(
+            file,
+            &config.variables,
+        ));
         if options.strict {
-            findings.extend(lint_markdown_structure(&file.path, &file.content));
-            findings.extend(lint_missing_code_languages(file));
-            findings.extend(lint_frontmatter_overrides(file, &config.variables));
+            findings.extend(structure::lint_markdown_structure(
+                &file.path,
+                &file.content,
+            ));
+            findings.extend(structure::lint_missing_code_languages(file));
+            findings.extend(frontmatter::lint_frontmatter_overrides(
+                file,
+                &config.variables,
+            ));
         }
     }
 
-    findings.extend(lint_unused_config_variables(
+    findings.extend(frontmatter::lint_unused_config_variables(
         &config.variables,
         &config.paths.config_file,
         &files,
     ));
     let index =
         crate::index::SnippetIndex::from_files(files.iter().map(|file| file.parsed.clone()));
-    findings.extend(lint_gc(&config.paths, &index)?);
-    attach_suppress_paths(&mut findings, &files);
-    findings.retain(|finding| !is_suppressed(finding, &config.lint));
+    findings.extend(gc::lint_gc(&config.paths, &index)?);
+    suppression::attach_suppress_paths(&mut findings, &files);
+    findings.retain(|finding| !suppression::is_suppressed(finding, &config.lint));
     sort_findings(&mut findings);
     let result = LintResult { findings };
     if options.json {
-        render_json(&result, writer)?;
+        output::render_json(&result, writer)?;
     } else {
-        render_pretty(&result, writer)?;
+        output::render_pretty(&result, writer)?;
     }
     Ok(result)
 }
@@ -200,17 +219,23 @@ pub fn lint_file(path: &Path, root: &Path, content: &str, config: &AppConfig) ->
         parsed,
     };
     let mut findings = Vec::new();
-    findings.extend(lint_frontmatter_source(path, content));
-    findings.extend(lint_duplicate_slugs(path, content));
-    findings.extend(lint_unused_file_variables(&ctx));
-    findings.extend(lint_static_inline_commands(&ctx));
-    findings.extend(lint_duplicate_inline_commands(&ctx));
-    findings.extend(lint_dependent_references(&ctx, &config.variables));
-    findings.extend(lint_markdown_structure(path, content));
-    findings.extend(lint_missing_code_languages(&ctx));
-    findings.extend(lint_frontmatter_overrides(&ctx, &config.variables));
-    attach_suppress_paths(&mut findings, &[ctx]);
-    findings.retain(|f| !is_suppressed(f, &config.lint));
+    findings.extend(frontmatter::lint_frontmatter_source(path, content));
+    findings.extend(structure::lint_duplicate_slugs(path, content));
+    findings.extend(frontmatter::lint_unused_file_variables(&ctx));
+    findings.extend(commands::lint_static_inline_commands(&ctx));
+    findings.extend(commands::lint_duplicate_inline_commands(&ctx));
+    findings.extend(dependent_refs::lint_dependent_references(
+        &ctx,
+        &config.variables,
+    ));
+    findings.extend(structure::lint_markdown_structure(path, content));
+    findings.extend(structure::lint_missing_code_languages(&ctx));
+    findings.extend(frontmatter::lint_frontmatter_overrides(
+        &ctx,
+        &config.variables,
+    ));
+    suppression::attach_suppress_paths(&mut findings, &[ctx]);
+    findings.retain(|f| !suppression::is_suppressed(f, &config.lint));
     sort_findings(&mut findings);
     findings
 }
@@ -237,812 +262,13 @@ fn validate_roots(roots: &[PathBuf]) -> io::Result<()> {
     Ok(())
 }
 
-fn render_json<W: Write>(result: &LintResult, writer: &mut W) -> io::Result<()> {
-    serde_json::to_writer_pretty(&mut *writer, result).map_err(io::Error::other)?;
-    writeln!(writer)
-}
-
-fn render_pretty<W: Write>(result: &LintResult, writer: &mut W) -> io::Result<()> {
-    if result.findings.is_empty() {
-        writeln!(writer, "No lint findings.")?;
-        return Ok(());
-    }
-    let mut current: Option<&Path> = None;
-    for finding in &result.findings {
-        if current != Some(finding.path.as_path()) {
-            if current.is_some() {
-                writeln!(writer)?;
-            }
-            writeln!(writer, "{}", finding.path.display())?;
-            current = Some(&finding.path);
-        }
-        let sev = match finding.severity {
-            LintSeverity::Error => "error",
-            LintSeverity::Warning => "warning",
-        };
-        let line = finding.line.map(|l| format!(":{l}")).unwrap_or_default();
-        let snippet = finding
-            .snippet_id
-            .as_deref()
-            .map(|id| format!(" [{id}]"))
-            .unwrap_or_default();
-        writeln!(
-            writer,
-            "  {sev}{} {}{}: {}",
-            line, finding.code, snippet, finding.message
-        )?;
-        if let Some(detail) = &finding.detail {
-            writeln!(writer, "    {detail}")?;
-        }
-    }
-    Ok(())
-}
-
-fn lint_frontmatter_source(path: &Path, content: &str) -> Vec<LintFinding> {
-    let lines: Vec<&str> = content.lines().collect();
-    if lines.first().map(|l| l.trim()) != Some("---") {
-        return Vec::new();
-    }
-    let Some(end) = lines
-        .iter()
-        .enumerate()
-        .skip(1)
-        .find(|(_, line)| line.trim() == "---")
-        .map(|(idx, _)| idx)
-    else {
-        return vec![finding(
-            LintSeverity::Error,
-            CODE_BROKEN_FRONTMATTER,
-            path.to_path_buf(),
-            Some(1),
-            None,
-            "frontmatter block is not terminated".to_string(),
-            None,
-        )];
-    };
-    let mut out = Vec::new();
-    let mut i = 1;
-    while i < end {
-        let trimmed = lines[i].trim();
-        if trimmed.is_empty() || trimmed.starts_with('#') {
-            i += 1;
-            continue;
-        }
-        if !trimmed.contains(':') && !trimmed.starts_with('-') {
-            out.push(finding(
-                LintSeverity::Error,
-                CODE_BROKEN_FRONTMATTER,
-                path.to_path_buf(),
-                Some(i + 1),
-                None,
-                "frontmatter line is not a supported key/value entry".to_string(),
-                None,
-            ));
-        }
-        if let Some((key, value)) = trimmed.split_once(':') {
-            if key.trim().is_empty() {
-                out.push(finding(
-                    LintSeverity::Error,
-                    CODE_BROKEN_FRONTMATTER,
-                    path.to_path_buf(),
-                    Some(i + 1),
-                    None,
-                    "frontmatter key is empty".to_string(),
-                    None,
-                ));
-            }
-            if value.trim().starts_with('[') && !value.trim().ends_with(']') {
-                out.push(finding(
-                    LintSeverity::Error,
-                    CODE_BROKEN_FRONTMATTER,
-                    path.to_path_buf(),
-                    Some(i + 1),
-                    None,
-                    "inline list is not closed".to_string(),
-                    None,
-                ));
-            }
-        }
-        i += 1;
-    }
-    out
-}
-
-fn lint_duplicate_slugs(path: &Path, content: &str) -> Vec<LintFinding> {
-    let mut first: HashMap<String, usize> = HashMap::new();
-    let mut out = Vec::new();
-    for (idx, line) in content.lines().enumerate() {
-        if let Some(heading) = snippet_heading(line) {
-            let slug = slugify(&heading);
-            if let Some(first_line) = first.get(&slug) {
-                out.push(finding(
-                    LintSeverity::Warning,
-                    CODE_DUPLICATE_SLUG,
-                    path.to_path_buf(),
-                    Some(idx + 1),
-                    None,
-                    format!("snippet heading duplicates base slug '{slug}'"),
-                    Some(format!("first occurrence is on line {first_line}")),
-                ));
-            } else {
-                first.insert(slug, idx + 1);
-            }
-        }
-    }
-    out
-}
-
-fn lint_unused_file_variables(file: &FileContext) -> Vec<LintFinding> {
-    let referenced = referenced_variables(file);
-    let lines = frontmatter_variable_lines(&file.content);
-    file.parsed
-        .frontmatter
-        .variables
-        .keys()
-        .filter(|name| !referenced.contains(*name))
-        .map(|name| {
-            finding(
-                LintSeverity::Warning,
-                CODE_UNUSED_VARIABLE,
-                file.path.clone(),
-                lines.get(name).copied(),
-                None,
-                format!(
-                    "frontmatter variable '{name}' is not referenced by any snippet in this file"
-                ),
-                Some(
-                    "remove the variable definition or add a matching <@name> placeholder"
-                        .to_string(),
-                ),
-            )
-        })
-        .collect()
-}
-
-fn lint_unused_config_variables(
-    globals: &BTreeMap<String, VariableInputConfig>,
-    config_file: &Path,
-    files: &[FileContext],
-) -> Vec<LintFinding> {
-    let mut referenced = HashSet::new();
-    for file in files {
-        referenced.extend(referenced_variables(file));
-    }
-    globals
-        .keys()
-        .filter(|name| !referenced.contains(*name))
-        .map(|name| {
-            finding(
-                LintSeverity::Warning,
-                CODE_UNUSED_VARIABLE,
-                config_file.to_path_buf(),
-                None,
-                None,
-                format!("config variable '{name}' is not referenced by any snippet"),
-                Some(
-                    "remove the variable definition or add a matching <@name> placeholder"
-                        .to_string(),
-                ),
-            )
-        })
-        .collect()
-}
-
-fn referenced_variables(file: &FileContext) -> HashSet<String> {
-    file.parsed
-        .snippets
-        .iter()
-        .flat_map(|snippet| {
-            snippet
-                .variables
-                .iter()
-                .map(|variable| variable.name.clone())
-        })
-        .collect()
-}
-
-fn frontmatter_variable_lines(content: &str) -> HashMap<String, usize> {
-    let lines: Vec<&str> = content.lines().collect();
-    if lines.first().map(|line| line.trim()) != Some("---") {
-        return HashMap::new();
-    }
-    let Some(end) = lines
-        .iter()
-        .enumerate()
-        .skip(1)
-        .find(|(_, line)| line.trim() == "---")
-        .map(|(idx, _)| idx)
-    else {
-        return HashMap::new();
-    };
-
-    let mut out = HashMap::new();
-    let Some(variables_line) = lines[..end]
-        .iter()
-        .enumerate()
-        .skip(1)
-        .find(|(_, line)| line.trim() == "variables:")
-        .map(|(idx, _)| idx)
-    else {
-        return out;
-    };
-
-    for (idx, line) in lines.iter().enumerate().take(end).skip(variables_line + 1) {
-        let trimmed = line.trim_start();
-        let indent = line.len() - trimmed.len();
-        if indent == 0 || trimmed.is_empty() || trimmed.starts_with('#') {
-            break;
-        }
-        if let Some((name, rest)) = trimmed.split_once(':')
-            && rest.trim().is_empty()
-        {
-            out.insert(name.trim().to_string(), idx + 1);
-        }
-    }
-    out
-}
-
-/// Find all `<#name>` token spans in `content`. Returns
-/// `(name, line_1based, col_start, col_end)` tuples in document order.
-/// Backslash-escaped `\<#...>` is skipped. The returned columns are 0-based
-/// byte offsets within the line.
-fn find_dependent_ref_spans(content: &str) -> Vec<(String, usize, usize, usize)> {
-    let mut out = Vec::new();
-    for (line_idx, line) in content.lines().enumerate() {
-        let bytes = line.as_bytes();
-        let mut i = 0;
-        while i < bytes.len() {
-            // Skip escaped \<#...>
-            if bytes[i] == b'\\'
-                && i + 2 < bytes.len()
-                && bytes[i + 1] == b'<'
-                && bytes[i + 2] == b'#'
-            {
-                if let Some(off) = line[i + 1..].find('>') {
-                    i = i + 1 + off + 1;
-                    continue;
-                }
-                i += 1;
-                continue;
-            }
-            if bytes[i] == b'<' && i + 1 < bytes.len() && bytes[i + 1] == b'#' {
-                let inner_start = i + 2;
-                let Some(off) = line[inner_start..].find('>') else {
-                    i += 1;
-                    continue;
-                };
-                let inner_end = inner_start + off;
-                let inner = &line[inner_start..inner_end];
-                let name = inner.split(':').next().unwrap_or(inner).trim().to_string();
-                if !name.is_empty() {
-                    out.push((name, line_idx + 1, i, inner_end + 1));
-                }
-                i = inner_end + 1;
-                continue;
-            }
-            i += 1;
-        }
-    }
-    out
-}
-
-/// Walk all suggestion commands in `file` and emit lint findings for
-/// `<#name>` references that are: unknown, forward, or self.
-fn lint_dependent_references(
-    file: &FileContext,
-    globals: &BTreeMap<String, VariableInputConfig>,
-) -> Vec<LintFinding> {
-    use crate::command_template::{Fragment, parse_command_template};
-    let mut out = Vec::new();
-
-    // Pre-scan the file content for all <#name> spans so we can attach
-    // precise diagnostic ranges. We pop spans as we attribute findings to
-    // them — if two refs of the same name exist, each one gets a position
-    // in document order.
-    let mut spans = find_dependent_ref_spans(&file.content);
-    let mut take_span = |name: &str| -> Option<(usize, usize, usize)> {
-        let pos = spans.iter().position(|(n, ..)| n == name)?;
-        let (_, l, c0, c1) = spans.remove(pos);
-        Some((l, c0, c1))
-    };
-
-    for snippet in &file.parsed.snippets {
-        // Build prompt order from the deduplicated body variables. Forward
-        // references are decided against this order.
-        let mut prompt_order: Vec<String> = Vec::new();
-        let mut seen = HashSet::new();
-        for variable in &snippet.variables {
-            if seen.insert(variable.name.clone()) {
-                prompt_order.push(variable.name.clone());
-            }
-        }
-        let order_index: HashMap<String, usize> = prompt_order
-            .iter()
-            .enumerate()
-            .map(|(i, name)| (name.clone(), i))
-            .collect();
-
-        // The universe of declared variables: body, frontmatter, config.
-        let mut declared: HashSet<String> = prompt_order.iter().cloned().collect();
-        declared.extend(file.parsed.frontmatter.variables.keys().cloned());
-        declared.extend(globals.keys().cloned());
-        // Builtins are always declared.
-        declared.insert("file".to_string());
-        declared.insert("directory".to_string());
-
-        let mut templates = Vec::new();
-        for (owner, command) in
-            command_sources(snippet, &file.parsed.frontmatter.variables, globals)
-        {
-            match parse_command_template(&command) {
-                Ok(template) => templates.push((owner, command, template, false)),
-                Err(err) => out.push(
-                    finding(
-                        LintSeverity::Error,
-                        CODE_INVALID_DEPENDENT_REFERENCE,
-                        file.path.clone(),
-                        None,
-                        Some(snippet.id.clone()),
-                        format!(
-                            "suggestion command for variable '{owner}' has an invalid <# reference"
-                        ),
-                        Some(err.to_string()),
-                    )
-                    .with_suppress_command(command),
-                ),
-            }
-        }
-        for (owner, default) in default_sources(snippet) {
-            match parse_command_template(&default) {
-                Ok(template) => templates.push((owner, default, template, true)),
-                Err(err) => out.push(
-                    finding(
-                        LintSeverity::Error,
-                        CODE_INVALID_DEPENDENT_REFERENCE,
-                        file.path.clone(),
-                        None,
-                        Some(snippet.id.clone()),
-                        format!("default for variable '{owner}' has an invalid <# reference"),
-                        Some(err.to_string()),
-                    )
-                    .with_suppress_command(default),
-                ),
-            }
-        }
-
-        for (owner, source, template, is_default) in templates {
-            for fragment in &template {
-                let Fragment::Ref {
-                    name: ref_name,
-                    raw,
-                } = fragment
-                else {
-                    continue;
-                };
-                let span = take_span(ref_name);
-                if ref_name == &owner {
-                    let mut f = finding(
-                        LintSeverity::Error,
-                        CODE_SELF_VARIABLE_REFERENCE,
-                        file.path.clone(),
-                        None,
-                        Some(snippet.id.clone()),
-                        format!("variable '{owner}' references itself via <#{ref_name}>"),
-                        None,
-                    )
-                    .with_suppress_command(source.clone());
-                    if let Some((l, c0, c1)) = span {
-                        f = f.with_span(l, c0, c1);
-                    }
-                    out.push(f);
-                    continue;
-                }
-                if !declared.contains(ref_name) {
-                    let mut f = finding(
-                        LintSeverity::Error,
-                        CODE_UNKNOWN_VARIABLE_REFERENCE,
-                        file.path.clone(),
-                        None,
-                        Some(snippet.id.clone()),
-                        format!("variable '{owner}' references unknown <#{ref_name}>"),
-                        Some("declare it with an inline placeholder, frontmatter variable, or config override".to_string()),
-                    )
-                    .with_suppress_command(source.clone());
-                    if let Some((l, c0, c1)) = span {
-                        f = f.with_span(l, c0, c1);
-                    }
-                    out.push(f);
-                    continue;
-                }
-                if let (Some(&owner_idx), Some(&ref_idx)) =
-                    (order_index.get(&owner), order_index.get(ref_name))
-                    && ref_idx >= owner_idx
-                {
-                    let mut f = finding(
-                        LintSeverity::Error,
-                        CODE_FORWARD_VARIABLE_REFERENCE,
-                        file.path.clone(),
-                        None,
-                        Some(snippet.id.clone()),
-                        format!(
-                            "variable '{owner}' references <#{ref_name}> which comes later in prompt order"
-                        ),
-                        None,
-                    )
-                    .with_suppress_command(source.clone());
-                    if let Some((l, c0, c1)) = span {
-                        f = f.with_span(l, c0, c1);
-                    }
-                    out.push(f);
-                    continue;
-                }
-                if is_default
-                    && *raw
-                    && is_free_form_upstream(
-                        ref_name,
-                        snippet,
-                        &file.parsed.frontmatter.variables,
-                        globals,
-                    )
-                {
-                    let mut f = finding(
-                        LintSeverity::Warning,
-                        CODE_RAW_DEFAULT_UNTRUSTED_UPSTREAM,
-                        file.path.clone(),
-                        None,
-                        Some(snippet.id.clone()),
-                        format!(
-                            "default for variable '{owner}' raw-splices free-form upstream <#{ref_name}:raw>"
-                        ),
-                        Some("use <#name> for shell quoting, constrain the upstream with a default/suggestions/command, or suppress this lint if the raw splice is intentional".to_string()),
-                    )
-                    .with_suppress_command(source.clone());
-                    if let Some((l, c0, c1)) = span {
-                        f = f.with_span(l, c0, c1);
-                    }
-                    out.push(f);
-                }
-            }
-        }
-    }
-    out
-}
-
-fn default_sources(snippet: &crate::domain::Snippet) -> Vec<(String, String)> {
-    let mut out = Vec::new();
-    let mut seen = HashSet::new();
-    let body = snippet.body.as_str();
-    let bytes = body.as_bytes();
-    let mut i = 0;
-    while i + 1 < bytes.len() {
-        if bytes[i] == b'<' && bytes[i + 1] == b'@' {
-            let inner_start = i + 2;
-            if let Some(inner_end) = parser::find_placeholder_end(body, inner_start) {
-                let inner = &body[inner_start..inner_end];
-                if let Some((name, rest)) = inner.split_once(':')
-                    && let Some(default) = rest.strip_prefix('?')
-                {
-                    let name = name.trim();
-                    if seen.insert(name.to_string()) {
-                        out.push((name.to_string(), default.to_string()));
-                    }
-                }
-                i = inner_end + 1;
-                continue;
-            }
-        }
-        i += 1;
-    }
-    out
-}
-
-fn is_free_form_upstream(
-    name: &str,
-    snippet: &crate::domain::Snippet,
-    locals: &BTreeMap<String, VariableSpec>,
-    globals: &BTreeMap<String, VariableInputConfig>,
-) -> bool {
-    if matches!(name, "file" | "directory") {
-        return false;
-    }
-    let Some(variable) = snippet
-        .variables
-        .iter()
-        .find(|variable| variable.name == name)
-    else {
-        return false;
-    };
-    if !matches!(variable.source, VariableSource::Free) {
-        return false;
-    }
-    let constrained_locally = locals.get(name).is_some_and(variable_spec_constrains);
-    let constrained_globally = globals.get(name).is_some_and(variable_input_constrains);
-    !(constrained_locally || constrained_globally)
-}
-
-fn variable_spec_constrains(spec: &VariableSpec) -> bool {
-    spec.default.is_some() || !spec.suggestions.is_empty() || spec.command.is_some()
-}
-
-fn variable_input_constrains(spec: &VariableInputConfig) -> bool {
-    spec.default.is_some() || !spec.suggestions.is_empty() || spec.command.is_some()
-}
-
-fn command_sources(
-    snippet: &crate::domain::Snippet,
-    locals: &BTreeMap<String, VariableSpec>,
-    globals: &BTreeMap<String, VariableInputConfig>,
-) -> Vec<(String, String)> {
-    let mut out = Vec::new();
-    let mut seen = HashSet::new();
-    for variable in &snippet.variables {
-        if !seen.insert(variable.name.clone()) {
-            continue;
-        }
-        match &variable.source {
-            VariableSource::Command(command) => out.push((variable.name.clone(), command.clone())),
-            VariableSource::Free => {
-                if let Some(command) = locals
-                    .get(&variable.name)
-                    .and_then(|spec| spec.command.clone())
-                    .or_else(|| {
-                        globals
-                            .get(&variable.name)
-                            .and_then(|spec| spec.command.clone())
-                    })
-                {
-                    out.push((variable.name.clone(), command));
-                }
-            }
-            VariableSource::Default(_) => {}
-        }
-    }
-    out
-}
-
-fn lint_static_inline_commands(file: &FileContext) -> Vec<LintFinding> {
-    let mut out = Vec::new();
-    for snippet in &file.parsed.snippets {
-        for variable in &snippet.variables {
-            let VariableSource::Command(command) = &variable.source else {
-                continue;
-            };
-            if looks_static_command(command) {
-                out.push(
-                    finding(
-                        LintSeverity::Warning,
-                        CODE_STATIC_INLINE_COMMAND,
-                        file.path.clone(),
-                        None,
-                        Some(snippet.id.clone()),
-                        format!(
-                            "inline command for variable '{}' looks like a static suggestion list",
-                            variable.name
-                        ),
-                        Some(
-                            "prefer frontmatter variables.<name>.suggestions for static lists"
-                                .to_string(),
-                        ),
-                    )
-                    .with_suppress_command(command.clone()),
-                );
-            }
-        }
-    }
-    out
-}
-
-fn lint_duplicate_inline_commands(file: &FileContext) -> Vec<LintFinding> {
-    // Collect (variable_name, command) -> first snippet id for each inline command.
-    let mut seen: HashMap<(String, String), SnippetId> = HashMap::new();
-    let mut duplicates: Vec<(String, String, SnippetId)> = Vec::new();
-    for snippet in &file.parsed.snippets {
-        for variable in &snippet.variables {
-            let VariableSource::Command(command) = &variable.source else {
-                continue;
-            };
-            let key = (variable.name.clone(), command.clone());
-            match seen.get(&key) {
-                None => {
-                    seen.insert(key, snippet.id.clone());
-                }
-                Some(first_id)
-                    if !duplicates
-                        .iter()
-                        .any(|(n, c, _)| n == &key.0 && c == &key.1) =>
-                {
-                    duplicates.push((variable.name.clone(), command.clone(), first_id.clone()));
-                }
-                _ => {}
-            }
-        }
-    }
-    duplicates
-        .into_iter()
-        .map(|(name, command, first_id)| {
-            finding(
-                LintSeverity::Warning,
-                CODE_DUPLICATE_INLINE_COMMAND,
-                file.path.clone(),
-                None,
-                Some(first_id),
-                format!(
-                    "inline command for variable '{name}' is repeated across multiple snippets"
-                ),
-                Some(format!(
-                    "move to frontmatter: variables:\n  {name}:\n    command: {command}"
-                )),
-            )
-        })
-        .collect()
-}
-
-fn lint_markdown_structure(path: &Path, content: &str) -> Vec<LintFinding> {
-    let mut out = Vec::new();
-    // `in_fence` carries `(fence, line_no, is_text)` for the currently-open fence.
-    let mut in_fence: Option<(String, usize, bool)> = None;
-    // `open_heading` carries `(heading, line_no, has_executable, has_text)`.
-    let mut open_heading: Option<(String, usize, bool, bool)> = None;
-    for (idx, line) in content.lines().enumerate() {
-        let line_no = idx + 1;
-        if let Some((fence, _, is_text)) = &in_fence {
-            if is_fence_close(line, fence) {
-                let was_text = *is_text;
-                in_fence = None;
-                if let Some((_, _, has_executable, has_text)) = &mut open_heading {
-                    if was_text {
-                        *has_text = true;
-                    } else {
-                        *has_executable = true;
-                    }
-                }
-            }
-            continue;
-        }
-        if let Some(heading) = snippet_heading(line) {
-            if let Some(previous) = open_heading.replace((heading, line_no, false, false)) {
-                emit_section_structure_finding(&mut out, path, previous);
-            }
-        } else if let Some((fence, language)) = fence_open(line) {
-            let is_text = is_ignored_body_language(language.as_deref());
-            in_fence = Some((fence, line_no, is_text));
-        }
-    }
-    if let Some((_, start, _)) = in_fence {
-        out.push(finding(
-            LintSeverity::Warning,
-            CODE_MARKDOWN_STRUCTURE,
-            path.to_path_buf(),
-            Some(start),
-            None,
-            "code fence is not closed".to_string(),
-            None,
-        ));
-    }
-    if let Some(previous) = open_heading {
-        emit_section_structure_finding(&mut out, path, previous);
-    }
-    out
-}
-
-fn emit_section_structure_finding(
-    out: &mut Vec<LintFinding>,
-    path: &Path,
-    section: (String, usize, bool, bool),
-) {
-    let (heading, line, has_executable, has_text) = section;
-    if has_executable {
-        return;
-    }
-    if has_text {
-        out.push(finding(
-            LintSeverity::Warning,
-            CODE_TEXT_ONLY_SECTION,
-            path.to_path_buf(),
-            Some(line),
-            None,
-            format!(
-                "snippet section '{heading}' has only `text` fences; \
-                 `text` is reserved for preview examples and is not executable"
-            ),
-            None,
-        ));
-    } else {
-        out.push(finding(
-            LintSeverity::Warning,
-            CODE_MARKDOWN_STRUCTURE,
-            path.to_path_buf(),
-            Some(line),
-            None,
-            format!("snippet section '{heading}' has no code fence"),
-            None,
-        ));
-    }
-}
-
-fn is_ignored_body_language(language: Option<&str>) -> bool {
-    language.is_some_and(|language| language.eq_ignore_ascii_case("text"))
-}
-
-fn lint_missing_code_languages(file: &FileContext) -> Vec<LintFinding> {
-    let ranges = parser::snippet_line_ranges(&file.parsed.relative_path, &file.content);
-    let mut line_by_id = HashMap::new();
-    for range in ranges {
-        line_by_id.insert(range.id, range.start_line + 1);
-    }
-    file.parsed
-        .snippets
-        .iter()
-        .filter(|snippet| snippet.language.is_none())
-        .map(|snippet| {
-            finding(
-                LintSeverity::Warning,
-                CODE_MISSING_CODE_LANGUAGE,
-                file.path.clone(),
-                line_by_id.get(&snippet.id).copied(),
-                Some(snippet.id.clone()),
-                "snippet code fence has no language tag".to_string(),
-                None,
-            )
-        })
-        .collect()
-}
-
-fn lint_frontmatter_overrides(
-    file: &FileContext,
-    globals: &BTreeMap<String, VariableInputConfig>,
-) -> Vec<LintFinding> {
-    let mut out = Vec::new();
-    for (name, local) in &file.parsed.frontmatter.variables {
-        let Some(global) = globals.get(name) else {
-            continue;
-        };
-        let local_source = suggestion_source(local);
-        let global_source = suggestion_source(global);
-        if local_source != global_source && local_source != "none" && global_source != "none" {
-            out.push(finding(
-                LintSeverity::Warning,
-                CODE_FRONTMATTER_OVERRIDE,
-                file.path.clone(),
-                Some(1),
-                None,
-                format!("file-local variable '{name}' overrides a global suggestion source"),
-                Some("rename the local variable if it means something different".to_string()),
-            ));
-        }
-    }
-    out
-}
-
-fn lint_gc(paths: &Paths, index: &crate::index::SnippetIndex) -> io::Result<Vec<LintFinding>> {
-    let mut out = Vec::new();
-    for orphan in crate::gc::collect_orphans_with_index(paths, index)? {
-        let (code, detail) = match orphan.candidate_id {
-            Some(candidate) => (
-                CODE_GC_ORPHAN_REATTACHABLE,
-                Some(format!("candidate: {candidate}")),
-            ),
-            None => (CODE_GC_ORPHAN_UNRESOLVABLE, None),
-        };
-        out.push(finding(
-            LintSeverity::Warning,
-            code,
-            paths.state_file.clone(),
-            None,
-            Some(orphan.id),
-            format!("orphaned frecency id has {} event(s)", orphan.events),
-            detail,
-        ));
-    }
-    Ok(out)
-}
-
-fn finding(
+/// Construct a [`LintFinding`] with no span or suppress fields set.
+pub(super) fn finding(
     severity: LintSeverity,
     code: &'static str,
     path: PathBuf,
     line: Option<usize>,
-    snippet_id: Option<SnippetId>,
+    snippet_id: Option<crate::domain::SnippetId>,
     message: String,
     detail: Option<String>,
 ) -> LintFinding {
@@ -1061,22 +287,6 @@ fn finding(
     }
 }
 
-fn attach_suppress_paths(findings: &mut [LintFinding], files: &[FileContext]) {
-    for finding in findings {
-        if finding.suppress_path.is_some() {
-            continue;
-        }
-        if let Some(file) = files.iter().find(|file| file.path == finding.path) {
-            finding.suppress_path = Some(
-                file.parsed
-                    .relative_path
-                    .to_string_lossy()
-                    .replace('\\', "/"),
-            );
-        }
-    }
-}
-
 impl LintFinding {
     fn with_suppress_command(mut self, command: String) -> Self {
         self.suppress_command = Some(command);
@@ -1091,42 +301,6 @@ impl LintFinding {
     }
 }
 
-fn is_suppressed(finding: &LintFinding, config: &LintConfig) -> bool {
-    let key = finding.code.strip_prefix("lint/").unwrap_or(finding.code);
-    let Some(rule) = config.get(key) else {
-        return false;
-    };
-    rule.disable
-        || finding.suppress_path.as_deref().is_some_and(|path| {
-            rule.ignore_file
-                .iter()
-                .any(|pattern| glob_matches(pattern, path))
-        })
-        || finding.suppress_command.as_deref().is_some_and(|command| {
-            rule.ignore_command
-                .iter()
-                .any(|pattern| glob_matches(pattern, command))
-        })
-}
-
-fn glob_matches(pattern: &str, value: &str) -> bool {
-    glob_matches_bytes(pattern.as_bytes(), value.as_bytes())
-}
-
-fn glob_matches_bytes(pattern: &[u8], value: &[u8]) -> bool {
-    match (pattern, value) {
-        ([], []) => true,
-        ([], _) => false,
-        ([b'*', rest @ ..], _) => {
-            glob_matches_bytes(rest, value)
-                || (!value.is_empty() && glob_matches_bytes(pattern, &value[1..]))
-        }
-        ([b'?', rest @ ..], [_, value_rest @ ..]) => glob_matches_bytes(rest, value_rest),
-        ([p, rest @ ..], [v, value_rest @ ..]) if p == v => glob_matches_bytes(rest, value_rest),
-        _ => false,
-    }
-}
-
 fn sort_findings(findings: &mut [LintFinding]) {
     findings.sort_by(|a, b| {
         a.path
@@ -1137,79 +311,14 @@ fn sort_findings(findings: &mut [LintFinding]) {
     });
 }
 
-fn snippet_heading(line: &str) -> Option<String> {
-    let trimmed = line.trim_start();
-    let rest = trimmed.strip_prefix("##")?;
-    if rest.starts_with('#') {
-        return None;
-    }
-    let text = rest.trim();
-    (!text.is_empty()).then(|| text.to_string())
-}
-
-fn fence_open(line: &str) -> Option<(String, Option<String>)> {
-    let trimmed = line.trim_start();
-    if !trimmed.starts_with("```") {
-        return None;
-    }
-    let ticks: String = trimmed.chars().take_while(|c| *c == '`').collect();
-    if ticks.len() < 3 {
-        return None;
-    }
-    let lang = trimmed[ticks.len()..].trim();
-    let language = (!lang.is_empty()).then(|| lang.to_string());
-    Some((ticks, language))
-}
-
-fn is_fence_close(line: &str, fence: &str) -> bool {
-    let trimmed = line.trim();
-    trimmed.starts_with(fence) && trimmed.chars().all(|c| c == '`') && trimmed.len() >= fence.len()
-}
-
-fn slugify(input: &str) -> String {
-    let mut out = String::with_capacity(input.len());
-    let mut last_dash = true;
-    for c in input.chars() {
-        if c.is_ascii_alphanumeric() {
-            out.push(c.to_ascii_lowercase());
-            last_dash = false;
-        } else if !last_dash {
-            out.push('-');
-            last_dash = true;
-        }
-    }
-    while out.ends_with('-') {
-        out.pop();
-    }
-    if out.is_empty() {
-        "snippet".to_string()
-    } else {
-        out
-    }
-}
-
-fn looks_static_command(command: &str) -> bool {
-    let trimmed = command.trim();
-    trimmed.starts_with("echo ") || trimmed.starts_with("printf ")
-}
-
-fn suggestion_source(spec: &VariableSpec) -> &'static str {
-    if spec.command.is_some() {
-        "command"
-    } else if !spec.suggestions.is_empty() {
-        "suggestions"
-    } else {
-        "none"
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::config::{
-        FrecencyConfig, FuzzyWeights, LintRuleConfig, SearchConfig, SuggestionCommandsConfig,
-        Theme, UiConfig,
+        FrecencyConfig, FuzzyWeights, LintRuleConfig, Paths, SearchConfig,
+        SuggestionCommandsConfig, Theme, UiConfig,
     };
+    use std::collections::BTreeMap;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     fn temp_dir(prefix: &str) -> PathBuf {
@@ -1287,16 +396,16 @@ mod tests {
         let mut cfg = config(root);
         cfg.variables.insert(
             "used".to_string(),
-            VariableSpec {
+            crate::domain::VariableSpec {
                 suggestions: vec!["a".to_string()],
-                ..VariableSpec::default()
+                ..Default::default()
             },
         );
         cfg.variables.insert(
             "unused".to_string(),
-            VariableSpec {
+            crate::domain::VariableSpec {
                 suggestions: vec!["b".to_string()],
-                ..VariableSpec::default()
+                ..Default::default()
             },
         );
         let mut out = Vec::new();
@@ -1536,8 +645,10 @@ mod tests {
 mod dependent_tests {
     use super::*;
     use crate::config::{
-        FrecencyConfig, FuzzyWeights, SearchConfig, SuggestionCommandsConfig, Theme, UiConfig,
+        FrecencyConfig, FuzzyWeights, Paths, SearchConfig, SuggestionCommandsConfig, Theme,
+        UiConfig,
     };
+    use std::collections::BTreeMap;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     fn temp_dir(prefix: &str) -> PathBuf {
