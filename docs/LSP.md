@@ -56,10 +56,17 @@ vim.lsp.config("peanutbutter", {
     "peanutbutter.toml",
     "_peanutbutter.toml",
   },
+  workspace_required = true,
 })
 
 vim.lsp.enable("peanutbutter")
 ```
+
+`workspace_required = true` keeps the client gated to marked snippet trees.
+`root_markers` does the upward walk; with `workspace_required`, Neovim starts
+the client only when that walk finds a marker. Omit it and Neovim falls back to
+single-file mode — it attaches to every markdown buffer and the client sits
+inert outside a marked tree, rather than not attaching at all.
 
 ### Fallback — Neovim 0.10 and older
 
