@@ -4,6 +4,7 @@ use crate::edit::editor;
 use crate::frecency::FrecencyStore;
 use crate::index::IndexedSnippet;
 use crate::index::SnippetIndex;
+use ansi_to_tui::IntoText;
 use crossterm::cursor;
 use crossterm::event::{
     self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyCode, KeyModifiers,
@@ -11,6 +12,7 @@ use crossterm::event::{
 use crossterm::execute;
 use crossterm::terminal::{self, ClearType, disable_raw_mode, enable_raw_mode};
 use ratatui::backend::CrosstermBackend;
+use ratatui::text::Text;
 use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::{Terminal, TerminalOptions, Viewport};
 use std::io;
@@ -150,7 +152,11 @@ pub(crate) fn run_scrollable_text(
     let mut terminal = build_terminal(viewport_height, tui_output)?;
     let mut viewport_top: Option<u16> = None;
     let mut scroll = 0u16;
-    let line_count = text.lines().count() as u16;
+    let text = text
+        .clone()
+        .into_text()
+        .unwrap_or_else(|_| Text::from(text));
+    let line_count = text.lines.len() as u16;
 
     loop {
         terminal.draw(|frame| {
@@ -158,7 +164,7 @@ pub(crate) fn run_scrollable_text(
             let area = frame.area();
             let max_scroll = line_count.saturating_sub(area.height.saturating_sub(2));
             scroll = scroll.min(max_scroll);
-            let paragraph = Paragraph::new(text.as_str())
+            let paragraph = Paragraph::new(text.clone())
                 .block(Block::default().title(title).borders(Borders::ALL))
                 .scroll((scroll, 0));
             frame.render_widget(paragraph, area);

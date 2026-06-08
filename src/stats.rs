@@ -358,7 +358,8 @@ fn write_output<W: Write>(
         Output::Text => write_human(writer, report, sort, color, now),
         Output::Tui => {
             let mut rendered = Vec::new();
-            write_human(&mut rendered, report, sort, false, now)?;
+            let tui_color = std::env::var_os("NO_COLOR").is_none();
+            write_human(&mut rendered, report, sort, tui_color, now)?;
             let text = String::from_utf8(rendered).map_err(io::Error::other)?;
             crate::execute::run_scrollable_text(
                 "Stats (q/esc exit, j/k scroll)",
