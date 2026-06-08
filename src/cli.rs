@@ -1,3 +1,4 @@
+use crate::completions;
 use crate::config::Paths;
 use crate::execute::{self, ExecuteOptions, ExecutionOutcome};
 use crate::frecency::FrecencyStore;
@@ -54,23 +55,10 @@ pub enum Command {
         #[arg(last = true)]
         command: Vec<String>,
     },
-    /// Emit shell integration code for the given readline binding.
-    Bash {
-        #[arg(default_value = "C+b")]
-        binding: String,
-    },
-    /// Emit zsh integration code for the given ZLE binding.
-    Zsh {
-        #[arg(default_value = "C+b")]
-        binding: String,
-    },
-    /// Emit fish integration code for the given key binding.
-    Fish {
-        #[arg(default_value = "C+b")]
-        binding: String,
-    },
-    /// Emit PowerShell integration code for the given PSReadLine binding.
-    Powershell {
+    /// Emit shell integration code for the given shell and key binding.
+    Completions {
+        /// Which shell to emit integration code for.
+        shell: completions::Shell,
         #[arg(default_value = "C+b")]
         binding: String,
     },
@@ -393,26 +381,29 @@ mod tests {
             })
         );
         assert_eq!(
-            Cli::try_parse_from(["peanutbutter", "bash"])
+            Cli::try_parse_from(["peanutbutter", "completions", "bash"])
                 .unwrap()
                 .command,
-            Some(Command::Bash {
+            Some(Command::Completions {
+                shell: completions::Shell::Bash,
                 binding: "C+b".to_string()
             })
         );
         assert_eq!(
-            Cli::try_parse_from(["peanutbutter", "bash", "C+f"])
+            Cli::try_parse_from(["peanutbutter", "completions", "bash", "C+f"])
                 .unwrap()
                 .command,
-            Some(Command::Bash {
+            Some(Command::Completions {
+                shell: completions::Shell::Bash,
                 binding: "C+f".to_string()
             })
         );
         assert_eq!(
-            Cli::try_parse_from(["peanutbutter", "powershell"])
+            Cli::try_parse_from(["peanutbutter", "completions", "powershell"])
                 .unwrap()
                 .command,
-            Some(Command::Powershell {
+            Some(Command::Completions {
+                shell: completions::Shell::Powershell,
                 binding: "C+b".to_string()
             })
         );
@@ -500,12 +491,12 @@ mod tests {
     }
 
     #[test]
-    fn clap_help_mentions_bash_subcommand() {
+    fn clap_help_mentions_completions_subcommand() {
         let mut command = <Cli as clap::CommandFactory>::command();
         let mut help = Vec::new();
         command.write_long_help(&mut help).unwrap();
         let help = String::from_utf8(help).unwrap();
-        assert!(help.contains("bash"));
+        assert!(help.contains("completions"));
         assert!(!help.contains("--bash"));
     }
 

@@ -44,7 +44,7 @@ New here? Run `pb init` once to scaffold starter snippets at the default XDG loc
 **bash** — add to `~/.bashrc`:
 
 ```bash
-eval "$(peanutbutter bash)"
+eval "$(peanutbutter completions bash)"
 # then press Ctrl + b and have fun.
 # also installs `pb` as a bash alias for `peanutbutter`
 ```
@@ -52,19 +52,19 @@ eval "$(peanutbutter bash)"
 **zsh** — add to `~/.zshrc`:
 
 ```zsh
-eval "$(peanutbutter zsh)"
+eval "$(peanutbutter completions zsh)"
 ```
 
 **fish** — add to `~/.config/fish/config.fish`:
 
 ```fish
-peanutbutter fish | source
+peanutbutter completions fish | source
 ```
 
 **PowerShell** — add to `$PROFILE`:
 
 ```powershell
-peanutbutter powershell | Invoke-Expression
+peanutbutter completions powershell | Invoke-Expression
 ```
 
 ## Why

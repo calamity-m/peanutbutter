@@ -51,7 +51,7 @@ pub(crate) mod tui;
 
 /// The binary name used in help text and warning messages.
 pub const BINARY_NAME: &str = "peanutbutter";
-/// The shell alias installed by `peanutbutter bash`.
+/// The shell alias installed by `peanutbutter completions bash`.
 pub const BASH_ALIAS_NAME: &str = "pb";
 
 /// Exit status emitted by `execute` when the selected snippet consumed the
