@@ -33,6 +33,7 @@ timeout_ms = 2000
 allow_commands = true
 
 [search]
+# Search weights can also be tuned interactively with `pb settings`.
 # How much frecency influences the final ranking relative to fuzzy score.
 # Higher values make your usage history matter more.
 # Lower values make text matching dominate.
@@ -72,8 +73,8 @@ description = 10
 # Relative file path.
 path = 10
 
-# Snippet body/command content.
-body = 8
+# Executable snippet command block.
+command = 8
 
 [theme]
 # Select a built-in base theme:

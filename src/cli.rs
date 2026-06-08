@@ -95,6 +95,8 @@ pub enum Command {
         #[arg(long, value_enum, default_value_t = stats::Output::Tui)]
         output: stats::Output,
     },
+    /// Open the interactive config tuning TUI.
+    Settings,
     /// Internal shell completion helper for `edit`.
     #[command(hide = true)]
     CompleteEdit { current: Option<String> },
@@ -453,6 +455,12 @@ mod tests {
                 sort: stats::Sort::Stale,
                 output: stats::Output::Json,
             })
+        );
+        assert_eq!(
+            Cli::try_parse_from(["peanutbutter", "settings"])
+                .unwrap()
+                .command,
+            Some(Command::Settings)
         );
     }
 

@@ -13,8 +13,9 @@ Scope a term to a specific snippet field. Unrecognised or uppercase prefixes are
 | `name:term` | Snippet heading / name |
 | `path:term` | Relative file path |
 | `tag:term` | Frontmatter tags |
-| `body:term` | Snippet code body |
-| `snippet:term` | Snippet code body (alias for `body:`) |
+| `command:term` | Executable snippet command block |
+| `snippet:term` | Executable snippet command block (alias for `command:`) |
+| `body:term` | Deprecated alias for `command:` |
 
 **Multi-word values** must be quoted with `"…"` or `'…'`:
 
@@ -28,7 +29,7 @@ snippet:'kubectl logs'
 ```
 tag:docker tag:compose          # must have both tags
 name:deploy path:ops            # heading matches "deploy" AND path contains "ops"
-tag:docker body:logs            # docker tag AND "logs" in the body
+tag:docker command:logs         # docker tag AND "logs" in the command block
 ```
 
 **Operators combine with free text**, which is matched across all fields:
@@ -59,7 +60,7 @@ Modifiers work inside field operators too:
 ```
 name:'apply                     # name contains exact substring "apply"
 name:^git                       # name starts with "git"
-body:!docker                    # body does not fuzzy-match "docker"
+command:!docker                 # command block does not fuzzy-match "docker"
 ```
 
 ---
@@ -70,7 +71,7 @@ When the query is empty, results are ordered purely by frecency (recency × freq
 
 When the query is non-empty:
 
-- Each field is scored independently and **weighted** — name matches rank higher than body matches by default.
+- Each field is scored independently and **weighted** — name matches rank higher than command-block matches by default.
 - Field operator scores are added to the free-text score, so a query that matches via both free text and an explicit operator ranks higher.
 - The final score is `fuzzy_score + frecency_score × frecency_weight`.
 
@@ -85,6 +86,6 @@ docker                          # fuzzy match across all fields
 'kubectl apply                  # exact substring anywhere
 name:deploy path:infra          # heading has "deploy", path has "infra"
 tag:docker tag:compose logs     # both tags present, "logs" anywhere
-snippet:"kubectl logs"          # exact phrase in the code body
-name:^git body:!rebase          # name starts with "git", body excludes "rebase"
+command:"kubectl logs"          # exact phrase in the command block
+name:^git command:!rebase       # name starts with "git", command excludes "rebase"
 ```

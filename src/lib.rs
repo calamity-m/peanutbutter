@@ -24,6 +24,7 @@
 //! | [`fuzzy`] | nucleo-backed fuzzy matching |
 //! | [`search`] | Combined fuzzy + frecency ranking |
 //! | [`config`] | TOML config loading and theme |
+//! | [`settings`] | Interactive config tuning TUI |
 //! | [`cli`] | Argument parsing and command dispatch |
 //! | [`execute`] | Interactive TUI (ratatui, crossterm) |
 //! | [`lsp`] | Language Server Protocol server (diagnostics, completions, hover, go-to-def) |
@@ -44,6 +45,7 @@ pub mod lsp;
 pub mod new;
 pub mod parser;
 pub mod search;
+pub mod settings;
 pub(crate) mod shell;
 pub mod stats;
 pub mod syntax;

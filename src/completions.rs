@@ -94,7 +94,7 @@ __pb_complete() {{
     COMPREPLY=( $(compgen -W "bash zsh fish powershell" -- "$cur") )
     return 0
   fi
-  COMPREPLY=( $(compgen -W "--theme completions edit execute lint gc new stats" -- "$cur") )
+  COMPREPLY=( $(compgen -W "--theme completions edit execute lint gc new settings stats" -- "$cur") )
 }}
 complete -o nospace -F __pb_complete {BINARY_NAME} {BASH_ALIAS_NAME}
 "#
@@ -165,7 +165,7 @@ _pb_complete() {{
   elif [[ "${{words[2]}}" == "completions" ]]; then
     compadd -- bash zsh fish powershell
   else
-    compadd -- --theme completions edit execute lint gc new stats
+    compadd -- --theme completions edit execute lint gc new settings stats
   fi
 }}
 compdef _pb_complete {BINARY_NAME} {BASH_ALIAS_NAME}
@@ -225,7 +225,7 @@ function {BINARY_NAME}
   __pb_dispatch $argv
 end
 complete -c {BINARY_NAME} -f -l theme -a '(__pb_complete_theme)'
-complete -c {BINARY_NAME} -f -n 'not __fish_seen_subcommand_from completions edit execute lint gc new stats' -a 'completions edit execute lint gc new stats'
+complete -c {BINARY_NAME} -f -n 'not __fish_seen_subcommand_from completions edit execute lint gc new settings stats' -a 'completions edit execute lint gc new settings stats'
 complete -c {BINARY_NAME} -f -n '__fish_seen_subcommand_from edit' -a '(__pb_complete_edit)'
 complete -c {BINARY_NAME} -f -n '__fish_seen_subcommand_from completions' -a 'bash zsh fish powershell'
 complete -c {BASH_ALIAS_NAME} -w {BINARY_NAME}
@@ -278,7 +278,7 @@ Register-ArgumentCompleter -CommandName {BINARY_NAME},{BASH_ALIAS_NAME} -ScriptB
   }} elseif ($words.Count -ge 2 -and $words[1] -eq 'completions') {{
     'bash','zsh','fish','powershell' | Where-Object {{ $_ -like "$wordToComplete*" }} | ForEach-Object {{ [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_) }}
   }} else {{
-    'completions','edit','execute','lint','gc','new','stats','--theme' | Where-Object {{ $_ -like "$wordToComplete*" }} | ForEach-Object {{ [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_) }}
+    'completions','edit','execute','lint','gc','new','settings','stats','--theme' | Where-Object {{ $_ -like "$wordToComplete*" }} | ForEach-Object {{ [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_) }}
   }}
 }}
 "#
@@ -368,7 +368,7 @@ mod tests {
     #[test]
     fn bash_script_completion_word_list_includes_all_shells() {
         let script = bash_integration_script("C+b", Path::new("/tmp/peanutbutter")).unwrap();
-        assert!(script.contains("--theme completions edit execute lint gc new stats"));
+        assert!(script.contains("--theme completions edit execute lint gc new settings stats"));
         assert!(script.contains("compgen -W \"bash zsh fish powershell\""));
         assert!(script.contains("complete-theme \"$cur\""));
         assert!(script.contains("--theme"));
