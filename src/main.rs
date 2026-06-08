@@ -190,12 +190,7 @@ fn main() {
             )
             .map(|_| ())
         }
-        cli::Command::Stats {
-            top,
-            sort,
-            output,
-            json,
-        } => {
+        cli::Command::Stats { top, sort, output } => {
             let mut stdout = io::stdout();
             peanutbutter::stats::run(
                 &paths,
@@ -204,7 +199,6 @@ fn main() {
                     sort,
                     output,
                     theme: app_config.theme.clone(),
-                    json,
                 },
                 &mut stdout,
             )

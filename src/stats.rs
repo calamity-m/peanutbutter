@@ -18,7 +18,7 @@ pub enum Sort {
     Count,
 }
 
-/// Human-facing presentation mode for `peanutbutter stats`.
+/// Presentation mode for `peanutbutter stats`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, clap::ValueEnum)]
 pub enum Output {
     /// Show statistics in an interactive terminal UI.
@@ -26,6 +26,8 @@ pub enum Output {
     Tui,
     /// Print the existing human-readable text report.
     Text,
+    /// Emit JSON for machine consumption.
+    Json,
 }
 
 /// Runtime options for `peanutbutter stats`.
@@ -35,12 +37,10 @@ pub struct StatsOptions {
     pub top_n: usize,
     /// Sort order for the least-used list.
     pub sort: Sort,
-    /// Human-facing output mode used when `json` is false.
+    /// Output mode.
     pub output: Output,
     /// Theme used by the interactive stats TUI.
     pub theme: Theme,
-    /// Emit JSON instead of human-readable output.
-    pub json: bool,
 }
 
 impl Default for StatsOptions {
@@ -50,7 +50,6 @@ impl Default for StatsOptions {
             sort: Sort::Stale,
             output: Output::Tui,
             theme: Theme::default(),
-            json: false,
         }
     }
 }
@@ -101,8 +100,9 @@ pub fn run<W: Write>(paths: &Paths, options: StatsOptions, writer: &mut W) -> io
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
-    let color =
-        !options.json && std::env::var_os("NO_COLOR").is_none() && io::stdout().is_terminal();
+    let color = options.output != Output::Json
+        && std::env::var_os("NO_COLOR").is_none()
+        && io::stdout().is_terminal();
     run_with(paths, options, now, color, writer)
 }
 
@@ -116,15 +116,14 @@ pub fn run_with<W: Write>(
     writer: &mut W,
 ) -> io::Result<()> {
     if !paths.state_file.exists() {
-        if options.json {
-            writeln!(writer, "{}", empty_json())?;
-        } else {
-            write_message(
+        match options.output {
+            Output::Json => writeln!(writer, "{}", empty_json())?,
+            Output::Tui | Output::Text => write_message(
                 writer,
                 "No frecency history yet - use snippets first.",
                 options.output,
                 &options.theme,
-            )?;
+            )?,
         }
         return Ok(());
     }
@@ -132,15 +131,14 @@ pub fn run_with<W: Write>(
     let index = load_from_roots(&paths.snippet_roots)?;
 
     if index.is_empty() {
-        if options.json {
-            writeln!(writer, "{}", empty_json())?;
-        } else {
-            write_message(
+        match options.output {
+            Output::Json => writeln!(writer, "{}", empty_json())?,
+            Output::Tui | Output::Text => write_message(
                 writer,
                 "No snippets found in configured roots.",
                 options.output,
                 &options.theme,
-            )?;
+            )?,
         }
         return Ok(());
     }
@@ -148,19 +146,15 @@ pub fn run_with<W: Write>(
     let store = FrecencyStore::load(&paths.state_file)?;
     let report = compute_report(&index, &store, &options, now);
 
-    if options.json {
-        write_json(writer, &report)
-    } else {
-        write_output(
-            writer,
-            &report,
-            options.sort,
-            color,
-            now,
-            options.output,
-            &options.theme,
-        )
-    }
+    write_output(
+        writer,
+        &report,
+        options.sort,
+        color,
+        now,
+        options.output,
+        &options.theme,
+    )
 }
 
 fn compute_report(
@@ -360,6 +354,7 @@ fn write_message<W: Write>(
 ) -> io::Result<()> {
     match output {
         Output::Text => writeln!(writer, "{message}"),
+        Output::Json => writeln!(writer, "{}", empty_json()),
         Output::Tui => crate::execute::run_scrollable_text(
             "pb stats",
             "usage statistics",
@@ -382,6 +377,7 @@ fn write_output<W: Write>(
 ) -> io::Result<()> {
     match output {
         Output::Text => write_human(writer, report, sort, color, now),
+        Output::Json => write_json(writer, report),
         Output::Tui => {
             let mut rendered = Vec::new();
             let tui_color = std::env::var_os("NO_COLOR").is_none();
@@ -703,7 +699,6 @@ mod tests {
             sort: Sort::Stale,
             output: Output::Text,
             theme: Default::default(),
-            json: false,
         }
     }
 
@@ -745,7 +740,7 @@ mod tests {
         run_with(
             &paths,
             StatsOptions {
-                json: true,
+                output: Output::Json,
                 ..opts_plain()
             },
             NOW,
@@ -915,7 +910,7 @@ mod tests {
         run_with(
             &paths,
             StatsOptions {
-                json: true,
+                output: Output::Json,
                 ..opts_plain()
             },
             NOW,

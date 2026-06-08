@@ -103,12 +103,9 @@ pub enum Command {
         /// Sort order for the least-used list.
         #[arg(long, value_enum, default_value_t = stats::Sort::Stale)]
         sort: stats::Sort,
-        /// Human-facing output mode when not using `--json`.
+        /// Output mode.
         #[arg(long, value_enum, default_value_t = stats::Output::Tui)]
         output: stats::Output,
-        /// Emit JSON instead of human-readable output.
-        #[arg(long)]
-        json: bool,
     },
     /// Internal shell completion helper for `edit`.
     #[command(hide = true)]
@@ -454,7 +451,16 @@ mod tests {
                 top: 10,
                 sort: stats::Sort::Stale,
                 output: stats::Output::Text,
-                json: false,
+            })
+        );
+        assert_eq!(
+            Cli::try_parse_from(["peanutbutter", "stats", "--output", "json"])
+                .unwrap()
+                .command,
+            Some(Command::Stats {
+                top: 10,
+                sort: stats::Sort::Stale,
+                output: stats::Output::Json,
             })
         );
     }
@@ -475,6 +481,12 @@ mod tests {
     fn clap_rejects_old_add_subcommand() {
         let err = Cli::try_parse_from(["peanutbutter", "add", "nested/demo"]).unwrap_err();
         assert_eq!(err.kind(), clap::error::ErrorKind::InvalidSubcommand);
+    }
+
+    #[test]
+    fn clap_rejects_removed_stats_json_flag() {
+        let err = Cli::try_parse_from(["peanutbutter", "stats", "--json"]).unwrap_err();
+        assert_eq!(err.kind(), clap::error::ErrorKind::UnknownArgument);
     }
 
     #[test]
