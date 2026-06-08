@@ -13,7 +13,7 @@ A friendly terminal snippet management tool.
 
 ### Find snippets three ways
 
-Fuzzy search highlights matches across names, tags, paths, and bodies; `Ctrl+t` switches to file and tag browsing.
+Fuzzy search highlights matches across names, tags, paths, and command blocks; `Ctrl+t` switches to file and tag browsing.
 
 ![Peanutbutter demo: fuzzy search, file browsing, and tag browsing](assets/imgs/demo-modes.gif)
 
@@ -181,3 +181,7 @@ Peanutbutter reads config from `~/.config/peanutbutter/config.toml` by default. 
 This file is optional. If it doesn't exist, peanutbutter uses built-in defaults.
 
 A fully commented example config lives at [examples/config.toml](examples/config.toml).
+
+### Interactive Settings
+
+Run `pb settings` to tune search ranking weights in an interactive TUI. The v1 settings screen covers frecency and fuzzy search weights, shows per-field impact feedback, and saves only changed keys back to your config file while preserving comments and layout.

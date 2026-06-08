@@ -123,7 +123,7 @@ impl Default for SearchConfig {
 ///
 /// Higher weight → matches in that field rank higher relative to other fields.
 /// Defaults: `name`=30, `tag`=20, `frontmatter_name`=15, `description`=10,
-/// `path`=10, `body`=8.
+/// `path`=10, `command`=8.
 #[derive(Debug, Clone)]
 pub struct FuzzyWeights {
     /// Weight for the snippet's `##` heading (display name).
@@ -136,8 +136,8 @@ pub struct FuzzyWeights {
     pub description: u32,
     /// Weight for the snippet's relative file path.
     pub path: u32,
-    /// Weight for the snippet's command body.
-    pub body: u32,
+    /// Weight for the snippet's executable command block.
+    pub command: u32,
 }
 
 impl Default for FuzzyWeights {
@@ -148,7 +148,7 @@ impl Default for FuzzyWeights {
             frontmatter_name: 15,
             description: 10,
             path: 10,
-            body: 8,
+            command: 8,
         }
     }
 }
@@ -401,7 +401,12 @@ pub fn load_with_theme_override(theme_name: Option<&str>) -> io::Result<AppConfi
                 frontmatter_name: file.search.fuzzy.frontmatter_name.unwrap_or(15),
                 description: file.search.fuzzy.description.unwrap_or(10),
                 path: file.search.fuzzy.path.unwrap_or(10),
-                body: file.search.fuzzy.body.unwrap_or(8),
+                command: file
+                    .search
+                    .fuzzy
+                    .command
+                    .or(file.search.fuzzy.body)
+                    .unwrap_or(8),
             },
             frecency: FrecencyConfig {
                 half_life_days: file.search.frecency.half_life_days.unwrap_or(14.0),
@@ -497,6 +502,7 @@ struct FuzzyWeightsFileConfig {
     frontmatter_name: Option<u32>,
     description: Option<u32>,
     path: Option<u32>,
+    command: Option<u32>,
     body: Option<u32>,
 }
 
@@ -906,6 +912,22 @@ disable = true
         assert_eq!(
             variable.command.as_deref(),
             Some("find . -maxdepth 1 -type f | sed 's#^./##' | sort")
+        );
+        assert_eq!(parsed.search.fuzzy.command, Some(8));
+    }
+
+    #[test]
+    fn fuzzy_command_weight_accepts_legacy_body_alias() {
+        let legacy: FileConfig = toml::from_str("[search.fuzzy]\nbody = 7\n").unwrap();
+        assert_eq!(
+            legacy.search.fuzzy.command.or(legacy.search.fuzzy.body),
+            Some(7)
+        );
+
+        let both: FileConfig = toml::from_str("[search.fuzzy]\ncommand = 9\nbody = 7\n").unwrap();
+        assert_eq!(
+            both.search.fuzzy.command.or(both.search.fuzzy.body),
+            Some(9)
         );
     }
 }

@@ -178,6 +178,7 @@ fn parse_field_term(token: &QueryToken) -> Option<FieldTerm> {
         ("path:", QueryField::Path),
         ("tag:", QueryField::Tag),
         ("snippet:", QueryField::Body),
+        ("command:", QueryField::Body),
         ("body:", QueryField::Body),
     ] {
         if let Some(value) = token.value.strip_prefix(prefix)
@@ -293,7 +294,7 @@ fn score_field_term(
         .map(|score| score.saturating_mul(config.fuzzy.tag)),
         QueryField::Body => scorer
             .score(&pattern, entry.body())
-            .map(|score| score.saturating_mul(config.fuzzy.body)),
+            .map(|score| score.saturating_mul(config.fuzzy.command)),
     }
 }
 

@@ -86,7 +86,7 @@ pub fn score_snippet(
     );
     bump(
         scorer.score(pattern, entry.body()),
-        weights.body,
+        weights.command,
         &mut total,
         &mut matched,
     );
@@ -258,11 +258,11 @@ mod tests {
     }
 
     #[test]
-    fn name_beats_body_for_same_query() {
+    fn name_beats_command_for_same_query() {
         let mut scorer = FuzzyScorer::new();
         let pattern = build_pattern("git");
         let name_match = entry("git log", "echo foo", &[], "a.md");
-        let body_match = entry("zzz", "git log --oneline", &[], "b.md");
+        let command_match = entry("zzz", "git log --oneline", &[], "b.md");
         let ns = score_snippet(
             &mut scorer,
             &pattern,
@@ -275,11 +275,11 @@ mod tests {
             &mut scorer,
             &pattern,
             false,
-            &body_match,
+            &command_match,
             &FuzzyWeights::default(),
         )
         .unwrap();
-        assert!(ns > bs, "name score {ns} should beat body score {bs}");
+        assert!(ns > bs, "name score {ns} should beat command score {bs}");
     }
 
     #[test]
