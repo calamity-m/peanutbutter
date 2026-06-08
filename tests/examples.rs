@@ -2,7 +2,7 @@ use peanutbutter::config::Paths;
 use peanutbutter::discovery::discover_markdown_files;
 use peanutbutter::frecency::FrecencyStore;
 use peanutbutter::parser::parse_file;
-use peanutbutter::stats::{Sort, StatsOptions};
+use peanutbutter::stats::{Output, Sort, StatsOptions};
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
@@ -241,6 +241,7 @@ fn stats_missing_state_file_prints_no_history_note() {
         StatsOptions {
             top_n: 10,
             sort: Sort::Stale,
+            output: Output::Text,
             json: false,
         },
         STATS_NOW,
@@ -265,6 +266,7 @@ fn stats_empty_state_file_shows_report() {
         StatsOptions {
             top_n: 10,
             sort: Sort::Stale,
+            output: Output::Text,
             json: false,
         },
         STATS_NOW,
@@ -299,6 +301,7 @@ fn stats_with_events_shows_most_used() {
         StatsOptions {
             top_n: 10,
             sort: Sort::Stale,
+            output: Output::Text,
             json: false,
         },
         STATS_NOW,
@@ -331,6 +334,7 @@ fn stats_json_produces_valid_json_with_all_keys() {
         StatsOptions {
             top_n: 10,
             sort: Sort::Stale,
+            output: Output::Text,
             json: true,
         },
         STATS_NOW,

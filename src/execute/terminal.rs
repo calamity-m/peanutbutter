@@ -5,10 +5,13 @@ use crate::frecency::FrecencyStore;
 use crate::index::IndexedSnippet;
 use crate::index::SnippetIndex;
 use crossterm::cursor;
-use crossterm::event::{self, DisableBracketedPaste, EnableBracketedPaste, Event};
+use crossterm::event::{
+    self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyCode, KeyModifiers,
+};
 use crossterm::execute;
 use crossterm::terminal::{self, ClearType, disable_raw_mode, enable_raw_mode};
 use ratatui::backend::CrosstermBackend;
+use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::{Terminal, TerminalOptions, Viewport};
 use std::io;
 use std::io::IsTerminal;
@@ -133,6 +136,59 @@ pub fn run_execute_with_provider<P: SuggestionProvider>(
     }
     cleanup_terminal(viewport_top, tui_output)?;
     Ok(outcome)
+}
+
+/// Show pre-rendered text in an inline, scrollable TUI until the user exits.
+pub(crate) fn run_scrollable_text(
+    title: &str,
+    text: String,
+    viewport_height: u16,
+) -> io::Result<()> {
+    let _stdout_guard = StdoutTtyGuard::enter()?;
+    let tui_output = TuiOutputKind::detect();
+    let _raw_mode = RawModeGuard::enter(tui_output)?;
+    let mut terminal = build_terminal(viewport_height, tui_output)?;
+    let mut viewport_top: Option<u16> = None;
+    let mut scroll = 0u16;
+    let line_count = text.lines().count() as u16;
+
+    loop {
+        terminal.draw(|frame| {
+            viewport_top = viewport_top.or(Some(frame.area().y));
+            let area = frame.area();
+            let max_scroll = line_count.saturating_sub(area.height.saturating_sub(2));
+            scroll = scroll.min(max_scroll);
+            let paragraph = Paragraph::new(text.as_str())
+                .block(Block::default().title(title).borders(Borders::ALL))
+                .scroll((scroll, 0));
+            frame.render_widget(paragraph, area);
+        })?;
+
+        if !event::poll(Duration::from_millis(250))? {
+            continue;
+        }
+        let Event::Key(key) = event::read()? else {
+            continue;
+        };
+        if key.modifiers.contains(KeyModifiers::CONTROL) && matches!(key.code, KeyCode::Char('c')) {
+            break;
+        }
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('Q') => break,
+            KeyCode::Up | KeyCode::Char('k') => scroll = scroll.saturating_sub(1),
+            KeyCode::Down | KeyCode::Char('j') => scroll = scroll.saturating_add(1),
+            KeyCode::PageUp => scroll = scroll.saturating_sub(10),
+            KeyCode::PageDown => scroll = scroll.saturating_add(10),
+            KeyCode::Home => scroll = 0,
+            KeyCode::End => scroll = u16::MAX,
+            _ => {}
+        }
+    }
+
+    while event::poll(Duration::ZERO).unwrap_or(false) {
+        let _ = event::read();
+    }
+    cleanup_terminal(viewport_top, tui_output)
 }
 
 fn build_terminal(

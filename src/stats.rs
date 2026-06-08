@@ -18,6 +18,16 @@ pub enum Sort {
     Count,
 }
 
+/// Human-facing presentation mode for `peanutbutter stats`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, clap::ValueEnum)]
+pub enum Output {
+    /// Show statistics in an interactive terminal UI.
+    #[default]
+    Tui,
+    /// Print the existing human-readable text report.
+    Text,
+}
+
 /// Runtime options for `peanutbutter stats`.
 #[derive(Debug, Clone)]
 pub struct StatsOptions {
@@ -25,7 +35,9 @@ pub struct StatsOptions {
     pub top_n: usize,
     /// Sort order for the least-used list.
     pub sort: Sort,
-    /// Emit JSON instead of human-readable text.
+    /// Human-facing output mode used when `json` is false.
+    pub output: Output,
+    /// Emit JSON instead of human-readable output.
     pub json: bool,
 }
 
@@ -34,6 +46,7 @@ impl Default for StatsOptions {
         Self {
             top_n: 10,
             sort: Sort::Stale,
+            output: Output::Tui,
             json: false,
         }
     }
@@ -103,7 +116,11 @@ pub fn run_with<W: Write>(
         if options.json {
             writeln!(writer, "{}", empty_json())?;
         } else {
-            writeln!(writer, "No frecency history yet - use snippets first.")?;
+            write_message(
+                writer,
+                "No frecency history yet - use snippets first.",
+                options.output,
+            )?;
         }
         return Ok(());
     }
@@ -114,7 +131,11 @@ pub fn run_with<W: Write>(
         if options.json {
             writeln!(writer, "{}", empty_json())?;
         } else {
-            writeln!(writer, "No snippets found in configured roots.")?;
+            write_message(
+                writer,
+                "No snippets found in configured roots.",
+                options.output,
+            )?;
         }
         return Ok(());
     }
@@ -125,7 +146,7 @@ pub fn run_with<W: Write>(
     if options.json {
         write_json(writer, &report)
     } else {
-        write_human(writer, &report, options.sort, color, now)
+        write_output(writer, &report, options.sort, color, now, options.output)
     }
 }
 
@@ -316,6 +337,37 @@ fn write_json<W: Write>(writer: &mut W, report: &StatsReport) -> io::Result<()> 
 // ── Human-readable output ────────────────────────────────────────────────────
 
 const BOX_WIDTH: usize = 53;
+const STATS_TUI_HEIGHT: u16 = 20;
+
+fn write_message<W: Write>(writer: &mut W, message: &str, output: Output) -> io::Result<()> {
+    match output {
+        Output::Text => writeln!(writer, "{message}"),
+        Output::Tui => crate::execute::run_scrollable_text("Stats", message.to_string(), 3),
+    }
+}
+
+fn write_output<W: Write>(
+    writer: &mut W,
+    report: &StatsReport,
+    sort: Sort,
+    color: bool,
+    now: u64,
+    output: Output,
+) -> io::Result<()> {
+    match output {
+        Output::Text => write_human(writer, report, sort, color, now),
+        Output::Tui => {
+            let mut rendered = Vec::new();
+            write_human(&mut rendered, report, sort, false, now)?;
+            let text = String::from_utf8(rendered).map_err(io::Error::other)?;
+            crate::execute::run_scrollable_text(
+                "Stats (q/esc exit, j/k scroll)",
+                text,
+                STATS_TUI_HEIGHT,
+            )
+        }
+    }
+}
 
 fn box_top(title: &str) -> String {
     // ┌─ Title ─────...─┐
@@ -619,6 +671,7 @@ mod tests {
         StatsOptions {
             top_n: 10,
             sort: Sort::Stale,
+            output: Output::Text,
             json: false,
         }
     }

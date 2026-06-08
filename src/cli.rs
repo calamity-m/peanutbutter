@@ -103,7 +103,10 @@ pub enum Command {
         /// Sort order for the least-used list.
         #[arg(long, value_enum, default_value_t = stats::Sort::Stale)]
         sort: stats::Sort,
-        /// Emit JSON instead of human-readable text.
+        /// Human-facing output mode when not using `--json`.
+        #[arg(long, value_enum, default_value_t = stats::Output::Tui)]
+        output: stats::Output,
+        /// Emit JSON instead of human-readable output.
         #[arg(long)]
         json: bool,
     },
@@ -441,6 +444,17 @@ mod tests {
             Some(Command::Lint {
                 strict: true,
                 json: true,
+            })
+        );
+        assert_eq!(
+            Cli::try_parse_from(["peanutbutter", "stats", "--output", "text"])
+                .unwrap()
+                .command,
+            Some(Command::Stats {
+                top: 10,
+                sort: stats::Sort::Stale,
+                output: stats::Output::Text,
+                json: false,
             })
         );
     }

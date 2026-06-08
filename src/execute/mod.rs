@@ -29,6 +29,7 @@ pub use app::{
     AppEvent, ExecutionApp, NavigationMode, SuggestionProvider, SystemSuggestionProvider,
 };
 pub use prompt::{command_suggestions, render_command};
+pub(crate) use terminal::run_scrollable_text;
 pub use terminal::{execute_default, run_execute, run_execute_with_provider};
 
 /// The result of a completed TUI session: the snippet the user chose and the
