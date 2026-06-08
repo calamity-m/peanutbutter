@@ -78,7 +78,7 @@ fn draw_picker(frame: &mut Frame<'_>, area: Rect, items: &[&str], selected: usiz
     state.select(Some(selected));
     frame.render_stateful_widget(
         List::new(rows),
-        centered(area, 40, items.len() as u16),
+        clamped(area, 40, items.len() as u16),
         &mut state,
     );
 }
@@ -215,7 +215,7 @@ fn draw_explanation(
     );
 }
 
-fn centered(area: Rect, width: u16, height: u16) -> Rect {
+fn clamped(area: Rect, width: u16, height: u16) -> Rect {
     Rect {
         x: area.x,
         y: area.y,
