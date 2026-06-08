@@ -88,12 +88,12 @@ impl Default for ExecuteOptions {
 }
 
 #[cfg(test)]
+pub(crate) use crate::tui::compact_viewport_height;
+#[cfg(test)]
 pub(crate) use prompt::{
     active_prompt_style, builtin_suggestions, placeholder_prompt_style, render_command_text,
     unique_variables,
 };
-#[cfg(test)]
-pub(crate) use terminal::compact_viewport_height;
 
 #[cfg(test)]
 mod tests;

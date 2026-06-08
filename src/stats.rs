@@ -1,4 +1,4 @@
-use crate::config::Paths;
+use crate::config::{Paths, Theme};
 use crate::domain::SnippetId;
 use crate::frecency::FrecencyStore;
 use crate::index::load_from_roots;
@@ -18,6 +18,18 @@ pub enum Sort {
     Count,
 }
 
+/// Presentation mode for `peanutbutter stats`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, clap::ValueEnum)]
+pub enum Output {
+    /// Show statistics in an interactive terminal UI.
+    #[default]
+    Tui,
+    /// Print the existing human-readable text report.
+    Text,
+    /// Emit JSON for machine consumption.
+    Json,
+}
+
 /// Runtime options for `peanutbutter stats`.
 #[derive(Debug, Clone)]
 pub struct StatsOptions {
@@ -25,8 +37,10 @@ pub struct StatsOptions {
     pub top_n: usize,
     /// Sort order for the least-used list.
     pub sort: Sort,
-    /// Emit JSON instead of human-readable text.
-    pub json: bool,
+    /// Output mode.
+    pub output: Output,
+    /// Theme used by the interactive stats TUI.
+    pub theme: Theme,
 }
 
 impl Default for StatsOptions {
@@ -34,7 +48,8 @@ impl Default for StatsOptions {
         Self {
             top_n: 10,
             sort: Sort::Stale,
-            json: false,
+            output: Output::Tui,
+            theme: Theme::default(),
         }
     }
 }
@@ -80,13 +95,16 @@ pub struct StatsReport {
 
 /// Compute `now` from wall clock, determine color from TTY/env, then delegate
 /// to [`run_with`].
-pub fn run<W: Write>(paths: &Paths, options: StatsOptions, writer: &mut W) -> io::Result<()> {
+pub fn run<W: Write>(paths: &Paths, mut options: StatsOptions, writer: &mut W) -> io::Result<()> {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
-    let color =
-        !options.json && std::env::var_os("NO_COLOR").is_none() && io::stdout().is_terminal();
+    let stdout_is_terminal = io::stdout().is_terminal();
+    options.output = effective_output(options.output, stdout_is_terminal);
+    let color = options.output != Output::Json
+        && std::env::var_os("NO_COLOR").is_none()
+        && stdout_is_terminal;
     run_with(paths, options, now, color, writer)
 }
 
@@ -100,10 +118,14 @@ pub fn run_with<W: Write>(
     writer: &mut W,
 ) -> io::Result<()> {
     if !paths.state_file.exists() {
-        if options.json {
-            writeln!(writer, "{}", empty_json())?;
-        } else {
-            writeln!(writer, "No frecency history yet - use snippets first.")?;
+        match options.output {
+            Output::Json => writeln!(writer, "{}", empty_json())?,
+            Output::Tui | Output::Text => write_message(
+                writer,
+                "No frecency history yet - use snippets first.",
+                options.output,
+                &options.theme,
+            )?,
         }
         return Ok(());
     }
@@ -111,10 +133,14 @@ pub fn run_with<W: Write>(
     let index = load_from_roots(&paths.snippet_roots)?;
 
     if index.is_empty() {
-        if options.json {
-            writeln!(writer, "{}", empty_json())?;
-        } else {
-            writeln!(writer, "No snippets found in configured roots.")?;
+        match options.output {
+            Output::Json => writeln!(writer, "{}", empty_json())?,
+            Output::Tui | Output::Text => write_message(
+                writer,
+                "No snippets found in configured roots.",
+                options.output,
+                &options.theme,
+            )?,
         }
         return Ok(());
     }
@@ -122,10 +148,22 @@ pub fn run_with<W: Write>(
     let store = FrecencyStore::load(&paths.state_file)?;
     let report = compute_report(&index, &store, &options, now);
 
-    if options.json {
-        write_json(writer, &report)
+    write_output(
+        writer,
+        &report,
+        options.sort,
+        color,
+        now,
+        options.output,
+        &options.theme,
+    )
+}
+
+fn effective_output(output: Output, stdout_is_terminal: bool) -> Output {
+    if output == Output::Tui && !stdout_is_terminal {
+        Output::Text
     } else {
-        write_human(writer, &report, options.sort, color, now)
+        output
     }
 }
 
@@ -316,6 +354,58 @@ fn write_json<W: Write>(writer: &mut W, report: &StatsReport) -> io::Result<()> 
 // ── Human-readable output ────────────────────────────────────────────────────
 
 const BOX_WIDTH: usize = 53;
+const STATS_TUI_HEIGHT: u16 = 20;
+
+fn write_message<W: Write>(
+    writer: &mut W,
+    message: &str,
+    output: Output,
+    theme: &Theme,
+) -> io::Result<()> {
+    match output {
+        Output::Text => writeln!(writer, "{message}"),
+        Output::Json => writeln!(writer, "{}", empty_json()),
+        Output::Tui => crate::tui::run_scrollable_text(
+            "pb stats",
+            "usage statistics",
+            "q/esc exit",
+            message.to_string(),
+            6,
+            theme,
+        ),
+    }
+}
+
+fn write_output<W: Write>(
+    writer: &mut W,
+    report: &StatsReport,
+    sort: Sort,
+    color: bool,
+    now: u64,
+    output: Output,
+    theme: &Theme,
+) -> io::Result<()> {
+    match output {
+        Output::Text => write_human(writer, report, sort, color, now),
+        Output::Json => write_json(writer, report),
+        Output::Tui => {
+            let mut rendered = Vec::new();
+            // The TUI draws after stdout has been redirected to a terminal, so
+            // the text-output is_terminal() gate does not apply here.
+            let tui_color = std::env::var_os("NO_COLOR").is_none();
+            write_human(&mut rendered, report, sort, tui_color, now)?;
+            let text = String::from_utf8(rendered).map_err(io::Error::other)?;
+            crate::tui::run_scrollable_text(
+                "pb stats",
+                "usage statistics",
+                "↑↓/jk scroll   q/esc exit",
+                text,
+                STATS_TUI_HEIGHT,
+                theme,
+            )
+        }
+    }
+}
 
 fn box_top(title: &str) -> String {
     // ┌─ Title ─────...─┐
@@ -619,7 +709,8 @@ mod tests {
         StatsOptions {
             top_n: 10,
             sort: Sort::Stale,
-            json: false,
+            output: Output::Text,
+            theme: Default::default(),
         }
     }
 
@@ -652,6 +743,13 @@ mod tests {
     }
 
     #[test]
+    fn default_tui_output_falls_back_to_text_when_stdout_is_not_terminal() {
+        assert_eq!(effective_output(Output::Tui, false), Output::Text);
+        assert_eq!(effective_output(Output::Tui, true), Output::Tui);
+        assert_eq!(effective_output(Output::Json, false), Output::Json);
+    }
+
+    #[test]
     fn missing_state_file_json_emits_empty_json() {
         let root = temp_dir("no-state-json");
         write_snippet(&root, "snippets.md", "echo", "Echo");
@@ -661,7 +759,7 @@ mod tests {
         run_with(
             &paths,
             StatsOptions {
-                json: true,
+                output: Output::Json,
                 ..opts_plain()
             },
             NOW,
@@ -831,7 +929,7 @@ mod tests {
         run_with(
             &paths,
             StatsOptions {
-                json: true,
+                output: Output::Json,
                 ..opts_plain()
             },
             NOW,

@@ -20,6 +20,7 @@ use crate::domain::SnippetId;
 use crate::fuzzy::FuzzyScorer;
 use crate::index::IndexedSnippet;
 use crate::search;
+use crate::tui::Chrome;
 
 use super::app::{ExecutionApp, NavigationMode, Screen, SuggestionProvider, tag_label};
 use super::browse::{BrowseEntry, DirNode};
@@ -45,11 +46,6 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
     /// Renders the snippet picker screen for fuzzy, browse, and tag navigation.
     fn render_select(&mut self, frame: &mut Frame<'_>) {
         let outer = frame.area();
-        let border = Block::default()
-            .borders(Borders::ALL)
-            .border_style(self.theme.border);
-        frame.render_widget(border, outer);
-        let area = Block::default().borders(Borders::ALL).inner(outer);
         let fuzzy_hits = search::rank(
             &self.index,
             &self.fuzzy.query,
@@ -65,13 +61,47 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
         let browse_visible = self.browse.visible(&self.tree);
         let tags_visible = self.visible_tags();
         let tag_snippets = self.visible_tag_snippets();
+        let help = if let Some(status) = &self.status {
+            status.clone()
+        } else {
+            match self.nav_mode {
+                NavigationMode::Fuzzy => {
+                    "enter accept  ctrl+e edit  ctrl+j/k/↑↓ preview  ctrl+t browse  esc cancel"
+                        .to_string()
+                }
+                NavigationMode::Browse => {
+                    let selected_is_dir = browse_visible
+                        .get(self.browse.selection().unwrap_or(0))
+                        .map(|e| matches!(e, BrowseEntry::Directory(_)))
+                        .unwrap_or(false);
+                    if selected_is_dir {
+                        "tab complete  enter open  ctrl+j/k/↑↓ preview  ctrl+t tags  esc cancel"
+                            .to_string()
+                    } else {
+                        "tab complete  enter accept  ctrl+e edit  ctrl+j/k/↑↓ preview  ctrl+t tags  esc cancel".to_string()
+                    }
+                }
+                NavigationMode::Tags => {
+                    if self.tags.drill().is_some() {
+                        "type filter  enter accept  esc tags  backspace clear/back  ctrl+t search"
+                            .to_string()
+                    } else {
+                        "type filter  enter open  ctrl+j/k/↑↓ preview  ctrl+t search  esc cancel"
+                            .to_string()
+                    }
+                }
+            }
+        };
+        let area = Chrome {
+            theme: &self.theme,
+            mode: "pb execute",
+            title: "pick a snippet",
+            footer: &help,
+        }
+        .render(outer, frame.buffer_mut());
         let chunks = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Min(1),
-                Constraint::Length(2),
-                Constraint::Length(1),
-            ])
+            .constraints([Constraint::Min(1), Constraint::Length(2)])
             .split(area);
         let main = Layout::default()
             .direction(Direction::Horizontal)
@@ -255,39 +285,6 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
             inner,
         );
 
-        let help = if let Some(status) = &self.status {
-            status.clone()
-        } else {
-            match self.nav_mode {
-                NavigationMode::Fuzzy => {
-                    "enter accept  ctrl+e edit  ctrl+j/k/↑↓ preview  ctrl+t browse  esc cancel"
-                        .to_string()
-                }
-                NavigationMode::Browse => {
-                    let selected_is_dir = browse_visible
-                        .get(self.browse.selection().unwrap_or(0))
-                        .map(|e| matches!(e, BrowseEntry::Directory(_)))
-                        .unwrap_or(false);
-                    if selected_is_dir {
-                        "tab complete  enter open  ctrl+j/k/↑↓ preview  ctrl+t tags  esc cancel"
-                            .to_string()
-                    } else {
-                        "tab complete  enter accept  ctrl+e edit  ctrl+j/k/↑↓ preview  ctrl+t tags  esc cancel".to_string()
-                    }
-                }
-                NavigationMode::Tags => {
-                    if self.tags.drill().is_some() {
-                        "type filter  enter accept  esc tags  backspace clear/back  ctrl+t search"
-                            .to_string()
-                    } else {
-                        "type filter  enter open  ctrl+j/k/↑↓ preview  ctrl+t search  esc cancel"
-                            .to_string()
-                    }
-                }
-            }
-        };
-        frame.render_widget(chrome_line(&self.theme, help), chunks[2]);
-
         if matches!(self.nav_mode, NavigationMode::Fuzzy | NavigationMode::Tags) {
             let cursor_col = match self.nav_mode {
                 NavigationMode::Fuzzy => self.fuzzy.cursor_col(),
@@ -308,36 +305,35 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
     /// Renders the variable-entry prompt for a selected snippet.
     fn render_prompt(&self, frame: &mut Frame<'_>, prompt: &PromptState) {
         let outer = frame.area();
-        let border = Block::default()
-            .borders(Borders::ALL)
-            .border_style(self.theme.border);
-        frame.render_widget(border, outer);
-        let area = Block::default().borders(Borders::ALL).inner(outer);
+        let help = "tab complete/next  shift+tab prev  enter accept  esc return";
+        let area = Chrome {
+            theme: &self.theme,
+            mode: "pb execute",
+            title: "fill variables",
+            footer: help,
+        }
+        .render(outer, frame.buffer_mut());
         let preview = self.prompt_preview_text(prompt);
         let total_preview_lines = preview.lines.len() as u16;
 
-        // Reserve rows for status (1) + help (1) + suggestions (variable). The
-        // command preview takes whatever is left, capped so it never crowds out
-        // the panes below — large multi-line values scroll within `cmd_area`
-        // instead of pushing the suggestions/help off-screen.
-        let (cmd_area, status_area, sugg_area, help_area) = if prompt.suggestions.is_empty() {
-            let cmd_max = area.height.saturating_sub(2).max(1);
+        // Reserve rows for status (1) + suggestions (variable). The command
+        // preview takes whatever is left, capped so it never crowds out the
+        // panes below — large multi-line values scroll within `cmd_area`
+        // instead of pushing the suggestions/status off-screen.
+        let (cmd_area, status_area, sugg_area) = if prompt.suggestions.is_empty() {
+            let cmd_max = area.height.saturating_sub(1).max(1);
             let cmd_height = total_preview_lines.max(1).min(cmd_max);
             let chunks = Layout::default()
                 .direction(Direction::Vertical)
-                .constraints([
-                    Constraint::Length(cmd_height),
-                    Constraint::Length(1),
-                    Constraint::Length(1),
-                ])
+                .constraints([Constraint::Length(cmd_height), Constraint::Length(1)])
                 .split(area);
-            (chunks[0], chunks[1], None, chunks[2])
+            (chunks[0], chunks[1], None)
         } else {
             let visible_sugg = prompt.visible_suggestions().len() as u16;
-            // Cap suggestions to leave at least 1 row for cmd + 2 for status/help.
-            let max_sugg = area.height.saturating_sub(3);
+            // Cap suggestions to leave at least 1 row for cmd + 1 for status.
+            let max_sugg = area.height.saturating_sub(2);
             let sugg_height = visible_sugg.min(max_sugg).max(1);
-            let cmd_max = area.height.saturating_sub(sugg_height + 2).max(1);
+            let cmd_max = area.height.saturating_sub(sugg_height + 1).max(1);
             let cmd_height = total_preview_lines.max(1).min(cmd_max);
             let chunks = Layout::default()
                 .direction(Direction::Vertical)
@@ -345,10 +341,9 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
                     Constraint::Length(cmd_height),
                     Constraint::Length(1),
                     Constraint::Length(sugg_height),
-                    Constraint::Length(1),
                 ])
                 .split(area);
-            (chunks[0], chunks[1], Some(chunks[2]), chunks[3])
+            (chunks[0], chunks[1], Some(chunks[2]))
         };
 
         // Compute the cursor row first so we can scroll the preview to keep it
@@ -420,14 +415,6 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
                 y: cmd_area.y + visible_row,
             });
         }
-
-        frame.render_widget(
-            chrome_line(
-                &self.theme,
-                "tab complete/next  shift+tab prev  enter accept  esc return",
-            ),
-            help_area,
-        );
     }
 
     /// Builds the command preview shown while a prompt variable is being edited.

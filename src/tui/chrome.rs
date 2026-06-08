@@ -1,9 +1,7 @@
 //! Shared TUI chrome: outer border, top title bar, bottom footer hint row.
 //!
-//! Wraps a content area with the same border/divider style execute uses, so
-//! pb-binary screens feel consistent without duplicating the styling glue.
-//! Execute itself does not (yet) call this; it computes its own bordered area
-//! with a custom two-pane header. Adopt this helper for any new screen.
+//! Wraps a content area with shared border/divider styling so pb-binary
+//! screens feel consistent without duplicating the styling glue.
 
 use crate::config::Theme;
 use ratatui::buffer::Buffer;
