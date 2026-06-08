@@ -1,4 +1,5 @@
 use crate::config;
+use crate::config::Theme;
 use crate::domain::SnippetId;
 use crate::edit::editor;
 use crate::frecency::FrecencyStore;
@@ -13,7 +14,7 @@ use crossterm::execute;
 use crossterm::terminal::{self, ClearType, disable_raw_mode, enable_raw_mode};
 use ratatui::backend::CrosstermBackend;
 use ratatui::text::Text;
-use ratatui::widgets::{Block, Borders, Paragraph};
+use ratatui::widgets::Paragraph;
 use ratatui::{Terminal, TerminalOptions, Viewport};
 use std::io;
 use std::io::IsTerminal;
@@ -142,9 +143,12 @@ pub fn run_execute_with_provider<P: SuggestionProvider>(
 
 /// Show pre-rendered text in an inline, scrollable TUI until the user exits.
 pub(crate) fn run_scrollable_text(
+    mode: &str,
     title: &str,
+    footer: &str,
     text: String,
     viewport_height: u16,
+    theme: &Theme,
 ) -> io::Result<()> {
     let _stdout_guard = StdoutTtyGuard::enter()?;
     let tui_output = TuiOutputKind::detect();
@@ -162,12 +166,16 @@ pub(crate) fn run_scrollable_text(
         terminal.draw(|frame| {
             viewport_top = viewport_top.or(Some(frame.area().y));
             let area = frame.area();
-            let max_scroll = line_count.saturating_sub(area.height.saturating_sub(2));
+            let content = crate::tui::chrome::Chrome {
+                theme,
+                mode,
+                title,
+                footer,
+            }
+            .render(area, frame.buffer_mut());
+            let max_scroll = line_count.saturating_sub(content.height);
             scroll = scroll.min(max_scroll);
-            let paragraph = Paragraph::new(text.clone())
-                .block(Block::default().title(title).borders(Borders::ALL))
-                .scroll((scroll, 0));
-            frame.render_widget(paragraph, area);
+            frame.render_widget(Paragraph::new(text.clone()).scroll((scroll, 0)), content);
         })?;
 
         if !event::poll(Duration::from_millis(250))? {

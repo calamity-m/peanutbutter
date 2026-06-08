@@ -1,4 +1,4 @@
-use crate::config::Paths;
+use crate::config::{Paths, Theme};
 use crate::domain::SnippetId;
 use crate::frecency::FrecencyStore;
 use crate::index::load_from_roots;
@@ -37,6 +37,8 @@ pub struct StatsOptions {
     pub sort: Sort,
     /// Human-facing output mode used when `json` is false.
     pub output: Output,
+    /// Theme used by the interactive stats TUI.
+    pub theme: Theme,
     /// Emit JSON instead of human-readable output.
     pub json: bool,
 }
@@ -47,6 +49,7 @@ impl Default for StatsOptions {
             top_n: 10,
             sort: Sort::Stale,
             output: Output::Tui,
+            theme: Theme::default(),
             json: false,
         }
     }
@@ -120,6 +123,7 @@ pub fn run_with<W: Write>(
                 writer,
                 "No frecency history yet - use snippets first.",
                 options.output,
+                &options.theme,
             )?;
         }
         return Ok(());
@@ -135,6 +139,7 @@ pub fn run_with<W: Write>(
                 writer,
                 "No snippets found in configured roots.",
                 options.output,
+                &options.theme,
             )?;
         }
         return Ok(());
@@ -146,7 +151,15 @@ pub fn run_with<W: Write>(
     if options.json {
         write_json(writer, &report)
     } else {
-        write_output(writer, &report, options.sort, color, now, options.output)
+        write_output(
+            writer,
+            &report,
+            options.sort,
+            color,
+            now,
+            options.output,
+            &options.theme,
+        )
     }
 }
 
@@ -339,10 +352,22 @@ fn write_json<W: Write>(writer: &mut W, report: &StatsReport) -> io::Result<()> 
 const BOX_WIDTH: usize = 53;
 const STATS_TUI_HEIGHT: u16 = 20;
 
-fn write_message<W: Write>(writer: &mut W, message: &str, output: Output) -> io::Result<()> {
+fn write_message<W: Write>(
+    writer: &mut W,
+    message: &str,
+    output: Output,
+    theme: &Theme,
+) -> io::Result<()> {
     match output {
         Output::Text => writeln!(writer, "{message}"),
-        Output::Tui => crate::execute::run_scrollable_text("Stats", message.to_string(), 3),
+        Output::Tui => crate::execute::run_scrollable_text(
+            "pb stats",
+            "usage statistics",
+            "q/esc exit",
+            message.to_string(),
+            6,
+            theme,
+        ),
     }
 }
 
@@ -353,6 +378,7 @@ fn write_output<W: Write>(
     color: bool,
     now: u64,
     output: Output,
+    theme: &Theme,
 ) -> io::Result<()> {
     match output {
         Output::Text => write_human(writer, report, sort, color, now),
@@ -362,9 +388,12 @@ fn write_output<W: Write>(
             write_human(&mut rendered, report, sort, tui_color, now)?;
             let text = String::from_utf8(rendered).map_err(io::Error::other)?;
             crate::execute::run_scrollable_text(
-                "Stats (q/esc exit, j/k scroll)",
+                "pb stats",
+                "usage statistics",
+                "↑↓/jk scroll   q/esc exit",
                 text,
                 STATS_TUI_HEIGHT,
+                theme,
             )
         }
     }
@@ -673,6 +702,7 @@ mod tests {
             top_n: 10,
             sort: Sort::Stale,
             output: Output::Text,
+            theme: Default::default(),
             json: false,
         }
     }

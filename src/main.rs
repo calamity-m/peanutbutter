@@ -203,6 +203,7 @@ fn main() {
                     top_n: top,
                     sort,
                     output,
+                    theme: app_config.theme.clone(),
                     json,
                 },
                 &mut stdout,
