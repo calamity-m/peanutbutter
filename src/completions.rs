@@ -10,8 +10,21 @@ use std::env;
 use std::io;
 use std::path::Path;
 
+/// Shell targeted by `peanutbutter completions <shell>`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum Shell {
+    /// Emit bash integration code.
+    Bash,
+    /// Emit zsh integration code.
+    Zsh,
+    /// Emit fish integration code.
+    Fish,
+    /// Emit PowerShell integration code.
+    Powershell,
+}
+
 /// Emit the bash integration script using the path of the currently running
-/// executable. Intended for `peanutbutter bash`; the caller should `eval` the
+/// executable. Intended for `peanutbutter completions bash`; the caller should `eval` the
 /// output in their shell init file.
 pub fn bash_integration_for_current_exe(binding: &str) -> io::Result<String> {
     let exe = env::current_exe()?;
@@ -77,7 +90,11 @@ __pb_complete() {{
     done < <({executable} complete-edit "$cur")
     return 0
   fi
-  COMPREPLY=( $(compgen -W "--theme bash edit execute zsh fish powershell lint gc new stats" -- "$cur") )
+  if [[ "$subcommand" == "completions" ]]; then
+    COMPREPLY=( $(compgen -W "bash zsh fish powershell" -- "$cur") )
+    return 0
+  fi
+  COMPREPLY=( $(compgen -W "--theme completions edit execute lint gc new stats" -- "$cur") )
 }}
 complete -o nospace -F __pb_complete {BINARY_NAME} {BASH_ALIAS_NAME}
 "#
@@ -145,8 +162,10 @@ _pb_complete() {{
     local -a candidates
     candidates=( ${{(f)"$({executable} complete-edit "${{words[CURRENT]}}")"}} )
     compadd -S '' -- "${{candidates[@]}}"
+  elif [[ "${{words[2]}}" == "completions" ]]; then
+    compadd -- bash zsh fish powershell
   else
-    compadd -- --theme bash edit execute zsh fish powershell lint gc new stats
+    compadd -- --theme completions edit execute lint gc new stats
   fi
 }}
 compdef _pb_complete {BINARY_NAME} {BASH_ALIAS_NAME}
@@ -206,15 +225,16 @@ function {BINARY_NAME}
   __pb_dispatch $argv
 end
 complete -c {BINARY_NAME} -f -l theme -a '(__pb_complete_theme)'
-complete -c {BINARY_NAME} -f -n 'not __fish_seen_subcommand_from bash edit execute zsh fish powershell lint gc new stats' -a 'bash edit execute zsh fish powershell lint gc new stats'
+complete -c {BINARY_NAME} -f -n 'not __fish_seen_subcommand_from completions edit execute lint gc new stats' -a 'completions edit execute lint gc new stats'
 complete -c {BINARY_NAME} -f -n '__fish_seen_subcommand_from edit' -a '(__pb_complete_edit)'
+complete -c {BINARY_NAME} -f -n '__fish_seen_subcommand_from completions' -a 'bash zsh fish powershell'
 complete -c {BASH_ALIAS_NAME} -w {BINARY_NAME}
 "#
     ))
 }
 
 /// Emit the PowerShell integration script using the path of the currently running
-/// executable. Intended for `peanutbutter powershell`; the caller should add the
+/// executable. Intended for `peanutbutter completions powershell`; the caller should add the
 /// output to their PowerShell profile.
 pub fn powershell_integration_for_current_exe(binding: &str) -> io::Result<String> {
     let exe = env::current_exe()?;
@@ -255,8 +275,10 @@ Register-ArgumentCompleter -CommandName {BINARY_NAME},{BASH_ALIAS_NAME} -ScriptB
     & $script:__pb_exe complete-theme $wordToComplete | ForEach-Object {{ [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_) }}
   }} elseif ($words.Count -ge 2 -and $words[1] -eq 'edit') {{
     & $script:__pb_exe complete-edit $wordToComplete | ForEach-Object {{ [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_) }}
+  }} elseif ($words.Count -ge 2 -and $words[1] -eq 'completions') {{
+    'bash','zsh','fish','powershell' | Where-Object {{ $_ -like "$wordToComplete*" }} | ForEach-Object {{ [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_) }}
   }} else {{
-    'bash','edit','execute','zsh','fish','powershell','lint','gc','new','stats','--theme' | Where-Object {{ $_ -like "$wordToComplete*" }} | ForEach-Object {{ [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_) }}
+    'completions','edit','execute','lint','gc','new','stats','--theme' | Where-Object {{ $_ -like "$wordToComplete*" }} | ForEach-Object {{ [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_) }}
   }}
 }}
 "#
@@ -346,7 +368,8 @@ mod tests {
     #[test]
     fn bash_script_completion_word_list_includes_all_shells() {
         let script = bash_integration_script("C+b", Path::new("/tmp/peanutbutter")).unwrap();
-        assert!(script.contains("bash edit execute zsh fish powershell lint gc new stats"));
+        assert!(script.contains("--theme completions edit execute lint gc new stats"));
+        assert!(script.contains("compgen -W \"bash zsh fish powershell\""));
         assert!(script.contains("complete-theme \"$cur\""));
         assert!(script.contains("--theme"));
     }
@@ -493,7 +516,8 @@ mod tests {
         assert!(script.contains("Register-ArgumentCompleter -CommandName peanutbutter,pb"));
         assert!(script.contains("complete-edit $wordToComplete"));
         assert!(script.contains("complete-theme $wordToComplete"));
-        assert!(script.contains("'powershell'"));
+        assert!(script.contains("'completions'"));
+        assert!(script.contains("'bash','zsh','fish','powershell'"));
     }
 
     #[test]

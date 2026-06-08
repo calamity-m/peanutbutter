@@ -42,7 +42,7 @@ pub fn run_new_command(
         if entries.is_empty() {
             return Err(io::Error::other(
                 "pb new: no shell history available. Source the shell integration \
-                 (e.g. eval \"$(peanutbutter bash C+b)\") and re-run, or bypass with: \
+                 (e.g. eval \"$(peanutbutter completions bash C+b)\") and re-run, or bypass with: \
                  pb new <name> -- <command...>",
             ));
         }

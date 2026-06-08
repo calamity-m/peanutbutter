@@ -101,35 +101,16 @@ fn main() {
             let _ = stdout.flush();
             result
         }
-        cli::Command::Bash { binding } => {
-            match completions::bash_integration_for_current_exe(&binding) {
-                Ok(script) => {
-                    print!("{script}");
-                    Ok(())
+        cli::Command::Completions { shell, binding } => {
+            let script = match shell {
+                completions::Shell::Bash => completions::bash_integration_for_current_exe(&binding),
+                completions::Shell::Zsh => completions::zsh_integration_for_current_exe(&binding),
+                completions::Shell::Fish => completions::fish_integration_for_current_exe(&binding),
+                completions::Shell::Powershell => {
+                    completions::powershell_integration_for_current_exe(&binding)
                 }
-                Err(err) => Err(err),
-            }
-        }
-        cli::Command::Zsh { binding } => {
-            match completions::zsh_integration_for_current_exe(&binding) {
-                Ok(script) => {
-                    print!("{script}");
-                    Ok(())
-                }
-                Err(err) => Err(err),
-            }
-        }
-        cli::Command::Fish { binding } => {
-            match completions::fish_integration_for_current_exe(&binding) {
-                Ok(script) => {
-                    print!("{script}");
-                    Ok(())
-                }
-                Err(err) => Err(err),
-            }
-        }
-        cli::Command::Powershell { binding } => {
-            match completions::powershell_integration_for_current_exe(&binding) {
+            };
+            match script {
                 Ok(script) => {
                     print!("{script}");
                     Ok(())
