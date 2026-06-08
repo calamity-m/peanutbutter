@@ -29,7 +29,6 @@ pub use app::{
     AppEvent, ExecutionApp, NavigationMode, SuggestionProvider, SystemSuggestionProvider,
 };
 pub use prompt::{command_suggestions, render_command};
-pub(crate) use terminal::run_scrollable_text;
 pub use terminal::{execute_default, run_execute, run_execute_with_provider};
 
 /// The result of a completed TUI session: the snippet the user chose and the
@@ -89,12 +88,12 @@ impl Default for ExecuteOptions {
 }
 
 #[cfg(test)]
+pub(crate) use crate::tui::compact_viewport_height;
+#[cfg(test)]
 pub(crate) use prompt::{
     active_prompt_style, builtin_suggestions, placeholder_prompt_style, render_command_text,
     unique_variables,
 };
-#[cfg(test)]
-pub(crate) use terminal::compact_viewport_height;
 
 #[cfg(test)]
 mod tests;

@@ -691,6 +691,25 @@ fn tags_mode_render_does_not_panic() {
 }
 
 #[test]
+fn select_render_uses_shared_chrome_title_and_footer() {
+    let mut app = app_with_body("echo hi", vec![], TestProvider::default());
+    let backend = TestBackend::new(80, 20);
+    let mut terminal = Terminal::new(backend).expect("terminal");
+
+    terminal.draw(|frame| app.render(frame)).expect("draw");
+    let rendered: String = terminal
+        .backend()
+        .buffer()
+        .content()
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect();
+
+    assert!(rendered.contains("pb execute — pick a snippet"));
+    assert!(rendered.contains("enter accept"));
+}
+
+#[test]
 fn tags_visible_list_is_alphabetical_with_untagged_last() {
     let index = SnippetIndex::from_files([
         snippet_file_with_tags("git.md", "git", "Git", &["git"]),

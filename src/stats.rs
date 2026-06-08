@@ -95,14 +95,16 @@ pub struct StatsReport {
 
 /// Compute `now` from wall clock, determine color from TTY/env, then delegate
 /// to [`run_with`].
-pub fn run<W: Write>(paths: &Paths, options: StatsOptions, writer: &mut W) -> io::Result<()> {
+pub fn run<W: Write>(paths: &Paths, mut options: StatsOptions, writer: &mut W) -> io::Result<()> {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
+    let stdout_is_terminal = io::stdout().is_terminal();
+    options.output = effective_output(options.output, stdout_is_terminal);
     let color = options.output != Output::Json
         && std::env::var_os("NO_COLOR").is_none()
-        && io::stdout().is_terminal();
+        && stdout_is_terminal;
     run_with(paths, options, now, color, writer)
 }
 
@@ -155,6 +157,14 @@ pub fn run_with<W: Write>(
         options.output,
         &options.theme,
     )
+}
+
+fn effective_output(output: Output, stdout_is_terminal: bool) -> Output {
+    if output == Output::Tui && !stdout_is_terminal {
+        Output::Text
+    } else {
+        output
+    }
 }
 
 fn compute_report(
@@ -355,7 +365,7 @@ fn write_message<W: Write>(
     match output {
         Output::Text => writeln!(writer, "{message}"),
         Output::Json => writeln!(writer, "{}", empty_json()),
-        Output::Tui => crate::execute::run_scrollable_text(
+        Output::Tui => crate::tui::run_scrollable_text(
             "pb stats",
             "usage statistics",
             "q/esc exit",
@@ -380,10 +390,12 @@ fn write_output<W: Write>(
         Output::Json => write_json(writer, report),
         Output::Tui => {
             let mut rendered = Vec::new();
+            // The TUI draws after stdout has been redirected to a terminal, so
+            // the text-output is_terminal() gate does not apply here.
             let tui_color = std::env::var_os("NO_COLOR").is_none();
             write_human(&mut rendered, report, sort, tui_color, now)?;
             let text = String::from_utf8(rendered).map_err(io::Error::other)?;
-            crate::execute::run_scrollable_text(
+            crate::tui::run_scrollable_text(
                 "pb stats",
                 "usage statistics",
                 "↑↓/jk scroll   q/esc exit",
@@ -728,6 +740,13 @@ mod tests {
         run_with(&paths, opts_plain(), NOW, false, &mut out).unwrap();
         let s = String::from_utf8(out).unwrap();
         assert!(s.contains("No frecency history yet"));
+    }
+
+    #[test]
+    fn default_tui_output_falls_back_to_text_when_stdout_is_not_terminal() {
+        assert_eq!(effective_output(Output::Tui, false), Output::Text);
+        assert_eq!(effective_output(Output::Tui, true), Output::Tui);
+        assert_eq!(effective_output(Output::Json, false), Output::Json);
     }
 
     #[test]
