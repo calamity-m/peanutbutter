@@ -1485,6 +1485,47 @@ fn prompt_tab_fills_highlighted_suggestion_before_cycling() {
 }
 
 #[test]
+fn prompt_enter_fills_highlighted_suggestion_before_advancing() {
+    let variables = vec![
+        Variable {
+            name: "method".to_string(),
+            source: VariableSource::Command("ignored".to_string()),
+        },
+        Variable {
+            name: "path".to_string(),
+            source: VariableSource::Free,
+        },
+    ];
+    let provider = TestProvider::default().with("method", &["GET", "POST"]);
+    let mut app = app_with_body("curl -X <@method> <@path>", variables, provider);
+    let _ = app.handle_key(press(KeyCode::Enter));
+
+    // Type a filter that narrows the suggestions to "POST".
+    let _ = app.handle_key(press(KeyCode::Char('P')));
+    let _ = app.handle_key(press(KeyCode::Char('O')));
+
+    // First Enter: fills the input from the highlighted filtered suggestion
+    // ("POST") rather than submitting the literal typed filter ("PO").
+    let _ = app.handle_key(press(KeyCode::Enter));
+    let Screen::Prompt(prompt) = &app.screen else {
+        panic!("expected prompt");
+    };
+    assert_eq!(prompt.current_variable().name, "method");
+    assert_eq!(prompt.input, "POST");
+
+    // Second Enter: input already matches the selection, so it advances.
+    let _ = app.handle_key(press(KeyCode::Enter));
+    let Screen::Prompt(prompt) = &app.screen else {
+        panic!("expected prompt");
+    };
+    assert_eq!(prompt.current_variable().name, "path");
+    assert_eq!(
+        prompt.values.get("method").map(String::as_str),
+        Some("POST")
+    );
+}
+
+#[test]
 fn prompt_shift_tab_cycles_backward_between_variables() {
     let variables = vec![
         Variable {

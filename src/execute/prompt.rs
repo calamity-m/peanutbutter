@@ -246,6 +246,14 @@ pub(crate) fn handle_prompt_key<P: SuggestionProvider>(
             PromptTransition::Stay
         }
         KeyCode::Enter => {
+            if let Some(selected) = prompt.selected_visible_suggestion().cloned()
+                && !prompt.input.is_empty()
+                && prompt.input != selected
+            {
+                prompt.input = selected;
+                prompt.reset_selection();
+                return PromptTransition::Stay;
+            }
             store_current_value(prompt, provider);
             if prompt.index + 1 < prompt.variables.len() {
                 prompt.index += 1;
