@@ -24,7 +24,7 @@ containing a **marker file**. Any of the following names is accepted:
 | `peanutbutter.toml` | Visible config |
 | `_peanutbutter.toml` | Visible, underscore-prefixed |
 
-Create an empty marker file in the root of your snippet directory:
+Create a marker file in the root of your snippet directory:
 
 ```sh
 touch .peanutbutter.toml        # or peanutbutter.toml / _peanutbutter.toml
@@ -34,8 +34,32 @@ The server walks up from the open file's directory until it finds a marker.
 The directory containing the marker becomes the snippet root used for linting.
 Files outside any marked tree receive no diagnostics and no completions.
 
-When multiple nested markers exist the nearest ancestor wins, so monorepos
-with independent snippet roots work correctly.
+Marker files are TOML. Empty files are valid, and these optional top-level keys
+customize LSP behavior for that workspace. If a marker file is not valid TOML,
+the LSP treats the workspace as inactive until the marker is fixed:
+
+```toml
+# Files or directories the LSP should ignore under this marker root.
+ignore = ["archive/**", "generated"]
+
+# If set, the LSP only attaches to matching paths under this marker root.
+attach_only = ["snippets/**"]
+
+# Disable lint rules for this workspace. Rule names may include or omit `lint/`.
+skip_rules = ["unused-variable", "lint/markdown-structure"]
+```
+
+`ignore` and `attach_only` are glob patterns matched against paths relative to
+the marker directory, using `/` separators. `*` and `?` match within a single
+path segment; use `**` to match across directories. Directory-style patterns
+also match files below that directory, so `generated` ignores
+`generated/foo.md`.
+
+Workspace marker settings are marker-local; they do not extend the global
+`config.toml` schema. Global lint config still applies first, and `skip_rules`
+adds workspace-specific disabled rules on top of it. The marker is parsed after
+the nearest marker root is found, so when multiple nested markers exist the
+nearest ancestor wins and supplies the LSP settings for files under it.
 
 ## Neovim setup
 
