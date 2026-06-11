@@ -422,16 +422,6 @@ struct LspWorkspace {
     config: LspWorkspaceConfig,
 }
 
-/// Walk up from `path`'s parent directory looking for any [`MARKER_FILENAMES`].
-///
-/// Returns the directory that contains the marker file, which becomes the
-/// snippet root used for linting and snippet ID construction. Returns `None`
-/// when no marker is found before reaching the filesystem root.
-#[cfg(test)]
-fn find_marker_root(path: &Path) -> Option<PathBuf> {
-    find_marker(path).map(|(root, _)| root)
-}
-
 fn find_lsp_workspace(path: &Path) -> Option<LspWorkspace> {
     if path.extension().and_then(|extension| extension.to_str()) != Some("md") {
         return None;
@@ -674,47 +664,47 @@ mod tests {
     }
 
     #[test]
-    fn find_marker_root_dot_peanutbutter_toml() {
+    fn find_marker_dot_peanutbutter_toml() {
         let root = tmp_dir();
         fs::write(root.join(".peanutbutter.toml"), "").unwrap();
         let file = root.join("sub").join("snippets.md");
         fs::create_dir_all(file.parent().unwrap()).unwrap();
         fs::write(&file, "").unwrap();
-        assert_eq!(find_marker_root(&file), Some(root.clone()));
+        assert_eq!(find_marker(&file).map(|(root, _)| root), Some(root.clone()));
         fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]
-    fn find_marker_root_peanutbutter_toml() {
+    fn find_marker_peanutbutter_toml() {
         let root = tmp_dir();
         fs::write(root.join("peanutbutter.toml"), "").unwrap();
         let file = root.join("snippets.md");
         fs::write(&file, "").unwrap();
-        assert_eq!(find_marker_root(&file), Some(root.clone()));
+        assert_eq!(find_marker(&file).map(|(root, _)| root), Some(root.clone()));
         fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]
-    fn find_marker_root_underscore_peanutbutter_toml() {
+    fn find_marker_underscore_peanutbutter_toml() {
         let root = tmp_dir();
         fs::write(root.join("_peanutbutter.toml"), "").unwrap();
         let file = root.join("snippets.md");
         fs::write(&file, "").unwrap();
-        assert_eq!(find_marker_root(&file), Some(root.clone()));
+        assert_eq!(find_marker(&file).map(|(root, _)| root), Some(root.clone()));
         fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]
-    fn find_marker_root_returns_none_when_no_marker() {
+    fn find_marker_returns_none_when_no_marker() {
         let root = tmp_dir();
         let file = root.join("snippets.md");
         fs::write(&file, "").unwrap();
-        assert_eq!(find_marker_root(&file), None);
+        assert_eq!(find_marker(&file).map(|(root, _)| root), None);
         fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]
-    fn find_marker_root_nearest_ancestor_wins() {
+    fn find_marker_nearest_ancestor_wins() {
         // Inner marker should win over outer one.
         let outer = tmp_dir();
         let inner = outer.join("sub");
@@ -723,7 +713,10 @@ mod tests {
         fs::write(inner.join("peanutbutter.toml"), "").unwrap();
         let file = inner.join("snippets.md");
         fs::write(&file, "").unwrap();
-        assert_eq!(find_marker_root(&file), Some(inner.clone()));
+        assert_eq!(
+            find_marker(&file).map(|(root, _)| root),
+            Some(inner.clone())
+        );
         fs::remove_dir_all(&outer).unwrap();
     }
 
