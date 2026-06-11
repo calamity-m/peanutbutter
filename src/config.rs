@@ -624,7 +624,7 @@ impl ThemeColorConfig {
     }
 }
 
-fn string_or_vec<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+pub(crate) fn string_or_vec<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {

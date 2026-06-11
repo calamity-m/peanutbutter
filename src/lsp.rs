@@ -16,7 +16,9 @@
 use crate::config::{self, AppConfig};
 use crate::lint;
 use crate::parser;
+use serde::Deserialize;
 use std::collections::HashMap;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -152,7 +154,7 @@ impl LanguageServer for Backend {
     async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
         let uri = &params.text_document_position.text_document.uri;
         let pos = params.text_document_position.position;
-        if find_marker_root(&uri_to_path(uri)).is_none() {
+        if find_lsp_workspace(&uri_to_path(uri)).is_none() {
             return Ok(None);
         }
         let docs = self.documents.read().await;
@@ -169,7 +171,7 @@ impl LanguageServer for Backend {
     async fn hover(&self, params: HoverParams) -> Result<Option<Hover>> {
         let uri = &params.text_document_position_params.text_document.uri;
         let pos = params.text_document_position_params.position;
-        if find_marker_root(&uri_to_path(uri)).is_none() {
+        if find_lsp_workspace(&uri_to_path(uri)).is_none() {
             return Ok(None);
         }
         let docs = self.documents.read().await;
@@ -185,7 +187,7 @@ impl LanguageServer for Backend {
     ) -> Result<Option<GotoDefinitionResponse>> {
         let uri = &params.text_document_position_params.text_document.uri;
         let pos = params.text_document_position_params.position;
-        if find_marker_root(&uri_to_path(uri)).is_none() {
+        if find_lsp_workspace(&uri_to_path(uri)).is_none() {
             return Ok(None);
         }
         let docs = self.documents.read().await;
@@ -203,7 +205,7 @@ impl LanguageServer for Backend {
     async fn references(&self, params: ReferenceParams) -> Result<Option<Vec<Location>>> {
         let uri = &params.text_document_position.text_document.uri;
         let pos = params.text_document_position.position;
-        if find_marker_root(&uri_to_path(uri)).is_none() {
+        if find_lsp_workspace(&uri_to_path(uri)).is_none() {
             return Ok(None);
         }
         let docs = self.documents.read().await;
@@ -215,7 +217,7 @@ impl LanguageServer for Backend {
 
     async fn code_action(&self, params: CodeActionParams) -> Result<Option<CodeActionResponse>> {
         let uri = &params.text_document.uri;
-        if find_marker_root(&uri_to_path(uri)).is_none() {
+        if find_lsp_workspace(&uri_to_path(uri)).is_none() {
             return Ok(None);
         }
         let docs = self.documents.read().await;
@@ -235,7 +237,7 @@ impl LanguageServer for Backend {
         params: SemanticTokensParams,
     ) -> Result<Option<SemanticTokensResult>> {
         let uri = &params.text_document.uri;
-        if find_marker_root(&uri_to_path(uri)).is_none() {
+        if find_lsp_workspace(&uri_to_path(uri)).is_none() {
             return Ok(None);
         }
         let docs = self.documents.read().await;
@@ -253,14 +255,22 @@ impl LanguageServer for Backend {
 impl Backend {
     async fn publish_diagnostics(&self, uri: &Url, content: &str) {
         let path = uri_to_path(uri);
-        let Some(root) = find_marker_root(&path) else {
+        let Some(workspace) = find_lsp_workspace(&path) else {
             // Outside a peanutbutter snippet tree; clear any stale diagnostics.
             self.client
                 .publish_diagnostics(uri.clone(), vec![], None)
                 .await;
             return;
         };
-        let findings = lint::lint_file(&path, &root, content, &self.config);
+        let effective_config;
+        let config = if workspace.config.skip_rules.is_empty() {
+            self.config.as_ref()
+        } else {
+            effective_config =
+                config_with_skipped_rules(&self.config, &workspace.config.skip_rules);
+            &effective_config
+        };
+        let findings = lint::lint_file(&path, &workspace.root, content, config);
         let diagnostics = findings
             .iter()
             .map(|f| lint_finding_to_diagnostic(f, content))
@@ -391,17 +401,56 @@ pub const MARKER_FILENAMES: &[&str] = &[
     "_peanutbutter.toml",
 ];
 
+/// Per-workspace LSP settings loaded from a marker file.
+#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+struct LspWorkspaceConfig {
+    /// Glob patterns for workspace-relative files or directories the LSP ignores.
+    #[serde(deserialize_with = "config::string_or_vec")]
+    ignore: Vec<String>,
+    /// Glob patterns that opt files in; an empty list allows every non-ignored file.
+    #[serde(deserialize_with = "config::string_or_vec")]
+    attach_only: Vec<String>,
+    /// Lint rule names disabled for this workspace, with or without `lint/`.
+    #[serde(deserialize_with = "config::string_or_vec")]
+    skip_rules: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LspWorkspace {
+    root: PathBuf,
+    config: LspWorkspaceConfig,
+}
+
 /// Walk up from `path`'s parent directory looking for any [`MARKER_FILENAMES`].
 ///
 /// Returns the directory that contains the marker file, which becomes the
 /// snippet root used for linting and snippet ID construction. Returns `None`
 /// when no marker is found before reaching the filesystem root.
+#[cfg(test)]
 fn find_marker_root(path: &Path) -> Option<PathBuf> {
+    find_marker(path).map(|(root, _)| root)
+}
+
+fn find_lsp_workspace(path: &Path) -> Option<LspWorkspace> {
+    if path.extension().and_then(|extension| extension.to_str()) != Some("md") {
+        return None;
+    }
+    let (root, marker_path) = find_marker(path)?;
+    let config = parse_marker_config(&marker_path).ok()?;
+    if !workspace_allows_path(&root, path, &config) {
+        return None;
+    }
+    Some(LspWorkspace { root, config })
+}
+
+fn find_marker(path: &Path) -> Option<(PathBuf, PathBuf)> {
     let mut dir = path.parent()?;
     loop {
         for name in MARKER_FILENAMES {
-            if dir.join(name).exists() {
-                return Some(dir.to_path_buf());
+            let marker_path = dir.join(name);
+            if marker_path.exists() {
+                return Some((dir.to_path_buf(), marker_path));
             }
         }
         match dir.parent() {
@@ -409,6 +458,93 @@ fn find_marker_root(path: &Path) -> Option<PathBuf> {
             None => return None,
         }
     }
+}
+
+fn parse_marker_config(path: &Path) -> std::result::Result<LspWorkspaceConfig, String> {
+    let raw = fs::read_to_string(path).map_err(|err| err.to_string())?;
+    toml::from_str(&raw).map_err(|err| err.to_string())
+}
+
+fn workspace_allows_path(root: &Path, path: &Path, config: &LspWorkspaceConfig) -> bool {
+    let relative = workspace_relative_path(root, path);
+    !glob_list_matches_path(&config.ignore, &relative)
+        && (config.attach_only.is_empty() || glob_list_matches_path(&config.attach_only, &relative))
+}
+
+fn workspace_relative_path(root: &Path, path: &Path) -> String {
+    path.strip_prefix(root)
+        .unwrap_or(path)
+        .to_string_lossy()
+        .replace('\\', "/")
+}
+
+fn glob_list_matches_path(patterns: &[String], relative_path: &str) -> bool {
+    patterns
+        .iter()
+        .any(|pattern| glob_matches_path(pattern, relative_path))
+}
+
+fn glob_matches_path(pattern: &str, relative_path: &str) -> bool {
+    let pattern = pattern.trim().trim_matches('/');
+    if pattern.is_empty() {
+        return false;
+    }
+    glob_matches_segments(
+        &pattern.split('/').collect::<Vec<_>>(),
+        &relative_path.split('/').collect::<Vec<_>>(),
+    ) || (!contains_glob_meta(pattern) && relative_path.starts_with(&format!("{pattern}/")))
+}
+
+fn contains_glob_meta(pattern: &str) -> bool {
+    pattern.as_bytes().iter().any(|b| matches!(b, b'*' | b'?'))
+}
+
+fn glob_matches_segments(pattern: &[&str], value: &[&str]) -> bool {
+    match (pattern, value) {
+        ([], []) => true,
+        ([], _) => false,
+        (["**", rest @ ..], _) => {
+            glob_matches_segments(rest, value)
+                || (!value.is_empty() && glob_matches_segments(pattern, &value[1..]))
+        }
+        ([segment_pattern, rest_pattern @ ..], [segment, rest_value @ ..]) => {
+            glob_matches_segment(segment_pattern, segment)
+                && glob_matches_segments(rest_pattern, rest_value)
+        }
+        _ => false,
+    }
+}
+
+fn glob_matches_segment(pattern: &str, value: &str) -> bool {
+    glob_matches_segment_bytes(pattern.as_bytes(), value.as_bytes())
+}
+
+fn glob_matches_segment_bytes(pattern: &[u8], value: &[u8]) -> bool {
+    match (pattern, value) {
+        ([], []) => true,
+        ([], _) => false,
+        ([b'*', rest @ ..], _) => {
+            glob_matches_segment_bytes(rest, value)
+                || (!value.is_empty() && glob_matches_segment_bytes(pattern, &value[1..]))
+        }
+        ([b'?', rest @ ..], [_, value_rest @ ..]) => glob_matches_segment_bytes(rest, value_rest),
+        ([p, rest @ ..], [v, value_rest @ ..]) if p == v => {
+            glob_matches_segment_bytes(rest, value_rest)
+        }
+        _ => false,
+    }
+}
+
+fn config_with_skipped_rules(config: &AppConfig, skip_rules: &[String]) -> AppConfig {
+    let mut config = config.clone();
+    for rule in skip_rules {
+        let rule = rule.trim().strip_prefix("lint/").unwrap_or(rule.trim());
+        if rule.is_empty() {
+            continue;
+        }
+        config.lint.entry(rule.to_string()).or_default().disable = true;
+    }
+    config
 }
 
 /// Return the 0-based line index of the closing `---` of the frontmatter block,
@@ -518,6 +654,25 @@ mod tests {
         dir
     }
 
+    fn empty_app_config() -> crate::config::AppConfig {
+        use crate::config::{Paths, SearchConfig, SuggestionCommandsConfig, Theme, UiConfig};
+        crate::config::AppConfig {
+            paths: Paths {
+                snippet_roots: vec![],
+                xdg_snippets_dir: std::path::PathBuf::new(),
+                snippet_overrides_active: false,
+                state_file: std::path::PathBuf::new(),
+                config_file: std::path::PathBuf::new(),
+            },
+            ui: UiConfig::default(),
+            search: SearchConfig::default(),
+            variables: std::collections::BTreeMap::new(),
+            theme: Theme::default(),
+            suggestion_commands: SuggestionCommandsConfig::default(),
+            lint: std::collections::BTreeMap::new(),
+        }
+    }
+
     #[test]
     fn find_marker_root_dot_peanutbutter_toml() {
         let root = tmp_dir();
@@ -570,6 +725,142 @@ mod tests {
         fs::write(&file, "").unwrap();
         assert_eq!(find_marker_root(&file), Some(inner.clone()));
         fs::remove_dir_all(&outer).unwrap();
+    }
+
+    #[test]
+    fn marker_config_deserializes_lsp_settings() {
+        let root = tmp_dir();
+        let marker = root.join(".peanutbutter.toml");
+        fs::write(
+            &marker,
+            r#"
+ignore = "archive/**"
+attach_only = ["active/**"]
+skip_rules = ["unused-variable", "lint/markdown-structure"]
+"#,
+        )
+        .unwrap();
+
+        let config = parse_marker_config(&marker).unwrap();
+
+        assert_eq!(config.ignore, vec!["archive/**"]);
+        assert_eq!(config.attach_only, vec!["active/**"]);
+        assert_eq!(
+            config.skip_rules,
+            vec!["unused-variable", "lint/markdown-structure"]
+        );
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn lsp_workspace_ignores_matching_files() {
+        let root = tmp_dir();
+        fs::write(
+            root.join(".peanutbutter.toml"),
+            "ignore = [\"vendor/**\"]\n",
+        )
+        .unwrap();
+        let file = root.join("vendor").join("snippets.md");
+        fs::create_dir_all(file.parent().unwrap()).unwrap();
+        fs::write(&file, "").unwrap();
+
+        assert!(find_lsp_workspace(&file).is_none());
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn lsp_workspace_rejects_invalid_marker_config() {
+        let root = tmp_dir();
+        fs::write(root.join(".peanutbutter.toml"), "ignore = [\n").unwrap();
+        let file = root.join("snippets.md");
+        fs::write(&file, "").unwrap();
+
+        assert!(find_lsp_workspace(&file).is_none());
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn lsp_workspace_rejects_non_markdown_files() {
+        let root = tmp_dir();
+        fs::write(root.join(".peanutbutter.toml"), "").unwrap();
+        let file = root.join("snippets.txt");
+        fs::write(&file, "").unwrap();
+
+        assert!(find_lsp_workspace(&file).is_none());
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn lsp_workspace_globs_do_not_cross_slashes_without_double_star() {
+        assert!(glob_matches_path("*.md", "snippets.md"));
+        assert!(!glob_matches_path("*.md", "nested/snippets.md"));
+        assert!(glob_matches_path("nested/**", "nested/deep/snippets.md"));
+        assert!(!glob_matches_path("nested/*", "nested/deep/snippets.md"));
+        assert!(glob_matches_path("generated", "generated/snippets.md"));
+    }
+
+    #[test]
+    fn lsp_workspace_respects_attach_only() {
+        let root = tmp_dir();
+        fs::write(
+            root.join(".peanutbutter.toml"),
+            "attach_only = [\"snippets/**\"]\n",
+        )
+        .unwrap();
+        let allowed = root.join("snippets").join("ok.md");
+        let denied = root.join("notes").join("no.md");
+        fs::create_dir_all(allowed.parent().unwrap()).unwrap();
+        fs::create_dir_all(denied.parent().unwrap()).unwrap();
+        fs::write(&allowed, "").unwrap();
+        fs::write(&denied, "").unwrap();
+
+        assert_eq!(find_lsp_workspace(&allowed).unwrap().root, root);
+        assert!(find_lsp_workspace(&denied).is_none());
+        fs::remove_dir_all(allowed.parent().unwrap().parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn skip_rules_disable_lints_for_workspace() {
+        let config =
+            config_with_skipped_rules(&empty_app_config(), &["lint/unused-variable".to_string()]);
+
+        assert!(config.lint.get("unused-variable").unwrap().disable);
+    }
+
+    #[test]
+    fn skip_rules_filter_workspace_diagnostics() {
+        let root = tmp_dir();
+        let file = root.join("snippets.md");
+        let content = r#"---
+variables:
+  unused:
+    default: nope
+---
+## Demo
+
+```bash
+echo hi
+```
+"#;
+        fs::write(&file, content).unwrap();
+        let base_config = empty_app_config();
+        let skipped_config =
+            config_with_skipped_rules(&base_config, &["unused-variable".to_string()]);
+
+        let base_findings = lint::lint_file(&file, &root, content, &base_config);
+        let skipped_findings = lint::lint_file(&file, &root, content, &skipped_config);
+
+        assert!(
+            base_findings
+                .iter()
+                .any(|finding| finding.code == lint::CODE_UNUSED_VARIABLE)
+        );
+        assert!(
+            !skipped_findings
+                .iter()
+                .any(|finding| finding.code == lint::CODE_UNUSED_VARIABLE)
+        );
+        fs::remove_dir_all(&root).unwrap();
     }
 }
 
