@@ -4,7 +4,7 @@
 [![Release](https://github.com/calamity-m/peanutbutter/actions/workflows/release.yml/badge.svg)](https://github.com/calamity-m/peanutbutter/actions/workflows/release.yml)
 [![Latest Release](https://img.shields.io/github/v/release/calamity-m/peanutbutter)](https://github.com/calamity-m/peanutbutter/releases/latest)
 
-A friendly terminal snippet management tool.
+A friendly terminal snippet management tool based on markdown, finally.
 
 ![Peanutbutter demo: search for a snippet, fill a variable, and insert the command into the shell buffer](assets/imgs/demo.gif)
 
