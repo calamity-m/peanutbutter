@@ -51,9 +51,9 @@ __pb_dispatch() {{
   if [[ "$1" == "new" ]]; then
     local __pb_hist
     __pb_hist=$(fc -lnr 1 50 2>/dev/null | sed 's/^\t//' | grep -Ev '^[[:space:]]*(pb|peanutbutter)([[:space:]]|$)' | awk 'BEGIN{{total=0; max=65536}} {{len=length($0)+1; if (total+len>max) exit; total+=len; print}}' | tr '\n' '\037')
-    PEANUTBUTTER_HISTORY="$__pb_hist" command {BINARY_NAME} "$@"
+    PEANUTBUTTER_HISTORY="$__pb_hist" command {executable} "$@"
   else
-    command {BINARY_NAME} "$@"
+    command {executable} "$@"
   fi
 }}
 {BASH_ALIAS_NAME}() {{ __pb_dispatch "$@"; }}
@@ -128,9 +128,9 @@ __pb_dispatch() {{
   if [[ "$1" == "new" ]]; then
     local __pb_hist
     __pb_hist=$(fc -lnr -50 2>/dev/null | sed 's/^\t//' | grep -Ev '^[[:space:]]*(pb|peanutbutter)([[:space:]]|$)' | awk 'BEGIN{{total=0; max=65536}} {{len=length($0)+1; if (total+len>max) exit; total+=len; print}}' | tr '\n' '\037')
-    PEANUTBUTTER_HISTORY="$__pb_hist" command {BINARY_NAME} "$@"
+    PEANUTBUTTER_HISTORY="$__pb_hist" command {executable} "$@"
   else
-    command {BINARY_NAME} "$@"
+    command {executable} "$@"
   fi
 }}
 {BASH_ALIAS_NAME}() {{ __pb_dispatch "$@"; }}
@@ -219,9 +219,9 @@ function __pb_dispatch
   if test (count $argv) -gt 0; and test $argv[1] = "new"
     set -l __pb_hist (history --max=50 | string match -vr '^\s*(pb|peanutbutter)(\s|$)' | string join \x1f)
     set -lx PEANUTBUTTER_HISTORY $__pb_hist
-    command {BINARY_NAME} $argv
+    command {executable} $argv
   else
-    command {BINARY_NAME} $argv
+    command {executable} $argv
   end
 end
 function {BASH_ALIAS_NAME}
@@ -345,7 +345,7 @@ mod tests {
         assert!(script.contains("pb() {"));
         assert!(script.contains("if [[ \"$1\" == \"new\" ]]"));
         assert!(script.contains("PEANUTBUTTER_HISTORY="));
-        assert!(script.contains("command peanutbutter \"$@\""));
+        assert!(script.contains("command '/tmp/peanutbutter' \"$@\""));
         assert!(script.contains("bind -x '\"\\C-b\":__pb_insert_command'"));
         assert!(script.contains("'/tmp/peanutbutter' execute"));
         assert!(script.contains("READLINE_LINE=\"${READLINE_LINE}\""));
@@ -414,7 +414,7 @@ mod tests {
         let script = zsh_integration_script("C+b", Path::new("/tmp/peanutbutter")).unwrap();
         assert!(script.contains("pb() {"));
         assert!(script.contains("PEANUTBUTTER_HISTORY="));
-        assert!(script.contains("command peanutbutter \"$@\""));
+        assert!(script.contains("command '/tmp/peanutbutter' \"$@\""));
         assert!(script.contains("compdef _pb_complete peanutbutter pb"));
         assert!(script.contains("'/tmp/peanutbutter' complete-edit"));
         assert!(script.contains("'/tmp/peanutbutter' complete-theme"));
@@ -453,7 +453,7 @@ mod tests {
         let script = fish_integration_script("C+b", Path::new("/tmp/peanutbutter")).unwrap();
         assert!(script.contains("function pb"));
         assert!(script.contains("PEANUTBUTTER_HISTORY"));
-        assert!(script.contains("command peanutbutter $argv"));
+        assert!(script.contains("command '/tmp/peanutbutter' $argv"));
         assert!(script.contains("complete -c peanutbutter"));
         assert!(script.contains("complete -c pb -w peanutbutter"));
         // complete-edit is called from a helper function to avoid single-quote nesting
