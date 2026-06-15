@@ -71,15 +71,34 @@ impl FrecencyStore {
         Ok(Self { events })
     }
 
+    /// Persist all events to `path`.
+    ///
+    /// Writes are atomic: the full TSV is staged in a sibling temp file,
+    /// flushed to disk, then renamed over the target. An interrupted write
+    /// (crash, SIGKILL, full disk) therefore leaves the existing state file
+    /// untouched rather than truncated, protecting the usage history that
+    /// every `execute` and `gc` rewrites.
     pub fn save(&self, path: &Path) -> io::Result<()> {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
         }
-        let mut f = fs::File::create(path)?;
+        let mut buf = Vec::new();
         for e in &self.events {
-            writeln!(f, "{}\t{}\t{}", e.timestamp, e.id, e.cwd.display())?;
+            writeln!(buf, "{}\t{}\t{}", e.timestamp, e.id, e.cwd.display())?;
         }
-        Ok(())
+
+        let tmp = tmp_path(path);
+        let mut file = fs::File::create(&tmp)?;
+        file.write_all(&buf)?;
+        file.sync_all()?;
+        drop(file);
+        match fs::rename(&tmp, path) {
+            Ok(()) => Ok(()),
+            Err(err) => {
+                let _ = fs::remove_file(&tmp);
+                Err(err)
+            }
+        }
     }
 
     /// Copy the current persisted store to a timestamped sibling backup file.
@@ -176,6 +195,17 @@ impl FrecencyStore {
         let frequency_boost = (count as f64).ln_1p() * config.frequency_weight;
         total + frequency_boost
     }
+}
+
+/// Per-process sibling temp path used to stage an atomic `save`. The pid
+/// keeps concurrent writers from clobbering each other's staged file before
+/// the rename.
+fn tmp_path(path: &Path) -> PathBuf {
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("frecency-state");
+    path.with_file_name(format!(".{name}.tmp-{}", std::process::id()))
 }
 
 /// Exponential decay with a 14-day half-life.
@@ -318,6 +348,34 @@ mod tests {
         assert_eq!(loaded.events().len(), 2);
         assert_eq!(loaded.events()[0].id.as_str(), "t.md#a");
         assert_eq!(loaded.events()[1].cwd, PathBuf::from("/y/z"));
+    }
+
+    #[test]
+    fn save_is_atomic_and_leaves_no_temp() {
+        let dir = std::env::temp_dir().join("pb-frecency-atomic-test");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("state.tsv");
+
+        // An existing populated file should be replaced wholesale, not appended.
+        let mut first = FrecencyStore::new();
+        first.record(id("old"), PathBuf::from("/x"), 1);
+        first.save(&path).unwrap();
+
+        let mut second = FrecencyStore::new();
+        second.record(id("new"), PathBuf::from("/y"), 2);
+        second.save(&path).unwrap();
+
+        let loaded = FrecencyStore::load(&path).unwrap();
+        assert_eq!(loaded.events().len(), 1);
+        assert_eq!(loaded.events()[0].id.as_str(), "t.md#new");
+
+        // No staging temp file should survive a successful save.
+        let leftover = fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(Result::ok)
+            .any(|e| e.file_name().to_string_lossy().contains(".tmp-"));
+        assert!(!leftover, "atomic save left a stray temp file behind");
     }
 
     #[test]
