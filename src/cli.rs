@@ -124,7 +124,7 @@ pub struct ExecuteCommandResult {
 pub fn after_help(paths: &Paths) -> String {
     let mut out = String::new();
     out.push_str(&format!(
-        "shell integration: `{BINARY_NAME} bash|zsh|fish|powershell` also defines `{BASH_ALIAS_NAME}`\n"
+        "shell integration: `{BINARY_NAME} completions bash|zsh|fish|powershell` also defines `{BASH_ALIAS_NAME}`\n"
     ));
     out.push_str(&format!(
         "new here? run `{BASH_ALIAS_NAME} init` to scaffold starter snippets.\n\n"
@@ -492,7 +492,7 @@ mod tests {
     fn after_help_mentions_all_shells_and_pb_alias() {
         let paths = test_paths(Path::new("/tmp/snippets"));
         let help = after_help(&paths);
-        assert!(help.contains("bash|zsh|fish|powershell` also defines `pb`"));
+        assert!(help.contains("completions bash|zsh|fish|powershell` also defines `pb`"));
         assert!(help.contains("pb init"));
         assert!(help.contains("snippet roots:"));
         assert!(help.contains("/tmp/snippets"));

@@ -10,6 +10,12 @@ use std::env;
 use std::io;
 use std::path::Path;
 
+const TOP_LEVEL_COMMANDS: &str = "execute init edit new completions lint gc stats settings lsp";
+const SHELL_TARGETS: &str = "bash zsh fish powershell";
+const POWERSHELL_TOP_LEVEL_COMMANDS: &str =
+    "'execute','init','edit','new','completions','lint','gc','stats','settings','lsp','--theme'";
+const POWERSHELL_SHELL_TARGETS: &str = "'bash','zsh','fish','powershell'";
+
 /// Shell targeted by `peanutbutter completions <shell>`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 pub enum Shell {
@@ -91,10 +97,10 @@ __pb_complete() {{
     return 0
   fi
   if [[ "$subcommand" == "completions" ]]; then
-    COMPREPLY=( $(compgen -W "bash zsh fish powershell" -- "$cur") )
+    COMPREPLY=( $(compgen -W "{SHELL_TARGETS}" -- "$cur") )
     return 0
   fi
-  COMPREPLY=( $(compgen -W "--theme completions edit execute lint gc new settings stats" -- "$cur") )
+  COMPREPLY=( $(compgen -W "--theme {TOP_LEVEL_COMMANDS}" -- "$cur") )
 }}
 complete -o nospace -F __pb_complete {BINARY_NAME} {BASH_ALIAS_NAME}
 "#
@@ -163,9 +169,9 @@ _pb_complete() {{
     candidates=( ${{(f)"$({executable} complete-edit "${{words[CURRENT]}}")"}} )
     compadd -S '' -- "${{candidates[@]}}"
   elif [[ "${{words[2]}}" == "completions" ]]; then
-    compadd -- bash zsh fish powershell
+    compadd -- {SHELL_TARGETS}
   else
-    compadd -- --theme completions edit execute lint gc new settings stats
+    compadd -- --theme {TOP_LEVEL_COMMANDS}
   fi
 }}
 compdef _pb_complete {BINARY_NAME} {BASH_ALIAS_NAME}
@@ -225,9 +231,9 @@ function {BINARY_NAME}
   __pb_dispatch $argv
 end
 complete -c {BINARY_NAME} -f -l theme -a '(__pb_complete_theme)'
-complete -c {BINARY_NAME} -f -n 'not __fish_seen_subcommand_from completions edit execute lint gc new settings stats' -a 'completions edit execute lint gc new settings stats'
+complete -c {BINARY_NAME} -f -n 'not __fish_seen_subcommand_from {TOP_LEVEL_COMMANDS}' -a '{TOP_LEVEL_COMMANDS}'
 complete -c {BINARY_NAME} -f -n '__fish_seen_subcommand_from edit' -a '(__pb_complete_edit)'
-complete -c {BINARY_NAME} -f -n '__fish_seen_subcommand_from completions' -a 'bash zsh fish powershell'
+complete -c {BINARY_NAME} -f -n '__fish_seen_subcommand_from completions' -a '{SHELL_TARGETS}'
 complete -c {BASH_ALIAS_NAME} -w {BINARY_NAME}
 "#
     ))
@@ -276,9 +282,9 @@ Register-ArgumentCompleter -CommandName {BINARY_NAME},{BASH_ALIAS_NAME} -ScriptB
   }} elseif ($words.Count -ge 2 -and $words[1] -eq 'edit') {{
     & $script:__pb_exe complete-edit $wordToComplete | ForEach-Object {{ [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_) }}
   }} elseif ($words.Count -ge 2 -and $words[1] -eq 'completions') {{
-    'bash','zsh','fish','powershell' | Where-Object {{ $_ -like "$wordToComplete*" }} | ForEach-Object {{ [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_) }}
+    {POWERSHELL_SHELL_TARGETS} | Where-Object {{ $_ -like "$wordToComplete*" }} | ForEach-Object {{ [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_) }}
   }} else {{
-    'completions','edit','execute','lint','gc','new','settings','stats','--theme' | Where-Object {{ $_ -like "$wordToComplete*" }} | ForEach-Object {{ [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_) }}
+    {POWERSHELL_TOP_LEVEL_COMMANDS} | Where-Object {{ $_ -like "$wordToComplete*" }} | ForEach-Object {{ [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_) }}
   }}
 }}
 "#
@@ -368,7 +374,9 @@ mod tests {
     #[test]
     fn bash_script_completion_word_list_includes_all_shells() {
         let script = bash_integration_script("C+b", Path::new("/tmp/peanutbutter")).unwrap();
-        assert!(script.contains("--theme completions edit execute lint gc new settings stats"));
+        assert!(
+            script.contains("--theme execute init edit new completions lint gc stats settings lsp")
+        );
         assert!(script.contains("compgen -W \"bash zsh fish powershell\""));
         assert!(script.contains("complete-theme \"$cur\""));
         assert!(script.contains("--theme"));
@@ -410,6 +418,9 @@ mod tests {
         assert!(script.contains("compdef _pb_complete peanutbutter pb"));
         assert!(script.contains("'/tmp/peanutbutter' complete-edit"));
         assert!(script.contains("'/tmp/peanutbutter' complete-theme"));
+        assert!(script.contains(
+            "compadd -- --theme execute init edit new completions lint gc stats settings lsp"
+        ));
     }
 
     #[test]
@@ -450,6 +461,9 @@ mod tests {
         assert!(script.contains("'/tmp/peanutbutter' complete-edit"));
         assert!(script.contains("__pb_complete_theme"));
         assert!(script.contains("complete -c peanutbutter -f -l theme"));
+        assert!(
+            script.contains("-a 'execute init edit new completions lint gc stats settings lsp'")
+        );
     }
 
     #[test]
@@ -516,7 +530,7 @@ mod tests {
         assert!(script.contains("Register-ArgumentCompleter -CommandName peanutbutter,pb"));
         assert!(script.contains("complete-edit $wordToComplete"));
         assert!(script.contains("complete-theme $wordToComplete"));
-        assert!(script.contains("'completions'"));
+        assert!(script.contains("'execute','init','edit','new','completions','lint','gc','stats','settings','lsp','--theme'"));
         assert!(script.contains("'bash','zsh','fish','powershell'"));
     }
 
