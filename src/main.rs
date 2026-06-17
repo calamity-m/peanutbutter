@@ -1,4 +1,4 @@
-use clap::{CommandFactory, FromArgMatches};
+use clap::{CommandFactory, FromArgMatches, Parser};
 use owo_colors::OwoColorize;
 use peanutbutter::BINARY_NAME;
 use peanutbutter::cli;
@@ -44,7 +44,36 @@ fn print_error(err: impl fmt::Display) {
     );
 }
 
+/// Print embedded reference docs to stdout and return the process exit code.
+///
+/// A broken pipe (e.g. `pb docs syntax | head`) exits quietly with 0 rather than
+/// printing a backtrace to stderr, keeping a captured fd 1 clean for an LLM.
+fn run_docs(topic: Option<peanutbutter::docs::Topic>) -> i32 {
+    let mut stdout = io::stdout();
+    match peanutbutter::docs::run(topic, &mut stdout).and_then(|()| stdout.flush()) {
+        Ok(()) => 0,
+        Err(err) if err.kind() == io::ErrorKind::BrokenPipe => 0,
+        Err(err) => {
+            print_error(err);
+            1
+        }
+    }
+}
+
 fn main() {
+    // `docs` prints embedded reference text and must work even when the user's
+    // config is unparseable — that is exactly when someone needs `pb docs config`
+    // or `pb docs syntax` to see a valid example. Dispatch it before loading the
+    // config. A parse error or `--help` here is ignored; the full parse below
+    // re-runs and reports it with the dynamic help text attached.
+    if let Ok(cli::Cli {
+        command: Some(cli::Command::Docs { topic }),
+        ..
+    }) = cli::Cli::try_parse()
+    {
+        std::process::exit(run_docs(topic));
+    }
+
     let raw_theme = raw_theme_arg();
     let app_config = match config::load_with_theme_override(raw_theme.as_deref()) {
         Ok(config) => config,
@@ -212,16 +241,9 @@ fn main() {
             peanutbutter::lsp::run_lsp_server();
             Ok(())
         }
-        cli::Command::Docs { topic } => {
-            let mut stdout = io::stdout();
-            match peanutbutter::docs::run(topic, &mut stdout).and_then(|()| stdout.flush()) {
-                // A downstream `| head` closes the pipe early; exit quietly
-                // rather than printing a panic/backtrace that would contaminate
-                // an LLM's capture.
-                Err(err) if err.kind() == io::ErrorKind::BrokenPipe => std::process::exit(0),
-                other => other,
-            }
-        }
+        // Normally handled by the early, config-free dispatch in `main`; kept
+        // here for exhaustiveness and as a fallback.
+        cli::Command::Docs { topic } => std::process::exit(run_docs(topic)),
     };
 
     if let Err(err) = result {

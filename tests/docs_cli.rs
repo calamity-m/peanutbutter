@@ -54,3 +54,33 @@ fn docs_without_topic_lists_topics() {
     assert_eq!(output.stdout, b"syntax\nconfig\n");
     assert!(output.stderr.is_empty(), "stderr: {:?}", output.stderr);
 }
+
+#[test]
+fn docs_works_even_when_user_config_is_unparseable() {
+    // `pb docs config` is the recovery tool for a broken config, so it must run
+    // before (and independent of) config loading. Point PB_CONFIG_FILE at invalid
+    // TOML and confirm the reference still prints to clean stdout.
+    let tmp = std::env::temp_dir().join(format!(
+        "pb-docs-cli-badcfg-{}-{}",
+        std::process::id(),
+        BAD_CFG_NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    std::fs::create_dir_all(&tmp).unwrap();
+    let cfg = tmp.join("config.toml");
+    std::fs::write(&cfg, "this is = = not valid toml [[[\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_peanutbutter"))
+        .args(["docs", "config"])
+        .env("PB_CONFIG_FILE", &cfg)
+        .env("XDG_CONFIG_HOME", tmp.join("config"))
+        .env("XDG_STATE_HOME", tmp.join("state"))
+        .output()
+        .expect("run peanutbutter binary");
+    let _ = std::fs::remove_dir_all(&tmp);
+
+    assert!(output.status.success(), "stderr: {:?}", output.stderr);
+    assert_eq!(output.stdout, canonical("examples/config.toml"));
+    assert!(output.stderr.is_empty(), "stderr: {:?}", output.stderr);
+}
+
+static BAD_CFG_NEXT: AtomicU64 = AtomicU64::new(1);
