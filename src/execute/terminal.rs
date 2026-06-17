@@ -233,7 +233,7 @@ mod tests {
         let mut app = test_app_with_file(snippet_file(&path, "echo old"));
         fs::write(&path, "## Demo\n\n```\necho new\n```\n").unwrap();
 
-        let status = reload_after_edit(&mut app, &[root.clone()], "Demo".to_string());
+        let status = reload_after_edit(&mut app, std::slice::from_ref(&root), "Demo".to_string());
 
         assert_eq!(status, "edited Demo; reloaded");
         assert_eq!(
@@ -251,7 +251,7 @@ mod tests {
         let mut app = test_app_with_file(snippet_file(&path, "echo old"));
         fs::write(&path, b"\xff").unwrap();
 
-        let status = reload_after_edit(&mut app, &[root.clone()], "Demo".to_string());
+        let status = reload_after_edit(&mut app, std::slice::from_ref(&root), "Demo".to_string());
 
         assert!(status.starts_with("edited Demo; reload failed:"));
         assert_eq!(
