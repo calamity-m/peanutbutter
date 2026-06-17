@@ -1,0 +1,5 @@
+# These files are embedded into the binary verbatim (see build.rs / src/docs.rs)
+# and `pb docs` promises byte-exact output. Pin them to LF so a CRLF checkout on
+# some platforms cannot make the embed — and the source-vs-embed tests — diverge.
+docs/SNIPPET_SYNTAX.md text eol=lf
+examples/config.toml text eol=lf

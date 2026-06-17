@@ -85,7 +85,11 @@ pub struct RecencyBuckets {
 #[derive(Debug, Clone)]
 pub struct StatsReport {
     pub most_used: Vec<SnippetStat>,
+    /// Total snippets eligible for the most-used list before the `top_n` cap.
+    pub most_used_total: usize,
     pub least_used: Vec<SnippetStat>,
+    /// Total snippets eligible for the least-used list before the `top_n` cap.
+    pub least_used_total: usize,
     /// Snippets that appear in the index but have no frecency events.
     pub never_used: Vec<(SnippetId, String)>,
     pub recency: RecencyBuckets,
@@ -220,6 +224,8 @@ fn compute_report(
         }
     };
 
+    let known_total = known.len();
+
     let mut most_used: Vec<SnippetStat> = known.iter().map(|(id, s)| build_stat(id, s)).collect();
     most_used.sort_by_key(|b| std::cmp::Reverse(b.count));
     most_used.truncate(options.top_n);
@@ -250,7 +256,9 @@ fn compute_report(
 
     StatsReport {
         most_used,
+        most_used_total: known_total,
         least_used,
+        least_used_total: known_total,
         never_used,
         recency,
         directory_affinity,
@@ -439,10 +447,24 @@ fn write_human<W: Write>(
         Sort::Count => "Least Used (fewest)",
     };
     // Most Used
-    write_ranked_section(writer, "Most Used", &report.most_used, color, now)?;
+    write_ranked_section(
+        writer,
+        "Most Used",
+        &report.most_used,
+        report.most_used_total,
+        color,
+        now,
+    )?;
 
     // Least Used
-    write_ranked_section(writer, least_used_title, &report.least_used, color, now)?;
+    write_ranked_section(
+        writer,
+        least_used_title,
+        &report.least_used,
+        report.least_used_total,
+        color,
+        now,
+    )?;
 
     // Never Used
     if !report.never_used.is_empty() {
@@ -477,6 +499,7 @@ fn write_ranked_section<W: Write>(
     writer: &mut W,
     title: &str,
     snippets: &[SnippetStat],
+    total: usize,
     color: bool,
     now: u64,
 ) -> io::Result<()> {
@@ -508,6 +531,16 @@ fn write_ranked_section<W: Write>(
             );
             let row = box_row(&content);
             writeln!(writer, "{row}")?;
+        }
+
+        if total > snippets.len() {
+            let more = total - snippets.len();
+            let row = box_row(&format!("… and {more} more (--top {})", snippets.len()));
+            if color {
+                writeln!(writer, "{}", row.dimmed())?;
+            } else {
+                writeln!(writer, "{row}")?;
+            }
         }
     }
 
@@ -948,6 +981,47 @@ mod tests {
         assert!(v["orphaned_event_count"].is_number());
         // Beta is never-used
         assert!(!v["never_used"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn ranked_section_shows_more_indicator_when_truncated() {
+        let root = temp_dir("more-indicator");
+        let paths = test_paths(&root);
+        let mut store = FrecencyStore::new();
+        for i in 0..15 {
+            let slug = format!("s{i}");
+            write_snippet(&root, &format!("{slug}.md"), &slug, &slug);
+            record_event(&mut store, &format!("{slug}.md"), &slug, "/repo", NOW - i);
+        }
+        store.save(&paths.state_file).unwrap();
+
+        let opts = StatsOptions {
+            top_n: 10,
+            ..opts_plain()
+        };
+        let mut out = Vec::new();
+        run_with(&paths, opts, NOW, false, &mut out).unwrap();
+        let s = String::from_utf8(out).unwrap();
+        // 15 known snippets, capped at 10, so 5 more in each ranked list.
+        assert!(
+            s.contains("… and 5 more (--top 10)"),
+            "expected truncation indicator, got:\n{s}"
+        );
+    }
+
+    #[test]
+    fn ranked_section_omits_more_indicator_when_list_fits() {
+        let root = temp_dir("no-more-indicator");
+        write_snippet(&root, "a.md", "a", "A");
+        let paths = test_paths(&root);
+        let mut store = FrecencyStore::new();
+        record_event(&mut store, "a.md", "a", "/repo", NOW);
+        store.save(&paths.state_file).unwrap();
+
+        let mut out = Vec::new();
+        run_with(&paths, opts_plain(), NOW, false, &mut out).unwrap();
+        let s = String::from_utf8(out).unwrap();
+        assert!(!s.contains("more (--top"), "unexpected indicator in:\n{s}");
     }
 
     #[test]

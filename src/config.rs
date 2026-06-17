@@ -905,6 +905,9 @@ disable = true
 
     #[test]
     fn example_config_deserializes() {
+        // Reads the same canonical file that `pb docs config` embeds (via
+        // build.rs/OUT_DIR). Kept on the direct path intentionally so this test
+        // stays decoupled from the docs build pipeline — not a divergent source.
         let raw = include_str!("../examples/config.toml");
         let parsed: FileConfig = toml::from_str(raw).unwrap();
         let variable = parsed.variables.get("file").unwrap();

@@ -44,22 +44,39 @@ fn print_error(err: impl fmt::Display) {
     );
 }
 
-fn main() {
-    let raw_theme = raw_theme_arg();
-    let app_config = match config::load_with_theme_override(raw_theme.as_deref()) {
-        Ok(config) => config,
+/// Print embedded reference docs to stdout and return the process exit code.
+///
+/// A broken pipe (e.g. `pb docs syntax | head`) exits quietly with 0 rather than
+/// printing a backtrace to stderr, keeping a captured fd 1 clean for an LLM.
+fn run_docs(topic: Option<peanutbutter::docs::Topic>) -> i32 {
+    let mut stdout = io::stdout();
+    match peanutbutter::docs::run(topic, &mut stdout).and_then(|()| stdout.flush()) {
+        Ok(()) => 0,
+        Err(err) if err.kind() == io::ErrorKind::BrokenPipe => 0,
         Err(err) => {
             print_error(err);
-            let code = if std::env::args().any(|arg| arg == "lint") {
-                2
-            } else {
-                1
-            };
-            std::process::exit(code);
+            1
         }
-    };
-    let paths = app_config.paths.clone();
-    let mut clap_command = cli::Cli::command().after_help(cli::after_help(&paths));
+    }
+}
+
+fn main() {
+    // Load config up front but don't abort yet. Help/version output, the bare
+    // `pb` help screen, and `docs` must all work even when the config is
+    // unparseable — that is exactly when someone needs `pb --help` or
+    // `pb docs config` to recover. The config error is surfaced later, and only
+    // for commands that actually need config.
+    let raw_theme = raw_theme_arg();
+    let config_result = config::load_with_theme_override(raw_theme.as_deref());
+
+    // Attach the dynamic snippet-root/path help only when config loaded; clap's
+    // built-in help still renders without it when config is broken.
+    let mut clap_command = cli::Cli::command();
+    if let Ok(config) = &config_result {
+        clap_command = clap_command.after_help(cli::after_help(&config.paths));
+    }
+    // `get_matches` prints `--help`/`--version` to stdout and exits 0, or prints
+    // a parse error and exits 2 — all before any config requirement applies.
     let matches = clap_command.clone().get_matches();
     let cli = cli::Cli::from_arg_matches(&matches).unwrap_or_else(|err| err.exit());
     let theme_name = cli.theme.as_deref();
@@ -75,6 +92,26 @@ fn main() {
             std::process::exit(0);
         }
     };
+
+    // `docs` is the one real command that needs no config; dispatch it before
+    // the config error is enforced.
+    if let cli::Command::Docs { topic } = command {
+        std::process::exit(run_docs(topic));
+    }
+
+    let app_config = match config_result {
+        Ok(config) => config,
+        Err(err) => {
+            print_error(err);
+            let code = if matches!(command, cli::Command::Lint { .. }) {
+                2
+            } else {
+                1
+            };
+            std::process::exit(code);
+        }
+    };
+    let paths = app_config.paths.clone();
     let is_execute = matches!(&command, cli::Command::Execute);
 
     let result = match command {
@@ -212,6 +249,9 @@ fn main() {
             peanutbutter::lsp::run_lsp_server();
             Ok(())
         }
+        // Normally handled by the early, config-free dispatch in `main`; kept
+        // here for exhaustiveness and as a fallback.
+        cli::Command::Docs { topic } => std::process::exit(run_docs(topic)),
     };
 
     if let Err(err) = result {
