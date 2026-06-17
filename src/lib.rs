@@ -26,6 +26,7 @@
 //! | [`config`] | TOML config loading and theme |
 //! | [`settings`] | Interactive config tuning TUI |
 //! | [`cli`] | Argument parsing and command dispatch |
+//! | [`docs`] | Embedded syntax/config reference printed by `pb docs` |
 //! | [`execute`] | Interactive TUI (ratatui, crossterm) |
 //! | [`lsp`] | Language Server Protocol server (diagnostics, completions, hover, go-to-def) |
 
@@ -33,6 +34,7 @@ pub mod cli;
 pub mod completions;
 pub mod config;
 pub mod discovery;
+pub mod docs;
 pub mod domain;
 pub mod edit;
 pub mod execute;

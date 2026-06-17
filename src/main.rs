@@ -212,6 +212,16 @@ fn main() {
             peanutbutter::lsp::run_lsp_server();
             Ok(())
         }
+        cli::Command::Docs { topic } => {
+            let mut stdout = io::stdout();
+            match peanutbutter::docs::run(topic, &mut stdout).and_then(|()| stdout.flush()) {
+                // A downstream `| head` closes the pipe early; exit quietly
+                // rather than printing a panic/backtrace that would contaminate
+                // an LLM's capture.
+                Err(err) if err.kind() == io::ErrorKind::BrokenPipe => std::process::exit(0),
+                other => other,
+            }
+        }
     };
 
     if let Err(err) = result {

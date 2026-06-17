@@ -105,6 +105,11 @@ pub enum Command {
     CompleteTheme { current: Option<String> },
     /// Start a Language Server Protocol server over stdio for snippet authoring.
     Lsp,
+    /// Print embedded reference documentation verbatim to stdout.
+    Docs {
+        /// Which reference document to print. Omit to list available topics.
+        topic: Option<crate::docs::Topic>,
+    },
 }
 
 /// Result returned by [`run_execute_command`].
@@ -127,7 +132,10 @@ pub fn after_help(paths: &Paths) -> String {
         "shell integration: `{BINARY_NAME} completions bash|zsh|fish|powershell` also defines `{BASH_ALIAS_NAME}`\n"
     ));
     out.push_str(&format!(
-        "new here? run `{BASH_ALIAS_NAME} init` to scaffold starter snippets.\n\n"
+        "new here? run `{BASH_ALIAS_NAME} init` to scaffold starter snippets.\n"
+    ));
+    out.push_str(&format!(
+        "reference: `{BASH_ALIAS_NAME} docs syntax` or `{BASH_ALIAS_NAME} docs config` prints the embedded spec to stdout.\n\n"
     ));
     out.push_str("snippet roots:\n");
     for root in &paths.snippet_roots {
@@ -462,6 +470,34 @@ mod tests {
                 .command,
             Some(Command::Settings)
         );
+        assert_eq!(
+            Cli::try_parse_from(["peanutbutter", "docs"])
+                .unwrap()
+                .command,
+            Some(Command::Docs { topic: None })
+        );
+        assert_eq!(
+            Cli::try_parse_from(["peanutbutter", "docs", "syntax"])
+                .unwrap()
+                .command,
+            Some(Command::Docs {
+                topic: Some(crate::docs::Topic::Syntax)
+            })
+        );
+        assert_eq!(
+            Cli::try_parse_from(["peanutbutter", "docs", "config"])
+                .unwrap()
+                .command,
+            Some(Command::Docs {
+                topic: Some(crate::docs::Topic::Config)
+            })
+        );
+    }
+
+    #[test]
+    fn clap_rejects_unknown_docs_topic() {
+        let err = Cli::try_parse_from(["peanutbutter", "docs", "bogus"]).unwrap_err();
+        assert_eq!(err.kind(), clap::error::ErrorKind::InvalidValue);
     }
 
     #[test]

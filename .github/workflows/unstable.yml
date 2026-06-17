@@ -27,6 +27,13 @@ jobs:
         run: cargo clippy -- -D warnings
       - name: Test
         run: cargo test
+      - name: Packaging guard (docs embed sources stay in the crate)
+        run: |
+          list="$(cargo package --list --allow-dirty)"
+          echo "$list" | grep -qx 'docs/SNIPPET_SYNTAX.md' \
+            || { echo "::error::docs/SNIPPET_SYNTAX.md missing from package (pb docs would fail to build)"; exit 1; }
+          echo "$list" | grep -qx 'examples/config.toml' \
+            || { echo "::error::examples/config.toml missing from package (pb docs would fail to build)"; exit 1; }
 
   release:
     needs: ci

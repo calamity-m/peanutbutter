@@ -125,6 +125,8 @@ Code probably shit - but the code would be shit if I wrote every single line mys
 ## Snippet Specification
 
 For a stricter syntax reference, see [docs/SNIPPET_SYNTAX.md](docs/SNIPPET_SYNTAX.md).
+The same reference ships inside the binary: `pb docs syntax` prints it to stdout, and
+`pb docs config` prints an annotated example config. Run `pb docs` to list topics.
 
 Snippets are really just **ANY** markdown file that follows the following structure:
 
