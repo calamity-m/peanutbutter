@@ -10,13 +10,22 @@ use std::env;
 use std::io;
 use std::path::Path;
 
-const TOP_LEVEL_COMMANDS: &str =
-    "execute init edit new completions lint gc stats settings lsp docs";
-const SHELL_TARGETS: &str = "bash zsh fish powershell";
-const DOC_TOPICS: &str = "syntax config";
-const POWERSHELL_TOP_LEVEL_COMMANDS: &str = "'execute','init','edit','new','completions','lint','gc','stats','settings','lsp','docs','--theme'";
-const POWERSHELL_SHELL_TARGETS: &str = "'bash','zsh','fish','powershell'";
-const POWERSHELL_DOC_TOPICS: &str = "'syntax','config'";
+const TOP_LEVEL_COMMANDS: &[&str] = &[
+    "execute",
+    "init",
+    "edit",
+    "new",
+    "completions",
+    "lint",
+    "gc",
+    "stats",
+    "settings",
+    "lsp",
+    "docs",
+];
+const SHELL_TARGETS: &[&str] = &["bash", "zsh", "fish", "powershell"];
+const DOC_TOPICS: &[&str] = &["syntax", "config"];
+const GLOBAL_OPTIONS: &[&str] = &["--theme"];
 
 /// Shell targeted by `peanutbutter completions <shell>`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
@@ -47,6 +56,10 @@ pub fn bash_integration_script(binding: &str, executable: &Path) -> io::Result<S
         .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err))?;
     let executable = shell_quote(&executable.to_string_lossy());
     let replace_code = REPLACE_BUFFER_EXIT_CODE;
+    let top_level_commands = shell_words(TOP_LEVEL_COMMANDS);
+    let global_options = shell_words(GLOBAL_OPTIONS);
+    let shell_targets = shell_words(SHELL_TARGETS);
+    let doc_topics = shell_words(DOC_TOPICS);
     Ok(format!(
         r#"\builtin unalias {BASH_ALIAS_NAME} &>/dev/null || \builtin true
 __pb_dispatch() {{
@@ -99,14 +112,14 @@ __pb_complete() {{
     return 0
   fi
   if [[ "$subcommand" == "completions" ]]; then
-    COMPREPLY=( $(compgen -W "{SHELL_TARGETS}" -- "$cur") )
+    COMPREPLY=( $(compgen -W "{shell_targets}" -- "$cur") )
     return 0
   fi
   if [[ "$subcommand" == "docs" ]]; then
-    COMPREPLY=( $(compgen -W "{DOC_TOPICS}" -- "$cur") )
+    COMPREPLY=( $(compgen -W "{doc_topics}" -- "$cur") )
     return 0
   fi
-  COMPREPLY=( $(compgen -W "--theme {TOP_LEVEL_COMMANDS}" -- "$cur") )
+  COMPREPLY=( $(compgen -W "{global_options} {top_level_commands}" -- "$cur") )
 }}
 complete -o nospace -F __pb_complete {BINARY_NAME} {BASH_ALIAS_NAME}
 "#
@@ -128,6 +141,10 @@ pub fn zsh_integration_script(binding: &str, executable: &Path) -> io::Result<St
         .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err))?;
     let executable = shell_quote(&executable.to_string_lossy());
     let replace_code = REPLACE_BUFFER_EXIT_CODE;
+    let top_level_commands = shell_words(TOP_LEVEL_COMMANDS);
+    let global_options = shell_words(GLOBAL_OPTIONS);
+    let shell_targets = shell_words(SHELL_TARGETS);
+    let doc_topics = shell_words(DOC_TOPICS);
     Ok(format!(
         r#"\builtin unalias {BASH_ALIAS_NAME} 2>/dev/null; \builtin true
 __pb_dispatch() {{
@@ -175,11 +192,11 @@ _pb_complete() {{
     candidates=( ${{(f)"$({executable} complete-edit "${{words[CURRENT]}}")"}} )
     compadd -S '' -- "${{candidates[@]}}"
   elif [[ "${{words[2]}}" == "completions" ]]; then
-    compadd -- {SHELL_TARGETS}
+    compadd -- {shell_targets}
   elif [[ "${{words[2]}}" == "docs" ]]; then
-    compadd -- {DOC_TOPICS}
+    compadd -- {doc_topics}
   else
-    compadd -- --theme {TOP_LEVEL_COMMANDS}
+    compadd -- {global_options} {top_level_commands}
   fi
 }}
 compdef _pb_complete {BINARY_NAME} {BASH_ALIAS_NAME}
@@ -202,6 +219,9 @@ pub fn fish_integration_script(binding: &str, executable: &Path) -> io::Result<S
         fish_bind_key(binding).map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err))?;
     let executable = shell_quote(&executable.to_string_lossy());
     let replace_code = REPLACE_BUFFER_EXIT_CODE;
+    let top_level_commands = shell_words(TOP_LEVEL_COMMANDS);
+    let shell_targets = shell_words(SHELL_TARGETS);
+    let doc_topics = shell_words(DOC_TOPICS);
     // The complete-edit helper is extracted into a named function so the
     // single-quoted executable path doesn't conflict with fish's -a '...' quoting.
     Ok(format!(
@@ -239,10 +259,10 @@ function {BINARY_NAME}
   __pb_dispatch $argv
 end
 complete -c {BINARY_NAME} -f -l theme -a '(__pb_complete_theme)'
-complete -c {BINARY_NAME} -f -n 'not __fish_seen_subcommand_from {TOP_LEVEL_COMMANDS}' -a '{TOP_LEVEL_COMMANDS}'
+complete -c {BINARY_NAME} -f -n 'not __fish_seen_subcommand_from {top_level_commands}' -a '{top_level_commands}'
 complete -c {BINARY_NAME} -f -n '__fish_seen_subcommand_from edit' -a '(__pb_complete_edit)'
-complete -c {BINARY_NAME} -f -n '__fish_seen_subcommand_from completions' -a '{SHELL_TARGETS}'
-complete -c {BINARY_NAME} -f -n '__fish_seen_subcommand_from docs' -a '{DOC_TOPICS}'
+complete -c {BINARY_NAME} -f -n '__fish_seen_subcommand_from completions' -a '{shell_targets}'
+complete -c {BINARY_NAME} -f -n '__fish_seen_subcommand_from docs' -a '{doc_topics}'
 complete -c {BASH_ALIAS_NAME} -w {BINARY_NAME}
 "#
     ))
@@ -263,6 +283,10 @@ pub fn powershell_integration_script(binding: &str, executable: &Path) -> io::Re
     let binding = powershell_binding(binding)
         .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err))?;
     let executable = powershell_quote(&executable.to_string_lossy());
+    let powershell_top_level_commands =
+        powershell_words_with_suffix(TOP_LEVEL_COMMANDS, GLOBAL_OPTIONS);
+    let powershell_shell_targets = powershell_words(SHELL_TARGETS);
+    let powershell_doc_topics = powershell_words(DOC_TOPICS);
     Ok(format!(
         r#"$script:__pb_exe = {executable}
 function __pb_dispatch {{
@@ -291,11 +315,11 @@ Register-ArgumentCompleter -CommandName {BINARY_NAME},{BASH_ALIAS_NAME} -ScriptB
   }} elseif ($words.Count -ge 2 -and $words[1] -eq 'edit') {{
     & $script:__pb_exe complete-edit $wordToComplete | ForEach-Object {{ [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_) }}
   }} elseif ($words.Count -ge 2 -and $words[1] -eq 'completions') {{
-    {POWERSHELL_SHELL_TARGETS} | Where-Object {{ $_ -like "$wordToComplete*" }} | ForEach-Object {{ [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_) }}
+    {powershell_shell_targets} | Where-Object {{ $_ -like "$wordToComplete*" }} | ForEach-Object {{ [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_) }}
   }} elseif ($words.Count -ge 2 -and $words[1] -eq 'docs') {{
-    {POWERSHELL_DOC_TOPICS} | Where-Object {{ $_ -like "$wordToComplete*" }} | ForEach-Object {{ [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_) }}
+    {powershell_doc_topics} | Where-Object {{ $_ -like "$wordToComplete*" }} | ForEach-Object {{ [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_) }}
   }} else {{
-    {POWERSHELL_TOP_LEVEL_COMMANDS} | Where-Object {{ $_ -like "$wordToComplete*" }} | ForEach-Object {{ [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_) }}
+    {powershell_top_level_commands} | Where-Object {{ $_ -like "$wordToComplete*" }} | ForEach-Object {{ [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_) }}
   }}
 }}
 "#
@@ -336,6 +360,27 @@ fn powershell_binding(binding: &str) -> Result<String, String> {
     parse_ctrl_key(binding).map(|ch| format!("Ctrl+{}", ch.to_ascii_lowercase()))
 }
 
+fn shell_words(words: &[&str]) -> String {
+    words.join(" ")
+}
+
+fn powershell_words(words: &[&str]) -> String {
+    words
+        .iter()
+        .map(|word| powershell_quote(word))
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+fn powershell_words_with_suffix(words: &[&str], suffix: &[&str]) -> String {
+    words
+        .iter()
+        .chain(suffix.iter())
+        .map(|word| powershell_quote(word))
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
 fn powershell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "''"))
 }
@@ -348,6 +393,21 @@ fn shell_quote(value: &str) -> String {
 mod tests {
     use super::*;
     use std::path::Path;
+
+    #[test]
+    fn word_formatters_render_shared_lists_for_shells_and_powershell() {
+        assert_eq!(shell_words(DOC_TOPICS), "syntax config");
+        assert_eq!(powershell_words(DOC_TOPICS), "'syntax','config'");
+        assert_eq!(shell_words(SHELL_TARGETS), "bash zsh fish powershell");
+        assert_eq!(
+            powershell_words(SHELL_TARGETS),
+            "'bash','zsh','fish','powershell'"
+        );
+        assert_eq!(
+            powershell_words_with_suffix(DOC_TOPICS, GLOBAL_OPTIONS),
+            "'syntax','config','--theme'"
+        );
+    }
 
     #[test]
     fn bash_script_uses_readline_bind_and_executable_path() {
