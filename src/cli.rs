@@ -156,10 +156,7 @@ pub fn run_init_command<W: Write>(paths: &Paths, force: bool, writer: &mut W) ->
     match write_starter_snippets(paths, force)? {
         InitOutcome::Written(path) => {
             writeln!(writer, "wrote {}", path.display())?;
-            writeln!(
-                writer,
-                "next: pb new   |   pb edit   |   docs/SNIPPET_SYNTAX.md"
-            )?;
+            writeln!(writer, "next: pb new   |   pb edit   |   pb docs syntax")?;
         }
         InitOutcome::Skipped(path) => {
             writeln!(
@@ -553,11 +550,7 @@ mod tests {
         let mut out = Vec::new();
         run_init_command(&paths, false, &mut out).unwrap();
         assert!(target.exists());
-        assert!(
-            String::from_utf8(out)
-                .unwrap()
-                .contains("docs/SNIPPET_SYNTAX.md")
-        );
+        assert!(String::from_utf8(out).unwrap().contains("pb docs syntax"));
         assert!(fs::read_to_string(&target).unwrap().contains("<@branch>"));
 
         fs::write(&target, "custom").unwrap();
