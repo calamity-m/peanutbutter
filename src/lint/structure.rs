@@ -19,15 +19,26 @@ pub(super) fn lint_duplicate_slugs(path: &Path, content: &str) -> Vec<LintFindin
         if let Some(heading) = snippet_heading(line) {
             let slug = slugify(&heading);
             if let Some(first_line) = first.get(&slug) {
-                out.push(finding(
-                    LintSeverity::Warning,
-                    CODE_DUPLICATE_SLUG,
-                    path.to_path_buf(),
-                    Some(idx + 1),
-                    None,
-                    format!("snippet heading duplicates base slug '{slug}'"),
-                    Some(format!("first occurrence is on line {first_line}")),
-                ));
+                // Byte offsets: skip leading whitespace and the "##" prefix, then
+                // any spaces before the heading text, so editors underline just
+                // the heading rather than the whole line.
+                let leading = line.len() - line.trim_start().len();
+                let after_hashes = leading + 2;
+                let rest = &line[after_hashes..];
+                let col_start = after_hashes + (rest.len() - rest.trim_start().len());
+                let col_end = col_start + heading.len();
+                out.push(
+                    finding(
+                        LintSeverity::Warning,
+                        CODE_DUPLICATE_SLUG,
+                        path.to_path_buf(),
+                        None,
+                        None,
+                        format!("snippet heading duplicates base slug '{slug}'"),
+                        Some(format!("first occurrence is on line {first_line}")),
+                    )
+                    .with_span(idx + 1, col_start, col_end),
+                );
             } else {
                 first.insert(slug, idx + 1);
             }
@@ -198,5 +209,37 @@ fn slugify(input: &str) -> String {
         "snippet".to_string()
     } else {
         out
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    #[test]
+    fn duplicate_slug_finding_has_column_span() {
+        let content =
+            "## Deploy App\n\n```bash\necho hi\n```\n\n## Deploy App!\n\n```bash\necho bye\n```\n";
+        let findings = lint_duplicate_slugs(Path::new("test.md"), content);
+        assert_eq!(findings.len(), 1);
+        let f = &findings[0];
+        assert_eq!(f.line, Some(7));
+        // "## Deploy App!" → heading text starts at byte 3
+        assert_eq!(f.col_start, Some(3));
+        assert_eq!(f.col_end, Some(3 + "Deploy App!".len()));
+    }
+
+    #[test]
+    fn duplicate_slug_finding_column_span_with_leading_whitespace() {
+        // Headings shouldn't normally have leading whitespace but the span
+        // computation should still be correct if they do.
+        let content = "## Foo\n\n```bash\necho a\n```\n\n  ## Foo!\n\n```bash\necho b\n```\n";
+        let findings = lint_duplicate_slugs(Path::new("test.md"), content);
+        assert_eq!(findings.len(), 1);
+        let f = &findings[0];
+        // "  ## Foo!" → 2 leading spaces + ## + space = col 5
+        assert_eq!(f.col_start, Some(5));
+        assert_eq!(f.col_end, Some(5 + "Foo!".len()));
     }
 }
