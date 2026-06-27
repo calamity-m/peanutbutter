@@ -62,10 +62,21 @@ fn extract_code_action(
     let existing = parsed.frontmatter.variables.get(&inline.name);
     let spec_matches = existing.is_some_and(|spec| spec_matches_inline(spec, inline));
     let conflict = existing.is_some() && !spec_matches;
-    let mut edits = vec![TextEdit {
-        range: line_range(inline.line, inline.start as u32, inline.end as u32),
-        new_text: format!("<@{}>", inline.name),
-    }];
+    // Collapse every placeholder sharing this name and inline source, not just the
+    // one under the cursor: extracting a single value to a shared frontmatter spec
+    // is only consistent if all identical duplicates lose their redundant source.
+    let mut edits: Vec<TextEdit> = matching_inline_placeholders(content, inline)
+        .into_iter()
+        .map(|placeholder| TextEdit {
+            range: line_range(
+                placeholder.line,
+                placeholder.start as u32,
+                placeholder.end as u32,
+            ),
+            new_text: format!("<@{}>", placeholder.name),
+        })
+        .collect();
+    let occurrences = edits.len();
     if !spec_matches {
         edits.push(if conflict {
             overwrite_variable_spec_edit(&lines, inline)
@@ -82,11 +93,8 @@ fn extract_code_action(
     } else {
         format!("Extract `<@{}>` to frontmatter", inline.name)
     };
-    if snippet_usage_count(content, &inline.name) > 1 {
-        title.push_str(&format!(
-            " (affects all {} snippets using it)",
-            snippet_usage_count(content, &inline.name)
-        ));
+    if occurrences > 1 {
+        title.push_str(&format!(" (collapses all {occurrences} occurrences)"));
     }
     if config_vars.contains_key(&inline.name) {
         title.push_str(" (overrides config-defined spec)");
@@ -129,11 +137,9 @@ fn inline_code_action(
         InlineSourceKind::Command => format!("<@{}:{}>", name, value),
     };
     let mut title = format!("Inline frontmatter variable `{name}`");
-    if snippet_usage_count(content, &name) > 1 {
-        title.push_str(&format!(
-            " (affects all {} snippets using it)",
-            snippet_usage_count(content, &name)
-        ));
+    let usages = placeholder_usage_count(content, &name);
+    if usages > 1 {
+        title.push_str(&format!(" (affects all {usages} usages)"));
     }
     Some(CodeAction {
         title,
@@ -196,6 +202,55 @@ fn inline_placeholder_at(content: &str, pos: Position) -> Option<InlinePlacehold
         }
     }
     None
+}
+
+/// Every placeholder in `content` whose name, source kind, and value match
+/// `target`, including `target` itself. Differing inline overrides (same name,
+/// different value) are excluded so they keep their own source after extraction.
+fn matching_inline_placeholders(
+    content: &str,
+    target: &InlinePlaceholder,
+) -> Vec<InlinePlaceholder> {
+    let mut matches = Vec::new();
+    for (line_idx, line) in content.lines().enumerate() {
+        let bytes = line.as_bytes();
+        let mut i = 0;
+        while i + 1 < bytes.len() {
+            if bytes[i] == b'<' && bytes[i + 1] == b'@' {
+                let start = i;
+                let Some(end) = parser::find_placeholder_end(line, start).map(|e| e + 1) else {
+                    break;
+                };
+                let inner = &line[start + 2..end - 1];
+                if let Some((name, rest)) = inner.split_once(':') {
+                    let name = name.trim();
+                    let (kind, value) = if let Some(default) = rest.strip_prefix('?') {
+                        (InlineSourceKind::Default, default)
+                    } else {
+                        (InlineSourceKind::Command, rest)
+                    };
+                    if valid_variable_name(name)
+                        && name == target.name
+                        && kind == target.kind
+                        && value == target.value
+                    {
+                        matches.push(InlinePlaceholder {
+                            name: name.to_string(),
+                            kind,
+                            value: value.to_string(),
+                            line: line_idx as u32,
+                            start,
+                            end,
+                        });
+                    }
+                }
+                i = end;
+            } else {
+                i += 1;
+            }
+        }
+    }
+    matches
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -457,12 +512,30 @@ fn valid_variable_name(name: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
 }
 
-fn snippet_usage_count(content: &str, name: &str) -> usize {
-    parser::parse_file(std::path::Path::new(""), std::path::Path::new(""), content)
-        .snippets
-        .iter()
-        .filter(|snippet| snippet.variables.iter().any(|var| var.name == name))
-        .count()
+/// Number of `<@name...>` placeholders referencing `name`, regardless of source.
+/// Inlining removes the shared frontmatter spec, so every usage is affected.
+fn placeholder_usage_count(content: &str, name: &str) -> usize {
+    let mut count = 0;
+    for line in content.lines() {
+        let bytes = line.as_bytes();
+        let mut i = 0;
+        while i + 1 < bytes.len() {
+            if bytes[i] == b'<' && bytes[i + 1] == b'@' {
+                let start = i;
+                let Some(end) = parser::find_placeholder_end(line, start).map(|e| e + 1) else {
+                    break;
+                };
+                let inner = &line[start + 2..end - 1];
+                if inner.split(':').next().unwrap_or("").trim() == name {
+                    count += 1;
+                }
+                i = end;
+            } else {
+                i += 1;
+            }
+        }
+    }
+    count
 }
 
 #[cfg(test)]
@@ -579,6 +652,21 @@ mod code_action_tests {
     }
 
     #[test]
+    fn extract_collapses_all_matching_duplicates_but_keeps_overrides() {
+        let content = "## D\n\n```bash\n<@p:?.> <@p:?.>\n<@p:?/tmp>\n<@p:?.>\n```\n";
+        let actions = compute_code_actions(&uri(), content, range(3, 2), &BTreeMap::new()).unwrap();
+        // Title counts the placeholders rewritten, not the `/tmp` override.
+        assert!(action_title(&actions[0]).contains("(collapses all 3 occurrences)"));
+        let updated = apply_edits(content, edits(&actions[0]));
+        // All `<@p:?.>` duplicates collapse to `<@p>`.
+        assert_eq!(updated.matches("<@p>").count(), 3);
+        assert!(!updated.contains("<@p:?.>"));
+        // The differing override keeps its own inline value.
+        assert!(updated.contains("<@p:?/tmp>"));
+        assert!(updated.contains("variables:\n  p:\n    default: .\n"));
+    }
+
+    #[test]
     fn extract_conflict_offers_overwrite_action() {
         let content =
             "---\nvariables:\n  p:\n    default: old\n---\n## D\n\n```bash\n<@p:?new>\n```\n";
@@ -595,6 +683,7 @@ mod code_action_tests {
         let content =
             "---\nvariables:\n  p:\n    default: .\n---\n## D\n\n```bash\n<@p> <@p>\n```\n";
         let actions = compute_code_actions(&uri(), content, range(2, 3), &BTreeMap::new()).unwrap();
+        assert!(action_title(&actions[0]).contains("(affects all 2 usages)"));
         let updated = apply_edits(content, edits(&actions[0]));
         assert!(updated.contains("<@p:?.> <@p>"));
         assert!(!updated.contains("variables:"));
