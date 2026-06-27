@@ -127,6 +127,9 @@ Code probably shit - but the code would be shit if I wrote every single line mys
 For a stricter syntax reference, see [docs/SNIPPET_SYNTAX.md](docs/SNIPPET_SYNTAX.md).
 The same reference ships inside the binary: `pb docs syntax` prints it to stdout, and
 `pb docs config` prints an annotated example config. Run `pb docs` to list topics.
+If you want an AI agent to help author snippets, copy the reusable skill at
+[skills/create-peanutbutter-snippet/SKILL.md](skills/create-peanutbutter-snippet/SKILL.md)
+into your agent's skills directory.
 
 Snippets are really just **ANY** markdown file that follows the following structure:
 
