@@ -122,44 +122,32 @@ but enough that I've thought about it for years.
 
 Code probably shit - but the code would be shit if I wrote every single line myself too. Use it like I do, or burn it at the stake. You have free-will right? ;)
 
+There is a bundled skill in this repository that I personally use to get my AI to help me refine complex (really complex) snippets.
+
 ## Snippet Specification
 
-For a stricter syntax reference, see [docs/SNIPPET_SYNTAX.md](docs/SNIPPET_SYNTAX.md).
-The same reference ships inside the binary: `pb docs syntax` prints it to stdout, and
-`pb docs config` prints an annotated example config. Run `pb docs` to list topics.
-If you want an AI agent to help author snippets, copy the reusable skill at
-[skills/create-peanutbutter-snippet/SKILL.md](skills/create-peanutbutter-snippet/SKILL.md)
+For the complete specification, see [docs/SNIPPET_SYNTAX.md](docs/SNIPPET_SYNTAX.md) or run `pb docs syntax`.
+
+skills/create-peanutbutter-snippet/SKILL.md](skills/create-peanutbutter-snippet/SKILL.md)
 into your agent's skills directory.
 
 Snippets are really just **ANY** markdown file that follows the following structure:
 
-A `##` heading, followed below by some ` ` code wrapping block. If multiple code wrapping blocks
-are present, only the first non-`text` fenced block will be considered the snippet. Otherwise, anything between the code wrapping block
-and the heading is considered description/preview data.
+A `##` heading, followed below by some fenced code wrapping block.
 
-Important: bare `text` fences are reserved for picker-visible examples in the description. They are rendered in the preview and deliberately ignored as executable snippet bodies. If a section only contains `text` fences, peanutbutter does not create a snippet from it.
-
-````markdown
-## Preview an example before running
-
-This example is shown in the picker preview:
-
-```text
-input.txt -> output.txt
-```
-
-This is the executable snippet body:
-
-```bash
-cp <@source> <@dest>
-```
-````
-
-I recommend just [just reading through the examples](/examples/simple/snippets.md)
+I recommend just [just reading through the examples](/examples/simple/snippets.md). The snippet syntax is fairly intuitive and you'll just pick it up by reading it. Benefit from that is you can show snippets to random coworkers/friends/whatever without asking them to use a new tool.
 
 This snippet syntax lets you show your snippets to random coworkers, friends or what have you without asking them to understand much - the input variable syntax is fairly simple and close to self explanatory.
 
 ## Configuration
+
+### Config File
+
+Peanutbutter reads config from `~/.config/peanutbutter/config.toml` by default. You can override that path with `PB_CONFIG_FILE=/path/to/config.toml`.
+
+This file is optional. If it doesn't exist, peanutbutter uses built-in defaults.
+
+A fully commented example config lives at [examples/config.toml](examples/config.toml).
 
 ### Snippet Paths
 
@@ -171,22 +159,4 @@ For example, to also include the bundled `examples/` directory from this repo:
 export PEANUTBUTTER_PATH="/path/to/peanutbutter/examples"
 ```
 
-Or to try out the examples without moving any files, add this to your `~/.bashrc` or `~/.zshrc`:
-
-```bash
-export PEANUTBUTTER_PATH="$PWD/examples"
-```
-
 The XDG default (`~/.config/peanutbutter/snippets/`) is always included and doesn't need to be listed explicitly.
-
-### Config File
-
-Peanutbutter reads config from `~/.config/peanutbutter/config.toml` by default. You can override that path with `PB_CONFIG_FILE=/path/to/config.toml`.
-
-This file is optional. If it doesn't exist, peanutbutter uses built-in defaults.
-
-A fully commented example config lives at [examples/config.toml](examples/config.toml).
-
-### Interactive Settings
-
-Run `pb settings` to tune search ranking weights and pick a theme in an interactive TUI. The settings screen covers frecency and fuzzy search weights (with per-field impact feedback) and a Theme section that lets you cycle the 5 built-in themes plus any custom palettes registered under `[theme.custom.<name>]` in your config, with a live full-screen preview; it saves only changed keys back to your config file while preserving comments and layout.
