@@ -77,8 +77,9 @@ path = 10
 command = 8
 
 [theme]
-# Select a built-in base theme:
+# Select a base theme by name: one of the 5 built-ins
 #   default, gruvbox, catppuccin, nord, monochrome
+# or the name of a palette registered under [theme.custom.<name>] below.
 # A CLI flag like `peanutbutter execute --theme nord` overrides this name and
 # skips the per-color overrides below.
 name = "default"
