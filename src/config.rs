@@ -244,15 +244,21 @@ impl Theme {
 
     /// Build the named `gruvbox` theme.
     pub fn gruvbox() -> Self {
-        Self::from_palette(ThemePalette {
-            accent: Color::Rgb(0xd7, 0x99, 0x21),
-            muted: Color::Rgb(0x8e, 0xc0, 0x7c),
-            selected_bg: Color::Rgb(0x3c, 0x38, 0x36),
-            selected_fg: Color::Rgb(0xfb, 0xf1, 0xc7),
-            prompt_fg: Color::Rgb(0x28, 0x28, 0x28),
-            prompt_bg: Color::Rgb(0xfa, 0xbd, 0x2f),
-            error_fg: Color::Rgb(0xfb, 0x49, 0x34),
-        })
+        let brown = Color::Rgb(0xa0, 0x6a, 0x3b);
+        let tan = Color::Rgb(0xd6, 0xb4, 0x8a);
+
+        let mut theme = Self::from_palette(ThemePalette {
+            accent: tan,
+            muted: Color::Rgb(0x8a, 0x74, 0x64),
+            selected_bg: Color::Rgb(0x33, 0x28, 0x21),
+            selected_fg: Color::Rgb(0xf2, 0xdf, 0xc7),
+            prompt_fg: Color::Rgb(0x20, 0x1a, 0x17),
+            prompt_bg: tan,
+            error_fg: Color::Rgb(0xe0, 0x6c, 0x75),
+        });
+        theme.emphasis = theme.emphasis.fg(tan);
+        theme.border = theme.border.fg(brown);
+        theme
     }
 
     /// Build the named `catppuccin` theme.
