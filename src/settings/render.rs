@@ -10,7 +10,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
 
-const SECTION_ITEMS: &[&str] = &["search", "theme"];
+const SECTION_ITEMS: &[&str] = &["search", "theme", "paths"];
 const SEARCH_ITEMS: &[&str] = &["frecency", "fuzzy"];
 
 /// Draw the current settings screen.
@@ -25,10 +25,22 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &SettingsApp, theme: &Theme) {
     .render(frame.area(), frame.buffer_mut());
 
     match app.screen() {
-        Screen::Section => {
-            draw_picker(frame, content, SECTION_ITEMS, app.section_selected(), theme)
-        }
-        Screen::Search => draw_picker(frame, content, SEARCH_ITEMS, app.search_selected(), theme),
+        Screen::Section => draw_picker(
+            frame,
+            content,
+            SECTION_ITEMS,
+            app.section_selected(),
+            theme,
+            40,
+        ),
+        Screen::Search => draw_picker(
+            frame,
+            content,
+            SEARCH_ITEMS,
+            app.search_selected(),
+            theme,
+            40,
+        ),
         Screen::Tuner(group) => draw_tuner(frame, content, app, *group, theme),
         Screen::Theme => draw_picker(
             frame,
@@ -36,7 +48,20 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &SettingsApp, theme: &Theme) {
             &app.theme_names(),
             app.theme_selected(),
             theme,
+            40,
         ),
+        Screen::Paths => {
+            let labels: Vec<String> = app
+                .paths()
+                .iter()
+                .map(|path| path.display().to_string())
+                .collect();
+            let items: Vec<&str> = labels.iter().map(String::as_str).collect();
+            let idx_width = items.len().to_string().len().max(1) as u16;
+            let content_width = items.iter().map(|item| item.len()).max().unwrap_or(0) as u16;
+            let width = content_width + idx_width + 4;
+            draw_picker(frame, content, &items, app.paths_selected(), theme, width);
+        }
     }
 }
 
@@ -47,6 +72,7 @@ fn chrome_text(app: &SettingsApp) -> (String, &'static str) {
         Screen::Tuner(TunerGroup::Frecency) => "settings / search / frecency".to_string(),
         Screen::Tuner(TunerGroup::Fuzzy) => "settings / search / fuzzy".to_string(),
         Screen::Theme => "settings / theme".to_string(),
+        Screen::Paths => "settings / paths".to_string(),
     };
     let title = match app.status() {
         Some(status) => format!("{path} · {status}"),
@@ -68,7 +94,14 @@ fn chrome_text(app: &SettingsApp) -> (String, &'static str) {
     (title, footer)
 }
 
-fn draw_picker(frame: &mut Frame<'_>, area: Rect, items: &[&str], selected: usize, theme: &Theme) {
+fn draw_picker(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    items: &[&str],
+    selected: usize,
+    theme: &Theme,
+    width: u16,
+) {
     let idx_width = items.len().to_string().len().max(1);
     let rows = items
         .iter()
@@ -93,7 +126,7 @@ fn draw_picker(frame: &mut Frame<'_>, area: Rect, items: &[&str], selected: usiz
     state.select(Some(selected));
     frame.render_stateful_widget(
         List::new(rows),
-        clamped(area, 40, items.len() as u16),
+        clamped(area, width, items.len() as u16),
         &mut state,
     );
 }

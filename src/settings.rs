@@ -137,4 +137,37 @@ mod tests {
                 .contains("location_weight = 1.1")
         );
     }
+
+    #[test]
+    fn paths_section_lists_registered_snippet_roots() {
+        let root = temp_dir("paths-section");
+        let config_file = root.join("custom-config.toml");
+        fs::write(&config_file, "").unwrap();
+        let snippet_root = root.join("snippets");
+        let old_config = std::env::var_os("PB_CONFIG_FILE");
+        let old_path = std::env::var_os("PEANUTBUTTER_PATH");
+        unsafe {
+            std::env::set_var("PB_CONFIG_FILE", &config_file);
+            std::env::set_var("PEANUTBUTTER_PATH", &snippet_root);
+        }
+
+        let config = crate::config::load().unwrap();
+        let mut app = app::SettingsApp::new(&config);
+        app.handle_key(key(KeyCode::Down));
+        app.handle_key(key(KeyCode::Down));
+        app.handle_key(key(KeyCode::Enter));
+
+        match old_config {
+            Some(value) => unsafe { std::env::set_var("PB_CONFIG_FILE", value) },
+            None => unsafe { std::env::remove_var("PB_CONFIG_FILE") },
+        }
+        match old_path {
+            Some(value) => unsafe { std::env::set_var("PEANUTBUTTER_PATH", value) },
+            None => unsafe { std::env::remove_var("PEANUTBUTTER_PATH") },
+        }
+
+        assert_eq!(*app.screen(), app::Screen::Paths);
+        assert_eq!(app.paths(), config.paths.snippet_roots.as_slice());
+        assert!(app.paths().contains(&snippet_root));
+    }
 }

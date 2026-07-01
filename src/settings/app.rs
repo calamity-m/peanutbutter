@@ -2,6 +2,7 @@
 
 use crate::config::{AppConfig, FuzzyWeights, SearchConfig, Theme};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use std::path::PathBuf;
 
 /// The high-level screen currently shown by `pb settings`.
 #[derive(Debug, Clone, PartialEq)]
@@ -14,6 +15,8 @@ pub(crate) enum Screen {
     Tuner(TunerGroup),
     /// Picker for the built-in theme palettes.
     Theme,
+    /// Read-only list of registered snippet root directories.
+    Paths,
 }
 
 /// Search tuner groups available in v1.
@@ -164,6 +167,8 @@ pub(crate) struct SettingsApp {
     themes: Vec<(String, Theme)>,
     theme_selected: usize,
     theme_original: usize,
+    paths: Vec<PathBuf>,
+    paths_selected: usize,
     status: Option<String>,
     should_quit: bool,
     confirm_quit: bool,
@@ -188,6 +193,8 @@ impl SettingsApp {
             themes,
             theme_selected,
             theme_original: theme_selected,
+            paths: config.paths.snippet_roots.clone(),
+            paths_selected: 0,
             status: None,
             should_quit: false,
             confirm_quit: false,
@@ -243,6 +250,16 @@ impl SettingsApp {
     /// The theme name to persist, if the selection has changed since save.
     pub(crate) fn pending_theme_name(&self) -> Option<&str> {
         self.theme_changed().then(|| self.theme_selected_name())
+    }
+
+    /// Registered snippet root directories, in resolution order.
+    pub(crate) fn paths(&self) -> &[PathBuf] {
+        &self.paths
+    }
+
+    /// Selected index into the paths list.
+    pub(crate) fn paths_selected(&self) -> usize {
+        self.paths_selected
     }
 
     /// Status message shown in the chrome.
@@ -315,6 +332,7 @@ impl SettingsApp {
             Screen::Search => self.handle_search_key(key),
             Screen::Tuner(_) => self.handle_tuner_key(key),
             Screen::Theme => self.handle_theme_key(key),
+            Screen::Paths => self.handle_paths_key(key),
         }
     }
 
@@ -336,15 +354,33 @@ impl SettingsApp {
                 self.section_selected = self.section_selected.saturating_sub(1)
             }
             KeyCode::Down | KeyCode::Char('j') => {
-                self.section_selected = (self.section_selected + 1).min(1)
+                self.section_selected = (self.section_selected + 1).min(2)
             }
             KeyCode::Enter => {
-                self.screen = if self.section_selected == 0 {
-                    Screen::Search
-                } else {
-                    Screen::Theme
+                self.screen = match self.section_selected {
+                    0 => Screen::Search,
+                    1 => Screen::Theme,
+                    _ => Screen::Paths,
                 };
                 self.status = None;
+            }
+            _ => {}
+        }
+        false
+    }
+
+    fn handle_paths_key(&mut self, key: KeyEvent) -> bool {
+        let max = self.paths.len().saturating_sub(1);
+        match key.code {
+            KeyCode::Esc | KeyCode::Backspace => {
+                self.screen = Screen::Section;
+                self.status = None;
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                self.paths_selected = self.paths_selected.saturating_sub(1)
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                self.paths_selected = (self.paths_selected + 1).min(max)
             }
             _ => {}
         }
