@@ -88,6 +88,7 @@ fn chrome_text(app: &SettingsApp) -> (String, &'static str) {
             Screen::Theme => {
                 "↑/↓ or j/k move · enter save · r reset+save · esc/backspace back · q quit"
             }
+            Screen::Paths => "↑/↓ or j/k move · esc/backspace back · q quit",
             _ => "↑/↓ or j/k move · enter select · esc/backspace back · q quit",
         }
     };
