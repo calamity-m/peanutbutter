@@ -1,6 +1,6 @@
 //! State and key handling for the interactive settings editor.
 
-use crate::config::{AppConfig, FuzzyWeights, SearchConfig};
+use crate::config::{AppConfig, FuzzyWeights, SearchConfig, Theme};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 /// The high-level screen currently shown by `pb settings`.
@@ -12,6 +12,8 @@ pub(crate) enum Screen {
     Search,
     /// Slider editor for one search group.
     Tuner(TunerGroup),
+    /// Picker for the built-in theme palettes.
+    Theme,
 }
 
 /// Search tuner groups available in v1.
@@ -159,6 +161,8 @@ pub(crate) struct SettingsApp {
     field_selected: usize,
     frecency_fields: Vec<Field>,
     fuzzy_fields: Vec<Field>,
+    theme_selected: usize,
+    theme_original: usize,
     status: Option<String>,
     should_quit: bool,
     confirm_quit: bool,
@@ -167,6 +171,11 @@ pub(crate) struct SettingsApp {
 impl SettingsApp {
     /// Build a settings state from the resolved application config.
     pub(crate) fn new(config: &AppConfig) -> Self {
+        let theme_name = crate::config::resolved_theme_name(&config.paths.config_file);
+        let theme_selected = Theme::built_in_names()
+            .iter()
+            .position(|name| *name == theme_name)
+            .unwrap_or(0);
         Self {
             screen: Screen::Section,
             section_selected: 0,
@@ -174,6 +183,8 @@ impl SettingsApp {
             field_selected: 0,
             frecency_fields: frecency_fields(&config.search),
             fuzzy_fields: fuzzy_fields(&config.search.fuzzy),
+            theme_selected,
+            theme_original: theme_selected,
             status: None,
             should_quit: false,
             confirm_quit: false,
@@ -198,6 +209,27 @@ impl SettingsApp {
     /// Selected field index for tuner screens.
     pub(crate) fn field_selected(&self) -> usize {
         self.field_selected
+    }
+
+    /// Selected index into `Theme::built_in_names()` for the theme picker.
+    pub(crate) fn theme_selected(&self) -> usize {
+        self.theme_selected
+    }
+
+    /// Name of the currently selected (possibly unsaved) theme.
+    pub(crate) fn theme_selected_name(&self) -> &'static str {
+        Theme::built_in_names()[self.theme_selected]
+    }
+
+    /// Whether the selected theme differs from the saved baseline.
+    pub(crate) fn theme_changed(&self) -> bool {
+        self.theme_selected != self.theme_original
+    }
+
+    /// The theme name to persist, if the selection has changed since save.
+    pub(crate) fn pending_theme_name(&self) -> Option<&'static str> {
+        self.theme_changed()
+            .then(|| Theme::built_in_names()[self.theme_selected])
     }
 
     /// Status message shown in the chrome.
@@ -246,6 +278,7 @@ impl SettingsApp {
         for field in &mut self.fuzzy_fields {
             field.accept_current();
         }
+        self.theme_original = self.theme_selected;
         self.status = Some("saved".to_string());
     }
 
@@ -268,11 +301,12 @@ impl SettingsApp {
             Screen::Section => self.handle_section_key(key),
             Screen::Search => self.handle_search_key(key),
             Screen::Tuner(_) => self.handle_tuner_key(key),
+            Screen::Theme => self.handle_theme_key(key),
         }
     }
 
     fn handle_quit_key(&mut self) -> bool {
-        if self.confirm_quit || !self.all_fields().any(Field::changed) {
+        if self.confirm_quit || (!self.all_fields().any(Field::changed) && !self.theme_changed()) {
             self.should_quit = true;
         } else {
             self.confirm_quit = true;
@@ -285,10 +319,43 @@ impl SettingsApp {
     fn handle_section_key(&mut self, key: KeyEvent) -> bool {
         match key.code {
             KeyCode::Esc | KeyCode::Backspace => self.should_quit = true,
+            KeyCode::Up | KeyCode::Char('k') => {
+                self.section_selected = self.section_selected.saturating_sub(1)
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                self.section_selected = (self.section_selected + 1).min(1)
+            }
             KeyCode::Enter => {
-                self.screen = Screen::Search;
+                self.screen = if self.section_selected == 0 {
+                    Screen::Search
+                } else {
+                    Screen::Theme
+                };
                 self.status = None;
             }
+            _ => {}
+        }
+        false
+    }
+
+    fn handle_theme_key(&mut self, key: KeyEvent) -> bool {
+        let max = Theme::built_in_names().len().saturating_sub(1);
+        match key.code {
+            KeyCode::Esc | KeyCode::Backspace => {
+                self.screen = Screen::Section;
+                self.status = None;
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                self.theme_selected = self.theme_selected.saturating_sub(1)
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                self.theme_selected = (self.theme_selected + 1).min(max)
+            }
+            KeyCode::Char('r') | KeyCode::Char('R') => {
+                self.theme_selected = 0;
+                return true;
+            }
+            KeyCode::Enter => return true,
             _ => {}
         }
         false
@@ -697,5 +764,92 @@ mod tests {
         });
         assert!(!app.handle_key(key(KeyCode::Char('q'))));
         assert!(app.should_quit());
+    }
+
+    fn test_config() -> AppConfig {
+        AppConfig {
+            paths: crate::config::Paths {
+                snippet_roots: vec![],
+                xdg_snippets_dir: std::path::PathBuf::new(),
+                snippet_overrides_active: false,
+                state_file: std::path::PathBuf::new(),
+                config_file: std::path::PathBuf::new(),
+            },
+            ui: crate::config::UiConfig::default(),
+            search: SearchConfig::default(),
+            variables: Default::default(),
+            theme: crate::config::Theme::default(),
+            suggestion_commands: crate::config::SuggestionCommandsConfig::default(),
+            lint: Default::default(),
+        }
+    }
+
+    fn goto_theme_screen(app: &mut SettingsApp) {
+        app.handle_key(key(KeyCode::Down));
+        app.handle_key(key(KeyCode::Enter));
+    }
+
+    #[test]
+    fn theme_section_is_reachable_from_section_screen() {
+        let mut app = SettingsApp::new(&test_config());
+        goto_theme_screen(&mut app);
+        assert_eq!(app.screen(), &Screen::Theme);
+    }
+
+    #[test]
+    fn theme_cycles_and_clamps_at_bounds() {
+        let mut app = SettingsApp::new(&test_config());
+        goto_theme_screen(&mut app);
+        assert_eq!(app.theme_selected(), 0);
+
+        app.handle_key(key(KeyCode::Up));
+        assert_eq!(app.theme_selected(), 0, "clamps at the low end");
+
+        let max = Theme::built_in_names().len() - 1;
+        for _ in 0..max + 5 {
+            app.handle_key(key(KeyCode::Down));
+        }
+        assert_eq!(app.theme_selected(), max, "clamps at the high end");
+    }
+
+    #[test]
+    fn theme_change_requires_quit_confirmation() {
+        let mut app = SettingsApp::new(&test_config());
+        goto_theme_screen(&mut app);
+        app.handle_key(key(KeyCode::Down));
+        assert!(app.theme_changed());
+
+        assert!(!app.handle_key(key(KeyCode::Char('q'))));
+        assert!(!app.should_quit());
+        assert!(app.confirm_quit());
+
+        assert!(!app.handle_key(key(KeyCode::Char('q'))));
+        assert!(app.should_quit());
+    }
+
+    #[test]
+    fn theme_enter_reports_save_and_clears_dirty_state() {
+        let mut app = SettingsApp::new(&test_config());
+        goto_theme_screen(&mut app);
+        app.handle_key(key(KeyCode::Down));
+        assert!(app.theme_changed());
+        assert_eq!(app.pending_theme_name(), Some(Theme::built_in_names()[1]));
+
+        assert!(app.handle_key(key(KeyCode::Enter)));
+        app.mark_saved();
+        assert!(!app.theme_changed());
+        assert_eq!(app.pending_theme_name(), None);
+    }
+
+    #[test]
+    fn theme_reset_selects_default_and_reports_save() {
+        let mut app = SettingsApp::new(&test_config());
+        goto_theme_screen(&mut app);
+        app.handle_key(key(KeyCode::Down));
+        app.handle_key(key(KeyCode::Down));
+
+        assert!(app.handle_key(key(KeyCode::Char('r'))));
+        assert_eq!(app.theme_selected(), 0);
+        assert_eq!(app.theme_selected_name(), "default");
     }
 }

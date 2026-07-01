@@ -35,7 +35,9 @@ pub fn run(config: &AppConfig) -> io::Result<()> {
         terminal.draw(|frame| {
             let area = frame.area();
             viewport_top = viewport_top.or(Some(area.y));
-            render::draw(frame, &app, &config.theme);
+            let preview_theme = crate::config::Theme::named(app.theme_selected_name())
+                .expect("theme_selected_name always names a built-in theme");
+            render::draw(frame, &app, &preview_theme);
         })?;
 
         if app.should_quit() {
@@ -48,10 +50,24 @@ pub fn run(config: &AppConfig) -> io::Result<()> {
             continue;
         };
         if app.handle_key(key) {
+            let mut saved = 0usize;
+            let mut error = None;
             match persist::save_changed_fields(&config.paths.config_file, app.all_fields()) {
-                Ok(0) => app.set_status("no changes"),
-                Ok(_) => app.mark_saved(),
-                Err(err) => app.set_status(format!("save failed: {err}")),
+                Ok(n) => saved += n,
+                Err(err) => error = Some(err),
+            }
+            if error.is_none()
+                && let Some(name) = app.pending_theme_name()
+            {
+                match persist::save_theme_name(&config.paths.config_file, name) {
+                    Ok(()) => saved += 1,
+                    Err(err) => error = Some(err),
+                }
+            }
+            match error {
+                Some(err) => app.set_status(format!("save failed: {err}")),
+                None if saved == 0 => app.set_status("no changes"),
+                None => app.mark_saved(),
             }
         }
     }

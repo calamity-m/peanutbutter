@@ -44,6 +44,36 @@ where
     Ok(changed.len())
 }
 
+/// Write the selected built-in theme name to `[theme].name`, preserving any
+/// other TOML content (including `[theme.colors]`/`[theme.custom]` overrides).
+pub(crate) fn save_theme_name(config_file: &Path, name: &str) -> io::Result<()> {
+    let raw = match fs::read_to_string(config_file) {
+        Ok(raw) => raw,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => String::new(),
+        Err(err) => return Err(err),
+    };
+    let mut doc = if raw.trim().is_empty() {
+        DocumentMut::new()
+    } else {
+        raw.parse::<DocumentMut>()
+            .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?
+    };
+
+    let table = doc.as_table_mut();
+    let item = table
+        .entry("theme")
+        .or_insert_with(|| Item::Table(Table::new()));
+    if !item.is_table() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "config path `theme` is not a table",
+        ));
+    }
+    item.as_table_mut().expect("checked table")["name"] = Item::Value(Value::from(name));
+
+    atomic_write(config_file, doc.to_string().as_bytes())
+}
+
 fn set_field(doc: &mut DocumentMut, field: &Field) -> io::Result<()> {
     let mut table = doc.as_table_mut();
     for segment in field.toml_path {
@@ -228,5 +258,40 @@ mod tests {
 
         assert_eq!(err.kind(), io::ErrorKind::InvalidData);
         assert_eq!(fs::read_to_string(&config).unwrap(), "[search\nnope");
+    }
+
+    #[test]
+    fn save_theme_name_creates_missing_file_and_table() {
+        let root = temp_dir("theme-missing");
+        let config = root.join("config.toml");
+
+        save_theme_name(&config, "gruvbox").unwrap();
+
+        let saved = fs::read_to_string(&config).unwrap();
+        assert!(saved.contains("[theme]"));
+        assert!(saved.contains("name = \"gruvbox\""));
+    }
+
+    #[test]
+    fn save_theme_name_preserves_other_theme_keys() {
+        let root = temp_dir("theme-preserve");
+        let config = root.join("config.toml");
+        fs::write(
+            &config,
+            "# hello\n[theme]\nname = \"default\"\n[theme.colors]\nchrome_fg = \"#abcdef\"\n[theme.custom]\nchrome_fg = \"#112233\"\n[other]\nkeep = true\n",
+        )
+        .unwrap();
+
+        save_theme_name(&config, "nord").unwrap();
+
+        let saved = fs::read_to_string(&config).unwrap();
+        assert!(saved.contains("# hello"));
+        assert!(saved.contains("name = \"nord\""));
+        assert!(!saved.contains("name = \"default\""));
+        assert!(saved.contains("[theme.colors]"));
+        assert!(saved.contains("chrome_fg = \"#abcdef\""));
+        assert!(saved.contains("[theme.custom]"));
+        assert!(saved.contains("chrome_fg = \"#112233\""));
+        assert!(saved.contains("[other]\nkeep = true"));
     }
 }

@@ -189,4 +189,4 @@ A fully commented example config lives at [examples/config.toml](examples/config
 
 ### Interactive Settings
 
-Run `pb settings` to tune search ranking weights in an interactive TUI. The v1 settings screen covers frecency and fuzzy search weights, shows per-field impact feedback, and saves only changed keys back to your config file while preserving comments and layout.
+Run `pb settings` to tune search ranking weights and pick a theme in an interactive TUI. The settings screen covers frecency and fuzzy search weights (with per-field impact feedback) and a Theme section that lets you cycle the built-in themes with a live full-screen preview; it saves only changed keys back to your config file while preserving comments and layout.

@@ -297,7 +297,7 @@ impl Theme {
         }
     }
 
-    fn named(name: &str) -> io::Result<Self> {
+    pub(crate) fn named(name: &str) -> io::Result<Self> {
         match name {
             "default" => Ok(Theme::default()),
             "gruvbox" => Ok(Theme::gruvbox()),
@@ -432,6 +432,15 @@ pub fn theme_completion_names() -> io::Result<Vec<String>> {
         names.push("custom".to_string());
     }
     Ok(names)
+}
+
+/// Return the theme name resolved from `config_file`'s `[theme] name`, or
+/// `"default"` when unset or the file cannot be read.
+pub(crate) fn resolved_theme_name(config_file: &PathBuf) -> String {
+    load_file_config(config_file)
+        .ok()
+        .and_then(|file| file.theme.name)
+        .unwrap_or_else(|| "default".to_string())
 }
 
 /// Return the resolved [`Paths`] from the config file, or compute defaults if

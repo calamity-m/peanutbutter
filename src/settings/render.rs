@@ -10,7 +10,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
 
-const SECTION_ITEMS: &[&str] = &["search"];
+const SECTION_ITEMS: &[&str] = &["search", "theme"];
 const SEARCH_ITEMS: &[&str] = &["frecency", "fuzzy"];
 
 /// Draw the current settings screen.
@@ -30,6 +30,13 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &SettingsApp, theme: &Theme) {
         }
         Screen::Search => draw_picker(frame, content, SEARCH_ITEMS, app.search_selected(), theme),
         Screen::Tuner(group) => draw_tuner(frame, content, app, *group, theme),
+        Screen::Theme => draw_picker(
+            frame,
+            content,
+            Theme::built_in_names(),
+            app.theme_selected(),
+            theme,
+        ),
     }
 }
 
@@ -39,6 +46,7 @@ fn chrome_text(app: &SettingsApp) -> (String, &'static str) {
         Screen::Search => "settings / search".to_string(),
         Screen::Tuner(TunerGroup::Frecency) => "settings / search / frecency".to_string(),
         Screen::Tuner(TunerGroup::Fuzzy) => "settings / search / fuzzy".to_string(),
+        Screen::Theme => "settings / theme".to_string(),
     };
     let title = match app.status() {
         Some(status) => format!("{path} · {status}"),
@@ -50,6 +58,9 @@ fn chrome_text(app: &SettingsApp) -> (String, &'static str) {
         match app.screen() {
             Screen::Tuner(_) => {
                 "↑/↓ field · ←/→ adjust · r reset+save · enter save · esc/backspace back · q quit"
+            }
+            Screen::Theme => {
+                "↑/↓ or j/k move · enter save · r reset+save · esc/backspace back · q quit"
             }
             _ => "↑/↓ or j/k move · enter select · esc/backspace back · q quit",
         }
