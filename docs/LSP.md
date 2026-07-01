@@ -133,3 +133,39 @@ a completion plugin, no extra configuration is needed — the server advertises
 2. Run `:checkhealth vim.lsp` or `:lua vim.print(vim.lsp.get_clients())` to confirm the `peanutbutter` client is attached.
 3. Introduce a lint error (e.g. add an unused `variables:` entry) and save — a warning squiggle should appear.
 4. Type `<@` inside a fenced code block and trigger completions — declared variable names should appear.
+
+## Helix Setup
+
+Add the peanutbutter language server to your Helix language config
+(`~/.config/helix/languages.toml`, or `$XDG_CONFIG_HOME/helix/languages.toml`):
+
+```toml
+[language-server.peanutbutter]
+command = "peanutbutter"
+args = ["lsp"]
+
+[[language]]
+name = "markdown"
+language-servers = ["marksman", "peanutbutter"]
+```
+
+The `language-servers` list replaces Helix's default Markdown server list, so
+include any Markdown servers you already use. Keeping `marksman` first preserves
+Helix's general Markdown behavior while peanutbutter adds snippet-specific LSP
+features. If you only want peanutbutter, use
+`language-servers = ["peanutbutter"]` instead.
+
+Helix will start `peanutbutter lsp` for Markdown buffers, but the server only
+provides diagnostics, completions, hover, and navigation inside directories
+with a peanutbutter marker file. See [Activation scope](#activation-scope) for
+the accepted marker filenames.
+
+### Verifying the Helix setup
+
+1. Run `hx --health markdown` and confirm `peanutbutter` appears under
+   configured language servers.
+2. Open a `.md` file under a directory that contains a marker file.
+3. Introduce a lint error, such as an unused `variables:` entry, and save — a
+   warning should appear.
+4. Type `<@` inside a fenced code block and trigger completions — declared
+   variable names should appear.
