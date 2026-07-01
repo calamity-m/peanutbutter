@@ -701,7 +701,7 @@ fn resolve_snippet_roots(file: &FileConfig, xdg_default: &Path) -> Vec<PathBuf> 
     let mut seen = HashSet::new();
 
     if let Ok(raw) = env::var("PEANUTBUTTER_PATH") {
-        for path in raw.split(':').filter(|s| !s.is_empty()).map(PathBuf::from) {
+        for path in env::split_paths(&raw).filter(|p| !p.as_os_str().is_empty()) {
             push_unique(&mut roots, &mut seen, path);
         }
     }
