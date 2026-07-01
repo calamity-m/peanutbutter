@@ -39,6 +39,13 @@ Prompts can use suggestions, dependent values, and editable defaults.
 
 ## Quick-Start
 
+Install:
+
+```
+# Currently only github binaries are built, easiest way is to use something like mise
+mise use -g github:calamity-m/peanutbutter@latest
+```
+
 New here? Run `pb init` once to scaffold starter snippets at the default XDG location.
 
 **bash** — add to `~/.bashrc`:
