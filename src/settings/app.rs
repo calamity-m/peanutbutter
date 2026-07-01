@@ -161,6 +161,7 @@ pub(crate) struct SettingsApp {
     fuzzy_fields: Vec<Field>,
     status: Option<String>,
     should_quit: bool,
+    confirm_quit: bool,
 }
 
 impl SettingsApp {
@@ -175,6 +176,7 @@ impl SettingsApp {
             fuzzy_fields: fuzzy_fields(&config.search.fuzzy),
             status: None,
             should_quit: false,
+            confirm_quit: false,
         }
     }
 
@@ -206,6 +208,11 @@ impl SettingsApp {
     /// Whether the event loop should exit.
     pub(crate) fn should_quit(&self) -> bool {
         self.should_quit
+    }
+
+    /// Whether a quit was requested with unsaved changes pending confirmation.
+    pub(crate) fn confirm_quit(&self) -> bool {
+        self.confirm_quit
     }
 
     /// Fields for the current tuner, if any.
@@ -253,6 +260,10 @@ impl SettingsApp {
             self.should_quit = true;
             return false;
         }
+        if matches!(key.code, KeyCode::Char('q') | KeyCode::Char('Q')) {
+            return self.handle_quit_key();
+        }
+        self.confirm_quit = false;
         match self.screen {
             Screen::Section => self.handle_section_key(key),
             Screen::Search => self.handle_search_key(key),
@@ -260,11 +271,20 @@ impl SettingsApp {
         }
     }
 
+    fn handle_quit_key(&mut self) -> bool {
+        if self.confirm_quit || !self.all_fields().any(Field::changed) {
+            self.should_quit = true;
+        } else {
+            self.confirm_quit = true;
+            self.status =
+                Some("unsaved changes — press q again to discard, enter to save".to_string());
+        }
+        false
+    }
+
     fn handle_section_key(&mut self, key: KeyEvent) -> bool {
         match key.code {
-            KeyCode::Char('q') | KeyCode::Char('Q') | KeyCode::Esc | KeyCode::Backspace => {
-                self.should_quit = true
-            }
+            KeyCode::Esc | KeyCode::Backspace => self.should_quit = true,
             KeyCode::Enter => {
                 self.screen = Screen::Search;
                 self.status = None;
@@ -276,7 +296,6 @@ impl SettingsApp {
 
     fn handle_search_key(&mut self, key: KeyEvent) -> bool {
         match key.code {
-            KeyCode::Char('q') | KeyCode::Char('Q') => self.should_quit = true,
             KeyCode::Esc | KeyCode::Backspace => self.screen = Screen::Section,
             KeyCode::Up | KeyCode::Char('k') => {
                 self.search_selected = self.search_selected.saturating_sub(1)
@@ -299,7 +318,6 @@ impl SettingsApp {
 
     fn handle_tuner_key(&mut self, key: KeyEvent) -> bool {
         match key.code {
-            KeyCode::Char('q') | KeyCode::Char('Q') => self.should_quit = true,
             KeyCode::Esc | KeyCode::Backspace => {
                 self.screen = Screen::Search;
                 self.status = None;
@@ -628,5 +646,56 @@ mod tests {
         app.handle_key(key(KeyCode::Enter));
         app.handle_key(key(KeyCode::Enter));
         assert!(app.handle_key(key(KeyCode::Enter)));
+    }
+
+    #[test]
+    fn quit_with_unsaved_changes_requires_confirmation() {
+        let mut app = SettingsApp::new(&AppConfig {
+            paths: crate::config::Paths {
+                snippet_roots: vec![],
+                xdg_snippets_dir: std::path::PathBuf::new(),
+                snippet_overrides_active: false,
+                state_file: std::path::PathBuf::new(),
+                config_file: std::path::PathBuf::new(),
+            },
+            ui: crate::config::UiConfig::default(),
+            search: SearchConfig::default(),
+            variables: Default::default(),
+            theme: crate::config::Theme::default(),
+            suggestion_commands: crate::config::SuggestionCommandsConfig::default(),
+            lint: Default::default(),
+        });
+        app.handle_key(key(KeyCode::Enter));
+        app.handle_key(key(KeyCode::Enter));
+        app.handle_key(key(KeyCode::Right));
+        assert!(app.frecency_fields[0].changed());
+
+        assert!(!app.handle_key(key(KeyCode::Char('q'))));
+        assert!(!app.should_quit());
+        assert!(app.confirm_quit());
+
+        assert!(!app.handle_key(key(KeyCode::Char('q'))));
+        assert!(app.should_quit());
+    }
+
+    #[test]
+    fn quit_without_unsaved_changes_is_immediate() {
+        let mut app = SettingsApp::new(&AppConfig {
+            paths: crate::config::Paths {
+                snippet_roots: vec![],
+                xdg_snippets_dir: std::path::PathBuf::new(),
+                snippet_overrides_active: false,
+                state_file: std::path::PathBuf::new(),
+                config_file: std::path::PathBuf::new(),
+            },
+            ui: crate::config::UiConfig::default(),
+            search: SearchConfig::default(),
+            variables: Default::default(),
+            theme: crate::config::Theme::default(),
+            suggestion_commands: crate::config::SuggestionCommandsConfig::default(),
+            lint: Default::default(),
+        });
+        assert!(!app.handle_key(key(KeyCode::Char('q'))));
+        assert!(app.should_quit());
     }
 }

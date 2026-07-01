@@ -44,11 +44,15 @@ fn chrome_text(app: &SettingsApp) -> (String, &'static str) {
         Some(status) => format!("{path} · {status}"),
         None => path,
     };
-    let footer = match app.screen() {
-        Screen::Tuner(_) => {
-            "↑/↓ field · ←/→ adjust · r reset+save · enter save · esc/backspace back · q quit"
+    let footer = if app.confirm_quit() {
+        "unsaved changes · q again discards · enter saves"
+    } else {
+        match app.screen() {
+            Screen::Tuner(_) => {
+                "↑/↓ field · ←/→ adjust · r reset+save · enter save · esc/backspace back · q quit"
+            }
+            _ => "↑/↓ or j/k move · enter select · esc/backspace back · q quit",
         }
-        _ => "↑/↓ or j/k move · enter select · esc/backspace back · q quit",
     };
     (title, footer)
 }
