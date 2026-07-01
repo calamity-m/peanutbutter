@@ -83,6 +83,14 @@ mod tests {
     use std::fs;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::{Mutex, OnceLock};
+
+    // `PB_CONFIG_FILE`/`PEANUTBUTTER_PATH` are process-wide env vars; tests
+    // that mutate them must not run concurrently with each other.
+    fn env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
 
     fn temp_dir(prefix: &str) -> PathBuf {
         static NEXT: AtomicU64 = AtomicU64::new(1);
@@ -102,6 +110,7 @@ mod tests {
 
     #[test]
     fn navigate_edit_save_uses_resolved_config_file() {
+        let _guard = env_lock().lock().unwrap();
         let root = temp_dir("resolved-config");
         let config_file = root.join("custom-config.toml");
         fs::write(&config_file, "[search.frecency]\nlocation_weight = 1.0\n").unwrap();
@@ -140,6 +149,7 @@ mod tests {
 
     #[test]
     fn paths_section_lists_registered_snippet_roots() {
+        let _guard = env_lock().lock().unwrap();
         let root = temp_dir("paths-section");
         let config_file = root.join("custom-config.toml");
         fs::write(&config_file, "").unwrap();
