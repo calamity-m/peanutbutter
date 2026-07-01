@@ -660,6 +660,7 @@ mod tests {
             theme: Theme::default(),
             suggestion_commands: SuggestionCommandsConfig::default(),
             lint: std::collections::BTreeMap::new(),
+            keybinds: Default::default(),
         }
     }
 
@@ -891,6 +892,7 @@ mod dependent_lsp_tests {
             theme: Theme::default(),
             suggestion_commands: SuggestionCommandsConfig::default(),
             lint: BTreeMap::new(),
+            keybinds: Default::default(),
         }
     }
 

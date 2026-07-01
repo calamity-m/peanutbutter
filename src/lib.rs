@@ -24,6 +24,7 @@
 //! | [`fuzzy`] | nucleo-backed fuzzy matching |
 //! | [`search`] | Combined fuzzy + frecency ranking |
 //! | [`config`] | TOML config loading and theme |
+//! | [`keybinds`] | Configurable key chords and the execute keymap |
 //! | [`settings`] | Interactive config tuning TUI |
 //! | [`cli`] | Argument parsing and command dispatch |
 //! | [`docs`] | Embedded syntax/config reference printed by `pb docs` |
@@ -42,6 +43,7 @@ pub mod frecency;
 pub mod fuzzy;
 pub mod gc;
 pub mod index;
+pub mod keybinds;
 pub mod lint;
 pub mod lsp;
 pub mod new;

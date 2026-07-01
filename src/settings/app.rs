@@ -652,6 +652,7 @@ mod tests {
             theme: crate::config::Theme::default(),
             suggestion_commands: crate::config::SuggestionCommandsConfig::default(),
             lint: Default::default(),
+            keybinds: Default::default(),
         };
         let mut app = SettingsApp::new(&config);
         assert_eq!(app.screen(), &Screen::Section);
@@ -728,6 +729,7 @@ mod tests {
             theme: crate::config::Theme::default(),
             suggestion_commands: crate::config::SuggestionCommandsConfig::default(),
             lint: Default::default(),
+            keybinds: Default::default(),
         });
 
         assert!(!app.handle_key(key(KeyCode::Char('r'))));
@@ -758,6 +760,7 @@ mod tests {
             theme: crate::config::Theme::default(),
             suggestion_commands: crate::config::SuggestionCommandsConfig::default(),
             lint: Default::default(),
+            keybinds: Default::default(),
         });
         app.handle_key(key(KeyCode::Enter));
         app.handle_key(key(KeyCode::Enter));
@@ -780,6 +783,7 @@ mod tests {
             theme: crate::config::Theme::default(),
             suggestion_commands: crate::config::SuggestionCommandsConfig::default(),
             lint: Default::default(),
+            keybinds: Default::default(),
         });
         app.handle_key(key(KeyCode::Enter));
         app.handle_key(key(KeyCode::Enter));
@@ -810,6 +814,7 @@ mod tests {
             theme: crate::config::Theme::default(),
             suggestion_commands: crate::config::SuggestionCommandsConfig::default(),
             lint: Default::default(),
+            keybinds: Default::default(),
         });
         assert!(!app.handle_key(key(KeyCode::Char('q'))));
         assert!(app.should_quit());
@@ -830,6 +835,7 @@ mod tests {
             theme: crate::config::Theme::default(),
             suggestion_commands: crate::config::SuggestionCommandsConfig::default(),
             lint: Default::default(),
+            keybinds: Default::default(),
         }
     }
 

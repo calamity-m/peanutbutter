@@ -120,6 +120,74 @@ error_fg = "red"
 # prompt_bg = "#61afef"
 # error_fg = "#e06c75"
 
+# Customizable keybinds for the `pb execute` TUI.
+#
+# Each action takes an array of key chords. Omitted actions keep their
+# defaults, an empty array (`edit = []`) unbinds the action, and invalid
+# entries are reported as a status warning inside the TUI without breaking
+# the rest of the config.
+#
+# Key chord grammar: optional `ctrl+` / `alt+` / `shift+` modifiers followed
+# by a base key — a printable character or one of: enter, esc, backspace,
+# tab, backtab, up, down, left, right, pageup, pagedown, home, end, insert,
+# delete, f1..f12. `shift+tab` and `backtab` are the same chord. Chords like
+# alt+enter or shift+tab are best-effort: some terminals do not deliver them
+# as distinct key events.
+#
+# `ctrl+c` is reserved as an unconditional emergency cancel and cannot be
+# bound. If the same chord is bound to two actions in one context, the
+# earlier action (in the order shown below) keeps it and the duplicate is
+# ignored with a warning. The same chord may be reused across contexts.
+#
+# The tables below list every action with its default binding.
+#
+# [keybinds.execute.select]      # handled before fuzzy/browse/tags dispatch
+# cancel_or_back = ["esc"]       # cancel, or back out of browse/tag drill
+# cycle_mode = ["ctrl+t", "f2"]  # fuzzy -> browse -> tags -> fuzzy
+# edit = ["ctrl+e"]              # open the selected snippet in $EDITOR
+# preview_down = ["ctrl+j", "ctrl+down"]
+# preview_up = ["ctrl+k", "ctrl+up"]
+#
+# [keybinds.execute.fuzzy]
+# accept = ["enter"]
+# backspace = ["backspace"]
+# cursor_left = ["left"]
+# cursor_right = ["right"]
+# move_up = ["up"]
+# move_down = ["down"]
+# page_up = ["pageup"]
+# page_down = ["pagedown"]
+#
+# [keybinds.execute.browse]
+# accept_or_open = ["enter"]     # open directory or accept snippet
+# backspace = ["backspace"]
+# complete = ["tab"]             # complete the browse filter/path
+# move_up = ["up"]
+# move_down = ["down"]
+# page_up = ["pageup"]
+# page_down = ["pagedown"]
+#
+# [keybinds.execute.tags]
+# accept_or_drill = ["enter"]    # drill into a tag or accept a snippet
+# backspace = ["backspace"]
+# cursor_left = ["left"]
+# cursor_right = ["right"]
+# move_up = ["up"]
+# move_down = ["down"]
+# page_up = ["pageup"]
+# page_down = ["pagedown"]
+# return_to_tags = ["esc"]       # leave tag drill
+#
+# [keybinds.execute.prompt]
+# return_to_picker = ["esc"]
+# backspace_or_previous = ["backspace"]
+# literal_newline = ["alt+enter", "ctrl+j"]
+# suggestion_up = ["up"]
+# suggestion_down = ["down"]
+# complete_or_next = ["tab"]
+# previous_variable = ["shift+tab", "backtab"]
+# accept = ["enter"]
+
 # Reusable predefined variable inputs.
 #
 # These apply to free-form placeholders like:

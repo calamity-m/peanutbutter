@@ -4,6 +4,7 @@
 //! details to focused submodules: fuzzy highlight handling, preview text
 //! generation, and tag picker rendering.
 
+mod help;
 mod highlight;
 mod preview;
 mod tags;
@@ -64,33 +65,11 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
         let help = if let Some(status) = &self.status {
             status.clone()
         } else {
-            match self.nav_mode {
-                NavigationMode::Fuzzy => {
-                    "enter accept  ctrl+e edit  ctrl+j/k/↑↓ preview  ctrl+t browse  esc cancel"
-                        .to_string()
-                }
-                NavigationMode::Browse => {
-                    let selected_is_dir = browse_visible
-                        .get(self.browse.selection().unwrap_or(0))
-                        .map(|e| matches!(e, BrowseEntry::Directory(_)))
-                        .unwrap_or(false);
-                    if selected_is_dir {
-                        "tab complete  enter open  ctrl+j/k/↑↓ preview  ctrl+t tags  esc cancel"
-                            .to_string()
-                    } else {
-                        "tab complete  enter accept  ctrl+e edit  ctrl+j/k/↑↓ preview  ctrl+t tags  esc cancel".to_string()
-                    }
-                }
-                NavigationMode::Tags => {
-                    if self.tags.drill().is_some() {
-                        "type filter  enter accept  esc tags  backspace clear/back  ctrl+t search"
-                            .to_string()
-                    } else {
-                        "type filter  enter open  ctrl+j/k/↑↓ preview  ctrl+t search  esc cancel"
-                            .to_string()
-                    }
-                }
-            }
+            let selected_is_dir = browse_visible
+                .get(self.browse.selection().unwrap_or(0))
+                .map(|e| matches!(e, BrowseEntry::Directory(_)))
+                .unwrap_or(false);
+            self.select_help(selected_is_dir)
         };
         let area = Chrome {
             theme: &self.theme,
@@ -305,7 +284,8 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
     /// Renders the variable-entry prompt for a selected snippet.
     fn render_prompt(&self, frame: &mut Frame<'_>, prompt: &PromptState) {
         let outer = frame.area();
-        let help = "tab complete/next  shift+tab prev  enter accept  esc return";
+        let help = self.prompt_help();
+        let help = help.as_str();
         let area = Chrome {
             theme: &self.theme,
             mode: "pb execute",

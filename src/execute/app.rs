@@ -3,6 +3,7 @@ use crate::domain::{SnippetId, Variable, VariableSource, VariableSpec};
 use crate::frecency::FrecencyStore;
 use crate::fuzzy::FuzzyState;
 use crate::index::{IndexedSnippet, SnippetIndex, TagKey};
+use crate::keybinds::{BrowseAction, ExecuteKeymap, FuzzyAction, SelectAction, TagsAction};
 use crate::search;
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::widgets::ListState;
@@ -374,6 +375,9 @@ pub struct ExecutionApp<P = SystemSuggestionProvider> {
     /// Shell buffer content to seed into the first variable of the next
     /// selected snippet, if any. `None` when invoked without a buffer.
     pub(crate) initial_buffer: Option<String>,
+    /// Resolved keybinds for this session. Ctrl+C cancel is handled before
+    /// this keymap and is not remappable.
+    pub(crate) keymap: ExecuteKeymap,
 }
 
 /// Outcome returned by [`ExecutionApp::handle_key`] after processing one key event.
@@ -420,6 +424,7 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
             search_config,
             theme,
             initial_buffer: None,
+            keymap: ExecuteKeymap::default(),
         }
     }
 
@@ -427,6 +432,12 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
     /// selected snippet. Empty/`None` leaves the default (insert) behavior.
     pub fn with_initial_buffer(mut self, buffer: Option<String>) -> Self {
         self.initial_buffer = buffer.filter(|s| !s.is_empty());
+        self
+    }
+
+    /// Replace the default keymap with the session's resolved keybinds.
+    pub fn with_keymap(mut self, keymap: ExecuteKeymap) -> Self {
+        self.keymap = keymap;
         self
     }
 
@@ -518,7 +529,9 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
             return AppEvent::Continue;
         }
 
-        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
+        // Hard emergency cancel: not part of the configurable keymap so raw
+        // mode always has an escape hatch regardless of user config.
+        if ExecuteKeymap::is_emergency_cancel(&key) {
             self.screen = Screen::Select;
             self.status = Some("cancelled".to_string());
             return AppEvent::Cancelled;
@@ -533,6 +546,7 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
                 &self.cwd,
                 &self.index,
                 &mut self.status,
+                &self.keymap.prompt,
             ) {
                 PromptTransition::Stay => AppEvent::Continue,
                 PromptTransition::ToSelect => {
@@ -556,53 +570,54 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
         }
     }
 
+    /// Select-level actions are resolved before mode-specific ones, matching
+    /// the documented context precedence (`execute.select` first).
     fn handle_select_key(&mut self, key: KeyEvent) -> AppEvent {
-        if matches!(key.code, KeyCode::Esc) {
-            // Tag-drill handles esc in its own key handler (climbs out of drill).
-            if matches!(self.nav_mode, NavigationMode::Tags) && self.tags.drill().is_some() {
-                // fall through to mode-specific handler
-            } else if matches!(self.nav_mode, NavigationMode::Browse)
-                && !self.browse.path().is_empty()
-            {
-                self.browse.ascend(&self.tree);
-                self.preview_scroll = 0;
-                self.status = None;
-                return AppEvent::Continue;
-            } else {
+        match self.keymap.select.action_for(&key) {
+            Some(SelectAction::CancelOrBack) => {
+                if matches!(self.nav_mode, NavigationMode::Tags) && self.tags.drill().is_some() {
+                    // Backing out of a tag drill returns to the tag list, same
+                    // as the tags context's `return_to_tags` action.
+                    self.exit_tag_drill();
+                    self.preview_scroll = 0;
+                    return AppEvent::Continue;
+                }
+                if matches!(self.nav_mode, NavigationMode::Browse) && !self.browse.path().is_empty()
+                {
+                    self.browse.ascend(&self.tree);
+                    self.preview_scroll = 0;
+                    self.status = None;
+                    return AppEvent::Continue;
+                }
                 self.status = Some("cancelled".to_string());
                 return AppEvent::Cancelled;
             }
-        }
-
-        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('t')
-            || key.code == KeyCode::F(2)
-        {
-            self.nav_mode = match self.nav_mode {
-                NavigationMode::Fuzzy => NavigationMode::Browse,
-                NavigationMode::Browse => NavigationMode::Tags,
-                NavigationMode::Tags => NavigationMode::Fuzzy,
-            };
-            self.preview_scroll = 0;
-            self.status = None;
-            return AppEvent::Continue;
-        }
-
-        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('e') {
-            if let Some(id) = self.selected_snippet_id() {
+            Some(SelectAction::CycleMode) => {
+                self.nav_mode = match self.nav_mode {
+                    NavigationMode::Fuzzy => NavigationMode::Browse,
+                    NavigationMode::Browse => NavigationMode::Tags,
+                    NavigationMode::Tags => NavigationMode::Fuzzy,
+                };
+                self.preview_scroll = 0;
                 self.status = None;
-                return AppEvent::EditSnippet(id);
+                return AppEvent::Continue;
             }
-            return AppEvent::Continue;
-        }
-
-        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-        if ctrl && matches!(key.code, KeyCode::Char('j') | KeyCode::Down) {
-            self.preview_scroll = self.preview_scroll.saturating_add(3);
-            return AppEvent::Continue;
-        }
-        if ctrl && matches!(key.code, KeyCode::Char('k') | KeyCode::Up) {
-            self.preview_scroll = self.preview_scroll.saturating_sub(3);
-            return AppEvent::Continue;
+            Some(SelectAction::Edit) => {
+                if let Some(id) = self.selected_snippet_id() {
+                    self.status = None;
+                    return AppEvent::EditSnippet(id);
+                }
+                return AppEvent::Continue;
+            }
+            Some(SelectAction::PreviewDown) => {
+                self.preview_scroll = self.preview_scroll.saturating_add(3);
+                return AppEvent::Continue;
+            }
+            Some(SelectAction::PreviewUp) => {
+                self.preview_scroll = self.preview_scroll.saturating_sub(3);
+                return AppEvent::Continue;
+            }
+            None => {}
         }
 
         match self.nav_mode {
@@ -614,181 +629,165 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
 
     fn handle_fuzzy_key(&mut self, key: KeyEvent) -> AppEvent {
         let hits = self.search_hits();
-        match key.code {
-            KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.fuzzy.type_char(c);
-                self.preview_scroll = 0;
-            }
-            KeyCode::Backspace => {
-                self.fuzzy.backspace();
-                self.preview_scroll = 0;
-            }
-            KeyCode::Left => self.fuzzy.cursor_left(),
-            KeyCode::Right => self.fuzzy.cursor_right(),
-            KeyCode::Up => {
-                self.fuzzy.move_cursor(1, hits.len());
-                self.preview_scroll = 0;
-            }
-            KeyCode::Down => {
-                self.fuzzy.move_cursor(-1, hits.len());
-                self.preview_scroll = 0;
-            }
-            KeyCode::PageUp => {
-                if !hits.is_empty() {
-                    self.fuzzy.selection = Some(hits.len() - 1);
-                }
-                self.preview_scroll = 0;
-            }
-            KeyCode::PageDown => {
-                if !hits.is_empty() {
-                    self.fuzzy.selection = Some(0);
-                }
-                self.preview_scroll = 0;
-            }
-            KeyCode::Enter => {
+        match self.keymap.fuzzy.action_for(&key) {
+            Some(FuzzyAction::Accept) => {
                 if let Some(snippet) = self.selected_fuzzy_snippet() {
                     let id = snippet.id().clone();
                     self.status = None;
                     return self.start_prompt_or_complete(id);
                 }
             }
-            _ => {}
+            Some(FuzzyAction::Backspace) => {
+                self.fuzzy.backspace();
+                self.preview_scroll = 0;
+            }
+            Some(FuzzyAction::CursorLeft) => self.fuzzy.cursor_left(),
+            Some(FuzzyAction::CursorRight) => self.fuzzy.cursor_right(),
+            // Deltas are inverted because the list renders bottom-aligned;
+            // action names describe on-screen intent.
+            Some(FuzzyAction::MoveUp) => {
+                self.fuzzy.move_cursor(1, hits.len());
+                self.preview_scroll = 0;
+            }
+            Some(FuzzyAction::MoveDown) => {
+                self.fuzzy.move_cursor(-1, hits.len());
+                self.preview_scroll = 0;
+            }
+            Some(FuzzyAction::PageUp) => {
+                if !hits.is_empty() {
+                    self.fuzzy.selection = Some(hits.len() - 1);
+                }
+                self.preview_scroll = 0;
+            }
+            Some(FuzzyAction::PageDown) => {
+                if !hits.is_empty() {
+                    self.fuzzy.selection = Some(0);
+                }
+                self.preview_scroll = 0;
+            }
+            None => {
+                // Text fallback: unmodified printable characters filter the
+                // query; not modeled as a configurable action.
+                if let KeyCode::Char(c) = key.code
+                    && !key.modifiers.contains(KeyModifiers::CONTROL)
+                {
+                    self.fuzzy.type_char(c);
+                    self.preview_scroll = 0;
+                }
+            }
         }
         AppEvent::Continue
     }
 
     fn handle_browse_key(&mut self, key: KeyEvent) -> AppEvent {
         let visible = self.browse.visible(&self.tree);
-        match key.code {
-            KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.browse.type_char(c);
-                self.preview_scroll = 0;
-            }
-            KeyCode::Backspace => {
-                self.browse.backspace(&self.tree);
-                self.preview_scroll = 0;
-            }
-            KeyCode::Tab => {
-                self.browse.tab_complete(&self.tree);
-                self.preview_scroll = 0;
-            }
-            KeyCode::Up => {
-                self.browse.move_cursor(1, visible.len());
-                self.preview_scroll = 0;
-            }
-            KeyCode::Down => {
-                self.browse.move_cursor(-1, visible.len());
-                self.preview_scroll = 0;
-            }
-            KeyCode::PageUp => {
-                if !visible.is_empty() {
-                    self.browse.set_selection(Some(visible.len() - 1));
-                }
-                self.preview_scroll = 0;
-            }
-            KeyCode::PageDown => {
-                if !visible.is_empty() {
-                    self.browse.set_selection(Some(0));
-                }
-                self.preview_scroll = 0;
-            }
-            KeyCode::Enter => {
+        match self.keymap.browse.action_for(&key) {
+            Some(BrowseAction::AcceptOrOpen) => {
                 if let Some(id) = self.browse.activate(&self.tree) {
                     self.status = None;
                     return self.start_prompt_or_complete(id);
                 }
                 self.preview_scroll = 0;
             }
-            _ => {}
+            Some(BrowseAction::Backspace) => {
+                self.browse.backspace(&self.tree);
+                self.preview_scroll = 0;
+            }
+            Some(BrowseAction::Complete) => {
+                self.browse.tab_complete(&self.tree);
+                self.preview_scroll = 0;
+            }
+            Some(BrowseAction::MoveUp) => {
+                self.browse.move_cursor(1, visible.len());
+                self.preview_scroll = 0;
+            }
+            Some(BrowseAction::MoveDown) => {
+                self.browse.move_cursor(-1, visible.len());
+                self.preview_scroll = 0;
+            }
+            Some(BrowseAction::PageUp) => {
+                if !visible.is_empty() {
+                    self.browse.set_selection(Some(visible.len() - 1));
+                }
+                self.preview_scroll = 0;
+            }
+            Some(BrowseAction::PageDown) => {
+                if !visible.is_empty() {
+                    self.browse.set_selection(Some(0));
+                }
+                self.preview_scroll = 0;
+            }
+            None => {
+                if let KeyCode::Char(c) = key.code
+                    && !key.modifiers.contains(KeyModifiers::CONTROL)
+                {
+                    self.browse.type_char(c);
+                    self.preview_scroll = 0;
+                }
+            }
         }
         AppEvent::Continue
     }
 
     fn handle_tags_key(&mut self, key: KeyEvent) -> AppEvent {
+        let action = self.keymap.tags.action_for(&key);
         if self.tags.drill().is_some() {
             let visible = self.visible_tag_snippets();
-            match key.code {
-                KeyCode::Esc => {
-                    self.exit_tag_drill();
-                    self.preview_scroll = 0;
-                }
-                KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    self.tags.type_drill_char(c);
-                    self.preview_scroll = 0;
-                }
-                KeyCode::Backspace => {
-                    if !self.tags.drill_backspace() {
-                        self.exit_tag_drill();
-                    }
-                    self.preview_scroll = 0;
-                }
-                KeyCode::Left => self.tags.drill_cursor_left(),
-                KeyCode::Right => self.tags.drill_cursor_right(),
-                KeyCode::Up => {
-                    self.tags.move_cursor(1, visible.len());
-                    self.preview_scroll = 0;
-                }
-                KeyCode::Down => {
-                    self.tags.move_cursor(-1, visible.len());
-                    self.preview_scroll = 0;
-                }
-                KeyCode::PageUp => {
-                    if !visible.is_empty() {
-                        self.tags.set_drill_selection(Some(visible.len() - 1));
-                    }
-                    self.preview_scroll = 0;
-                }
-                KeyCode::PageDown => {
-                    if !visible.is_empty() {
-                        self.tags.set_drill_selection(Some(0));
-                    }
-                    self.preview_scroll = 0;
-                }
-                KeyCode::Enter => {
+            match action {
+                Some(TagsAction::AcceptOrDrill) => {
                     if let Some(snippet) = self.selected_tag_snippet() {
                         let id = snippet.id().clone();
                         self.status = None;
                         return self.start_prompt_or_complete(id);
                     }
                 }
-                _ => {}
+                Some(TagsAction::Backspace) => {
+                    if !self.tags.drill_backspace() {
+                        self.exit_tag_drill();
+                    }
+                    self.preview_scroll = 0;
+                }
+                Some(TagsAction::CursorLeft) => self.tags.drill_cursor_left(),
+                Some(TagsAction::CursorRight) => self.tags.drill_cursor_right(),
+                Some(TagsAction::MoveUp) => {
+                    self.tags.move_cursor(1, visible.len());
+                    self.preview_scroll = 0;
+                }
+                Some(TagsAction::MoveDown) => {
+                    self.tags.move_cursor(-1, visible.len());
+                    self.preview_scroll = 0;
+                }
+                Some(TagsAction::PageUp) => {
+                    if !visible.is_empty() {
+                        self.tags.set_drill_selection(Some(visible.len() - 1));
+                    }
+                    self.preview_scroll = 0;
+                }
+                Some(TagsAction::PageDown) => {
+                    if !visible.is_empty() {
+                        self.tags.set_drill_selection(Some(0));
+                    }
+                    self.preview_scroll = 0;
+                }
+                Some(TagsAction::ReturnToTags) => {
+                    self.exit_tag_drill();
+                    self.preview_scroll = 0;
+                }
+                None => {
+                    if let KeyCode::Char(c) = key.code
+                        && !key.modifiers.contains(KeyModifiers::CONTROL)
+                    {
+                        self.tags.type_drill_char(c);
+                        self.preview_scroll = 0;
+                    }
+                }
             }
             return AppEvent::Continue;
         }
 
         let visible = self.visible_tags();
-        match key.code {
-            KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.tags.type_char(c);
-                self.preview_scroll = 0;
-            }
-            KeyCode::Backspace => {
-                self.tags.backspace();
-                self.preview_scroll = 0;
-            }
-            KeyCode::Left => self.tags.cursor_left(),
-            KeyCode::Right => self.tags.cursor_right(),
-            KeyCode::Up => {
-                self.tags.move_cursor(1, visible.len());
-                self.preview_scroll = 0;
-            }
-            KeyCode::Down => {
-                self.tags.move_cursor(-1, visible.len());
-                self.preview_scroll = 0;
-            }
-            KeyCode::PageUp => {
-                if !visible.is_empty() {
-                    self.tags.set_list_selection(Some(visible.len() - 1));
-                }
-                self.preview_scroll = 0;
-            }
-            KeyCode::PageDown => {
-                if !visible.is_empty() {
-                    self.tags.set_list_selection(Some(0));
-                }
-                self.preview_scroll = 0;
-            }
-            KeyCode::Enter => {
+        match action {
+            Some(TagsAction::AcceptOrDrill) => {
                 let selected = self.tags.list_selection().unwrap_or(0);
                 if let Some(entry) = visible.get(selected) {
                     self.tags.enter_drill(entry.key.clone());
@@ -796,7 +795,42 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
                     self.status = None;
                 }
             }
-            _ => {}
+            Some(TagsAction::Backspace) => {
+                self.tags.backspace();
+                self.preview_scroll = 0;
+            }
+            Some(TagsAction::CursorLeft) => self.tags.cursor_left(),
+            Some(TagsAction::CursorRight) => self.tags.cursor_right(),
+            Some(TagsAction::MoveUp) => {
+                self.tags.move_cursor(1, visible.len());
+                self.preview_scroll = 0;
+            }
+            Some(TagsAction::MoveDown) => {
+                self.tags.move_cursor(-1, visible.len());
+                self.preview_scroll = 0;
+            }
+            Some(TagsAction::PageUp) => {
+                if !visible.is_empty() {
+                    self.tags.set_list_selection(Some(visible.len() - 1));
+                }
+                self.preview_scroll = 0;
+            }
+            Some(TagsAction::PageDown) => {
+                if !visible.is_empty() {
+                    self.tags.set_list_selection(Some(0));
+                }
+                self.preview_scroll = 0;
+            }
+            // At the tag root, backing out is `select.cancel_or_back`'s job.
+            Some(TagsAction::ReturnToTags) => {}
+            None => {
+                if let KeyCode::Char(c) = key.code
+                    && !key.modifiers.contains(KeyModifiers::CONTROL)
+                {
+                    self.tags.type_char(c);
+                    self.preview_scroll = 0;
+                }
+            }
         }
         AppEvent::Continue
     }

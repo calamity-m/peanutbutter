@@ -27,6 +27,8 @@ pub fn execute_default() -> io::Result<Option<ExecutionOutcome>> {
         theme: app_config.theme.clone(),
         variables: app_config.variables.clone(),
         snippet_roots: app_config.paths.snippet_roots.clone(),
+        keybinds: app_config.keybinds.execute.clone(),
+        keybind_warnings: app_config.keybinds.warnings.clone(),
         ..ExecuteOptions::default()
     };
     run_execute(index, frecency, options)
@@ -76,7 +78,15 @@ pub fn run_execute_with_provider<P: SuggestionProvider>(
         options.theme,
         provider,
     )
-    .with_initial_buffer(options.initial_buffer);
+    .with_initial_buffer(options.initial_buffer)
+    .with_keymap(options.keybinds);
+    if !options.keybind_warnings.is_empty() {
+        // Shown as TUI status (never stdout) so the hotkey path stays clean.
+        app.status = Some(format!(
+            "keybind config: {}",
+            options.keybind_warnings.join("; ")
+        ));
+    }
     let _stdout_guard = StdoutTtyGuard::enter()?;
     let tui_output = TuiOutputKind::detect();
     let mut raw_mode = RawModeGuard::enter(tui_output)?;

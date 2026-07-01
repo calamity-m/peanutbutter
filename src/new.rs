@@ -403,6 +403,7 @@ mod tests {
             theme: crate::config::Theme::default(),
             suggestion_commands: Default::default(),
             lint: Default::default(),
+            keybinds: Default::default(),
         };
         let mut buf = Vec::new();
         let result = crate::lint::run(
@@ -485,6 +486,7 @@ mod tests {
             theme: crate::config::Theme::default(),
             suggestion_commands: Default::default(),
             lint: Default::default(),
+            keybinds: Default::default(),
         };
         let mut buf = Vec::new();
         let result = crate::lint::run(

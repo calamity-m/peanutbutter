@@ -1898,6 +1898,339 @@ fn plain_enter_still_submits_after_keybinds_added() {
 }
 
 // ---------------------------------------------------------------------------
+// Configurable keybinds
+// ---------------------------------------------------------------------------
+
+/// Resolve a `[keybinds.execute.*]` TOML snippet into a keymap, asserting the
+/// config is warning-free so tests fail loudly on typos.
+fn keymap_from(raw: &str) -> crate::keybinds::ExecuteKeymap {
+    let value: toml::Value = toml::from_str(raw).unwrap();
+    let keymaps = crate::keybinds::Keymaps::resolve(value.get("keybinds"));
+    let (keymap, warnings) = (keymaps.execute, keymaps.warnings);
+    assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
+    keymap
+}
+
+#[test]
+fn custom_cycle_mode_binding_replaces_default() {
+    let mut app = app_with_body("echo hi", vec![], TestProvider::default()).with_keymap(
+        keymap_from("[keybinds.execute.select]\ncycle_mode = [\"ctrl+n\"]\n"),
+    );
+    let _ = app.handle_key(ctrl('n'));
+    assert_eq!(app.navigation_mode(), NavigationMode::Browse);
+    // The replaced default no longer cycles; ctrl+t falls through and is
+    // ignored by browse mode's text fallback (control chord).
+    let _ = app.handle_key(ctrl('t'));
+    assert_eq!(app.navigation_mode(), NavigationMode::Browse);
+}
+
+#[test]
+fn custom_edit_binding_requests_edit() {
+    let mut app = app_with_body("echo hi", vec![], TestProvider::default())
+        .with_keymap(keymap_from("[keybinds.execute.select]\nedit = [\"f4\"]\n"));
+    let id = edit_requested(app.handle_key(press(KeyCode::F(4))));
+    assert_eq!(id.as_str(), "x.md#slug");
+    let event = app.handle_key(ctrl('e'));
+    assert!(matches!(event, AppEvent::Continue));
+}
+
+#[test]
+fn custom_preview_scroll_bindings_scroll() {
+    let mut app =
+        app_with_body("echo hi", vec![], TestProvider::default()).with_keymap(keymap_from(
+            "[keybinds.execute.select]\npreview_down = [\"ctrl+d\"]\npreview_up = [\"ctrl+u\"]\n",
+        ));
+    let _ = app.handle_key(ctrl('d'));
+    assert_eq!(app.preview_scroll, 3);
+    let _ = app.handle_key(ctrl('u'));
+    assert_eq!(app.preview_scroll, 0);
+    // Replaced default no longer scrolls.
+    let _ = app.handle_key(ctrl('j'));
+    assert_eq!(app.preview_scroll, 0);
+}
+
+#[test]
+fn custom_cancel_binding_cancels_and_ctrl_c_always_works() {
+    let keymap = keymap_from("[keybinds.execute.select]\ncancel_or_back = [\"ctrl+q\"]\n");
+    let mut app =
+        app_with_body("echo hi", vec![], TestProvider::default()).with_keymap(keymap.clone());
+    let event = app.handle_key(ctrl('q'));
+    assert!(matches!(event, AppEvent::Cancelled));
+
+    // Esc was replaced, but Ctrl+C remains an unconditional emergency cancel.
+    let mut app = app_with_body("echo hi", vec![], TestProvider::default()).with_keymap(keymap);
+    let event = app.handle_key(press(KeyCode::Esc));
+    assert!(matches!(event, AppEvent::Continue));
+    let event = app.handle_key(ctrl('c'));
+    assert!(matches!(event, AppEvent::Cancelled));
+}
+
+#[test]
+fn custom_fuzzy_accept_binding_completes_snippet() {
+    let mut app = app_with_body("echo hi", vec![], TestProvider::default()).with_keymap(
+        keymap_from("[keybinds.execute.fuzzy]\naccept = [\"ctrl+y\"]\n"),
+    );
+    // Text input still works with the remap in place.
+    let _ = app.handle_key(press(KeyCode::Char('h')));
+    assert_eq!(app.fuzzy.query, "h");
+    // Replaced default: enter no longer accepts (falls through to nothing).
+    let event = app.handle_key(press(KeyCode::Enter));
+    assert!(matches!(event, AppEvent::Continue));
+    let outcome = completed(app.handle_key(ctrl('y')));
+    assert_eq!(outcome.command, "echo hi");
+}
+
+#[test]
+fn custom_fuzzy_movement_bindings_move_selection() {
+    let mut app = ExecutionApp::new(
+        SnippetIndex::from_files([
+            snippet_file_with_slug("a.md", "a", "Alpha", "echo a"),
+            snippet_file_with_slug("b.md", "b", "Beta", "echo b"),
+        ]),
+        FrecencyStore::new(),
+        PathBuf::from("."),
+        0,
+        crate::config::SearchConfig::default(),
+        crate::config::Theme::default(),
+        TestProvider::default(),
+    )
+    .with_keymap(keymap_from(
+        "[keybinds.execute.fuzzy]\nmove_up = [\"ctrl+p\"]\nmove_down = [\"ctrl+n\"]\n",
+    ));
+    let _ = app.handle_key(ctrl('p'));
+    assert_eq!(app.fuzzy.selected(), Some(1));
+    let _ = app.handle_key(ctrl('n'));
+    assert_eq!(app.fuzzy.selected(), Some(0));
+}
+
+#[test]
+fn custom_browse_bindings_open_and_complete() {
+    let index = SnippetIndex::from_files([snippet_file_with_slug(
+        "git/commits.md",
+        "slug",
+        "Log",
+        "git log",
+    )]);
+    let mut app = ExecutionApp::new(
+        index,
+        FrecencyStore::new(),
+        PathBuf::from("."),
+        0,
+        crate::config::SearchConfig::default(),
+        crate::config::Theme::default(),
+        TestProvider::default(),
+    )
+    .with_keymap(keymap_from(
+        "[keybinds.execute.browse]\naccept_or_open = [\"ctrl+o\"]\ncomplete = [\"ctrl+f\"]\n",
+    ));
+    app.nav_mode = NavigationMode::Browse;
+    app.browse.set_input("g".to_string());
+    // A unique completion descends into the matched directory.
+    let _ = app.handle_key(ctrl('f'));
+    assert_eq!(app.browse.path(), vec!["git".to_string()]);
+    assert_eq!(app.browse.input(), "");
+    app.browse.set_path(Vec::new());
+    let _ = app.handle_key(ctrl('o'));
+    assert_eq!(app.browse.path(), vec!["git".to_string()]);
+}
+
+#[test]
+fn custom_tags_bindings_drill_and_return() {
+    let mut app = ExecutionApp::new(
+        SnippetIndex::from_files([snippet_file_with_tags("git.md", "git", "Git", &["git"])]),
+        FrecencyStore::new(),
+        PathBuf::from("."),
+        0,
+        crate::config::SearchConfig::default(),
+        crate::config::Theme::default(),
+        TestProvider::default(),
+    )
+    .with_keymap(keymap_from(
+        "[keybinds.execute.tags]\naccept_or_drill = [\"ctrl+o\"]\nreturn_to_tags = [\"ctrl+g\"]\n",
+    ));
+    app.nav_mode = NavigationMode::Tags;
+    let _ = app.handle_key(ctrl('o'));
+    assert_eq!(
+        app.tags.drill(),
+        Some(&crate::index::TagKey::Tag("git".to_string()))
+    );
+    let _ = app.handle_key(ctrl('g'));
+    assert_eq!(app.tags.drill(), None);
+}
+
+#[test]
+fn unbound_edit_action_is_ignored() {
+    let value: toml::Value = toml::from_str("[keybinds.execute.select]\nedit = []\n").unwrap();
+    let keymaps = crate::keybinds::Keymaps::resolve(value.get("keybinds"));
+    let (keymap, warnings) = (keymaps.execute, keymaps.warnings);
+    assert!(warnings.is_empty());
+    let mut app = app_with_body("echo hi", vec![], TestProvider::default()).with_keymap(keymap);
+    let event = app.handle_key(ctrl('e'));
+    assert!(matches!(event, AppEvent::Continue));
+    assert!(matches!(app.screen, Screen::Select));
+}
+
+#[test]
+fn prompt_remapped_accept_and_literal_newline() {
+    let variables = vec![Variable {
+        name: "msg".to_string(),
+        source: VariableSource::Free,
+    }];
+    let mut app =
+        app_with_body("echo <@msg>", variables, TestProvider::default()).with_keymap(keymap_from(
+            "[keybinds.execute.prompt]\naccept = [\"ctrl+y\"]\nliteral_newline = [\"ctrl+l\"]\n",
+        ));
+    let _ = app.handle_key(press(KeyCode::Enter));
+    let _ = app.handle_key(press(KeyCode::Char('a')));
+    let _ = app.handle_key(ctrl('l'));
+    let _ = app.handle_key(press(KeyCode::Char('b')));
+    // Enter no longer submits (accept remapped); it is ignored.
+    let event = app.handle_key(press(KeyCode::Enter));
+    assert!(matches!(event, AppEvent::Continue));
+    let outcome = completed(app.handle_key(ctrl('y')));
+    assert_eq!(outcome.command, "echo a\nb");
+}
+
+#[test]
+fn prompt_remapped_next_and_previous_variable() {
+    let variables = vec![
+        Variable {
+            name: "one".to_string(),
+            source: VariableSource::Free,
+        },
+        Variable {
+            name: "two".to_string(),
+            source: VariableSource::Free,
+        },
+    ];
+    let mut app = app_with_body("echo <@one> <@two>", variables, TestProvider::default())
+        .with_keymap(keymap_from(
+            "[keybinds.execute.prompt]\ncomplete_or_next = [\"ctrl+n\"]\nprevious_variable = [\"ctrl+p\"]\n",
+        ));
+    let _ = app.handle_key(press(KeyCode::Enter));
+    let _ = app.handle_key(press(KeyCode::Char('a')));
+    let _ = app.handle_key(ctrl('n'));
+    {
+        let Screen::Prompt(prompt) = &app.screen else {
+            panic!("expected prompt");
+        };
+        assert_eq!(prompt.current_variable().name, "two");
+    }
+    let _ = app.handle_key(ctrl('p'));
+    let Screen::Prompt(prompt) = &app.screen else {
+        panic!("expected prompt");
+    };
+    assert_eq!(prompt.current_variable().name, "one");
+    assert_eq!(prompt.input, "a");
+}
+
+#[test]
+fn prompt_remapped_suggestion_movement_and_return() {
+    let variables = vec![Variable {
+        name: "method".to_string(),
+        source: VariableSource::Command("ignored".to_string()),
+    }];
+    let provider = TestProvider::default().with("method", &["GET", "POST"]);
+    let mut app = app_with_body("curl -X <@method>", variables, provider).with_keymap(
+        keymap_from(
+            "[keybinds.execute.prompt]\nsuggestion_down = [\"ctrl+n\"]\nsuggestion_up = [\"ctrl+p\"]\nreturn_to_picker = [\"ctrl+g\"]\n",
+        ),
+    );
+    let _ = app.handle_key(press(KeyCode::Enter));
+    let _ = app.handle_key(ctrl('n'));
+    {
+        let Screen::Prompt(prompt) = &app.screen else {
+            panic!("expected prompt");
+        };
+        assert_eq!(prompt.selection, Some(1));
+    }
+    let _ = app.handle_key(ctrl('p'));
+    {
+        let Screen::Prompt(prompt) = &app.screen else {
+            panic!("expected prompt");
+        };
+        assert_eq!(prompt.selection, Some(0));
+    }
+    // Esc no longer returns (remapped); ctrl+g does.
+    let _ = app.handle_key(press(KeyCode::Esc));
+    assert!(matches!(app.screen, Screen::Prompt(_)));
+    let _ = app.handle_key(ctrl('g'));
+    assert!(matches!(app.screen, Screen::Select));
+}
+
+fn rendered_text<P: SuggestionProvider>(app: &mut ExecutionApp<P>) -> String {
+    let backend = TestBackend::new(100, 20);
+    let mut terminal = Terminal::new(backend).expect("terminal");
+    terminal.draw(|frame| app.render(frame)).expect("draw");
+    terminal
+        .backend()
+        .buffer()
+        .content()
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect()
+}
+
+#[test]
+fn footer_help_shows_remapped_keys_instead_of_defaults() {
+    let mut app = app_with_body("echo hi", vec![], TestProvider::default()).with_keymap(
+        keymap_from("[keybinds.execute.fuzzy]\naccept = [\"ctrl+y\"]\n"),
+    );
+    let rendered = rendered_text(&mut app);
+    assert!(rendered.contains("ctrl+y accept"), "footer: {rendered}");
+    assert!(!rendered.contains("enter accept"), "footer: {rendered}");
+}
+
+#[test]
+fn footer_help_omits_unbound_actions() {
+    let value: toml::Value = toml::from_str("[keybinds.execute.select]\nedit = []\n").unwrap();
+    let keymaps = crate::keybinds::Keymaps::resolve(value.get("keybinds"));
+    let (keymap, warnings) = (keymaps.execute, keymaps.warnings);
+    assert!(warnings.is_empty());
+    let mut app = app_with_body("echo hi", vec![], TestProvider::default()).with_keymap(keymap);
+    let rendered = rendered_text(&mut app);
+    assert!(!rendered.contains("edit"), "footer: {rendered}");
+    assert!(rendered.contains("enter accept"), "footer: {rendered}");
+}
+
+#[test]
+fn prompt_footer_help_shows_remapped_return_key() {
+    let variables = vec![Variable {
+        name: "msg".to_string(),
+        source: VariableSource::Free,
+    }];
+    let mut app = app_with_body("echo <@msg>", variables, TestProvider::default()).with_keymap(
+        keymap_from("[keybinds.execute.prompt]\nreturn_to_picker = [\"ctrl+g\"]\n"),
+    );
+    let _ = app.handle_key(press(KeyCode::Enter));
+    let rendered = rendered_text(&mut app);
+    assert!(rendered.contains("ctrl+g return"), "footer: {rendered}");
+    assert!(rendered.contains("shift+tab prev"), "footer: {rendered}");
+}
+
+#[test]
+fn invalid_keybind_config_still_yields_usable_keymap_with_warnings() {
+    // A config mixing broken and valid keybinds must not fail resolution:
+    // the valid remap applies, the rest keeps defaults, and every problem is
+    // reported as a warning (which the TUI shows as status, never stdout).
+    let value: toml::Value = toml::from_str(
+        "[keybinds.execute.select]\ncycle_mode = [\"ctrl+n\"]\nedit = [\"notakey\"]\n",
+    )
+    .unwrap();
+    let keymaps = crate::keybinds::Keymaps::resolve(value.get("keybinds"));
+    let (keymap, warnings) = (keymaps.execute, keymaps.warnings);
+    assert!(!warnings.is_empty());
+
+    let mut app = app_with_body("echo hi", vec![], TestProvider::default()).with_keymap(keymap);
+    let _ = app.handle_key(ctrl('n'));
+    assert_eq!(app.navigation_mode(), NavigationMode::Browse);
+    // `edit` had no valid chord, so its default binding still works.
+    app.nav_mode = NavigationMode::Fuzzy;
+    let id = edit_requested(app.handle_key(ctrl('e')));
+    assert_eq!(id.as_str(), "x.md#slug");
+}
+
+// ---------------------------------------------------------------------------
 // Dependent variables (Deliverable 1: parser + substitution)
 // ---------------------------------------------------------------------------
 

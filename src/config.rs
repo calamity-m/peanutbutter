@@ -43,6 +43,11 @@ pub struct AppConfig {
     pub suggestion_commands: SuggestionCommandsConfig,
     /// Per-lint suppression and disable rules.
     pub lint: LintConfig,
+    /// Resolved per-command keymaps plus the non-fatal warnings their
+    /// resolution produced. Warnings are not printed by config loading;
+    /// `pb execute` surfaces them as TUI status because it owns stdout safety
+    /// on the hotkey path. Other commands ignore them.
+    pub keybinds: crate::keybinds::Keymaps,
 }
 
 /// Per-lint suppression rules keyed by lint code without the `lint/` prefix.
@@ -406,6 +411,7 @@ pub fn load() -> io::Result<AppConfig> {
 pub fn load_with_theme_override(theme_name: Option<&str>) -> io::Result<AppConfig> {
     let config_file = resolve_config_file();
     let file = load_file_config(&config_file)?;
+    let keybinds = crate::keybinds::Keymaps::resolve(file.keybinds.as_ref());
     let xdg_snippets_dir = xdg_snippets_dir();
     let paths = Paths {
         snippet_roots: resolve_snippet_roots(&file, &xdg_snippets_dir),
@@ -448,6 +454,7 @@ pub fn load_with_theme_override(theme_name: Option<&str>) -> io::Result<AppConfi
         variables: file.variables,
         theme: Theme::from_raw(&file.theme, theme_name)?,
         lint: file.lint,
+        keybinds,
     })
 }
 
@@ -504,6 +511,10 @@ struct FileConfig {
     suggestion_commands: SuggestionCommandsFileConfig,
     #[serde(default)]
     lint: LintConfig,
+    /// Kept as a raw TOML value so unknown contexts/actions and wrong value
+    /// types become warnings during resolution instead of load errors.
+    #[serde(default)]
+    keybinds: Option<toml::Value>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -995,6 +1006,27 @@ disable = true
             Some("find . -maxdepth 1 -type f | sed 's#^./##' | sort")
         );
         assert_eq!(parsed.search.fuzzy.command, Some(8));
+    }
+
+    #[test]
+    fn keybinds_section_deserializes_permissively() {
+        // Wrong value types inside [keybinds] must not fail the config load;
+        // they surface as warnings during resolution instead.
+        let raw = r#"
+[keybinds.execute.select]
+cycle_mode = ["ctrl+n"]
+edit = 5
+"#;
+        let parsed: FileConfig = toml::from_str(raw).unwrap();
+        let keymaps = crate::keybinds::Keymaps::resolve(parsed.keybinds.as_ref());
+
+        let chord = crate::keybinds::KeyChord::parse("ctrl+n").unwrap();
+        assert_eq!(
+            keymaps.execute.select.action(&chord),
+            Some(crate::keybinds::SelectAction::CycleMode)
+        );
+        assert_eq!(keymaps.warnings.len(), 1);
+        assert!(keymaps.warnings[0].contains("execute.select.edit"));
     }
 
     #[test]

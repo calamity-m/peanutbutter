@@ -281,6 +281,8 @@ where
         initial_buffer: env::var("PEANUTBUTTER_BUFFER")
             .ok()
             .filter(|s| !s.is_empty()),
+        keybinds: app_config.keybinds.execute.clone(),
+        keybind_warnings: app_config.keybinds.warnings.clone(),
         ..ExecuteOptions::default()
     };
     let outcome = runner(index, store.clone(), options)?;

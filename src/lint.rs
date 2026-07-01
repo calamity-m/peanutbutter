@@ -351,6 +351,7 @@ mod tests {
             variables: BTreeMap::new(),
             theme: Theme::default(),
             lint: BTreeMap::new(),
+            keybinds: Default::default(),
             suggestion_commands: SuggestionCommandsConfig {
                 timeout_ms: 50,
                 allow_commands: true,
@@ -681,6 +682,7 @@ mod dependent_tests {
             variables: BTreeMap::new(),
             theme: Theme::default(),
             lint: BTreeMap::new(),
+            keybinds: Default::default(),
             suggestion_commands: SuggestionCommandsConfig {
                 timeout_ms: 50,
                 allow_commands: true,

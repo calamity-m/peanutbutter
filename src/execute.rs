@@ -69,6 +69,11 @@ pub struct ExecuteOptions {
     /// Current shell buffer content (from `PEANUTBUTTER_BUFFER`), used to
     /// pre-fill the selected snippet's first variable. `None` when empty.
     pub initial_buffer: Option<String>,
+    /// Resolved keybinds for this session.
+    pub keybinds: crate::keybinds::ExecuteKeymap,
+    /// Non-fatal keybind config warnings, surfaced as initial TUI status so
+    /// they never touch the stdout command payload.
+    pub keybind_warnings: Vec<String>,
 }
 
 impl Default for ExecuteOptions {
@@ -83,6 +88,8 @@ impl Default for ExecuteOptions {
             snippet_roots: Vec::new(),
             suggestion_commands: config::SuggestionCommandsConfig::default(),
             initial_buffer: None,
+            keybinds: crate::keybinds::ExecuteKeymap::default(),
+            keybind_warnings: Vec::new(),
         }
     }
 }

@@ -1,6 +1,7 @@
 use crate::config::Theme;
 use crate::domain::{Variable, VariableSpec};
 use crate::index::SnippetIndex;
+use crate::keybinds::{ContextBindings, PromptAction};
 use crate::syntax::{CommandTemplate, parse_command_template, referenced_names, render};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::style::Style;
@@ -177,6 +178,10 @@ pub(crate) enum PromptTransition {
     Completed(ExecutionOutcome),
 }
 
+/// Handle one key event on the prompt screen, resolving configurable actions
+/// through `keymap` (the `execute.prompt` context). Unmodified printable
+/// characters remain a non-keymap text-input fallback; bracketed paste never
+/// reaches this function.
 pub(crate) fn handle_prompt_key<P: SuggestionProvider>(
     key: KeyEvent,
     prompt: &mut PromptState,
@@ -184,13 +189,14 @@ pub(crate) fn handle_prompt_key<P: SuggestionProvider>(
     cwd: &Path,
     index: &SnippetIndex,
     status: &mut Option<String>,
+    keymap: &ContextBindings<PromptAction>,
 ) -> PromptTransition {
-    match key.code {
-        KeyCode::Esc => {
+    match keymap.action_for(&key) {
+        Some(PromptAction::ReturnToPicker) => {
             *status = None;
             PromptTransition::ToSelect
         }
-        KeyCode::Backspace => {
+        Some(PromptAction::BackspaceOrPrevious) => {
             if prompt.input.pop().is_some() {
                 prompt.reset_selection();
                 PromptTransition::Stay
@@ -203,34 +209,23 @@ pub(crate) fn handle_prompt_key<P: SuggestionProvider>(
                 PromptTransition::ToSelect
             }
         }
-        // Alt+Enter — insert a literal newline rather than submitting. Lets the
-        // user type multi-line values (e.g. multi-paragraph LLM prompts).
-        KeyCode::Enter if key.modifiers.contains(KeyModifiers::ALT) => {
+        // Insert a literal newline rather than submitting, for multi-line
+        // values. The ctrl+j default exists because some terminals don't
+        // deliver alt+enter as a distinct event (ctrl+j is LF on the wire).
+        Some(PromptAction::LiteralNewline) => {
             prompt.input.push('\n');
             prompt.reset_selection();
             PromptTransition::Stay
         }
-        // Ctrl+J — same intent as Alt+Enter, for terminals that don't deliver
-        // Alt+Enter as a distinct key event. Ctrl+J is LF on the wire.
-        KeyCode::Char('j') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            prompt.input.push('\n');
-            prompt.reset_selection();
-            PromptTransition::Stay
-        }
-        KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
-            prompt.input.push(c);
-            prompt.reset_selection();
-            PromptTransition::Stay
-        }
-        KeyCode::Up => {
+        Some(PromptAction::SuggestionUp) => {
             prompt.move_cursor(-1);
             PromptTransition::Stay
         }
-        KeyCode::Down => {
+        Some(PromptAction::SuggestionDown) => {
             prompt.move_cursor(1);
             PromptTransition::Stay
         }
-        KeyCode::Tab => {
+        Some(PromptAction::CompleteOrNext) => {
             if let Some(selected) = prompt.selected_visible_suggestion().cloned()
                 && prompt.input != selected
             {
@@ -241,11 +236,11 @@ pub(crate) fn handle_prompt_key<P: SuggestionProvider>(
             cycle_prompt_variable(prompt, 1, provider, cwd, status);
             PromptTransition::Stay
         }
-        KeyCode::BackTab => {
+        Some(PromptAction::PreviousVariable) => {
             cycle_prompt_variable(prompt, -1, provider, cwd, status);
             PromptTransition::Stay
         }
-        KeyCode::Enter => {
+        Some(PromptAction::Accept) => {
             if let Some(selected) = prompt.selected_visible_suggestion().cloned()
                 && !prompt.input.is_empty()
                 && prompt.input != selected
@@ -270,7 +265,15 @@ pub(crate) fn handle_prompt_key<P: SuggestionProvider>(
                 PromptTransition::Stay
             }
         }
-        _ => PromptTransition::Stay,
+        None => {
+            if let KeyCode::Char(c) = key.code
+                && !key.modifiers.contains(KeyModifiers::CONTROL)
+            {
+                prompt.input.push(c);
+                prompt.reset_selection();
+            }
+            PromptTransition::Stay
+        }
     }
 }
 
