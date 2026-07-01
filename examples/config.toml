@@ -106,9 +106,11 @@ prompt_active_bg = "#f4d35e"
 # Error foreground.
 error_fg = "red"
 
-# To define a complete inline custom theme, set `name = "custom"` above and
-# provide every required base color in `[theme.custom]`:
-# [theme.custom]
+# You can register any number of complete custom palettes under
+# [theme.custom.<name>], each providing every required base color. Set
+# `name = "<name>"` above to select one; they also show up in `pb settings`'
+# theme picker alongside the 5 built-ins.
+# [theme.custom.onedark]
 # accent = "#c678dd"
 # muted = "#5c6370"
 # selected_bg = "#3e4451"

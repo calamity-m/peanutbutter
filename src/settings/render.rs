@@ -33,7 +33,7 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &SettingsApp, theme: &Theme) {
         Screen::Theme => draw_picker(
             frame,
             content,
-            Theme::built_in_names(),
+            &app.theme_names(),
             app.theme_selected(),
             theme,
         ),

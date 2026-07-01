@@ -161,6 +161,7 @@ pub(crate) struct SettingsApp {
     field_selected: usize,
     frecency_fields: Vec<Field>,
     fuzzy_fields: Vec<Field>,
+    themes: Vec<(String, Theme)>,
     theme_selected: usize,
     theme_original: usize,
     status: Option<String>,
@@ -171,10 +172,11 @@ pub(crate) struct SettingsApp {
 impl SettingsApp {
     /// Build a settings state from the resolved application config.
     pub(crate) fn new(config: &AppConfig) -> Self {
+        let themes = Theme::selectable(&config.paths.config_file);
         let theme_name = crate::config::resolved_theme_name(&config.paths.config_file);
-        let theme_selected = Theme::built_in_names()
+        let theme_selected = themes
             .iter()
-            .position(|name| *name == theme_name)
+            .position(|(name, _)| *name == theme_name)
             .unwrap_or(0);
         Self {
             screen: Screen::Section,
@@ -183,6 +185,7 @@ impl SettingsApp {
             field_selected: 0,
             frecency_fields: frecency_fields(&config.search),
             fuzzy_fields: fuzzy_fields(&config.search.fuzzy),
+            themes,
             theme_selected,
             theme_original: theme_selected,
             status: None,
@@ -211,14 +214,25 @@ impl SettingsApp {
         self.field_selected
     }
 
-    /// Selected index into `Theme::built_in_names()` for the theme picker.
+    /// Selected index into the theme picker list (built-ins then customs).
     pub(crate) fn theme_selected(&self) -> usize {
         self.theme_selected
     }
 
+    /// Names of every selectable theme, in picker order.
+    pub(crate) fn theme_names(&self) -> Vec<&str> {
+        self.themes.iter().map(|(name, _)| name.as_str()).collect()
+    }
+
     /// Name of the currently selected (possibly unsaved) theme.
-    pub(crate) fn theme_selected_name(&self) -> &'static str {
-        Theme::built_in_names()[self.theme_selected]
+    pub(crate) fn theme_selected_name(&self) -> &str {
+        &self.themes[self.theme_selected].0
+    }
+
+    /// Resolved [`Theme`] for the currently selected (possibly unsaved) entry,
+    /// used to drive the live preview without re-reading the config file.
+    pub(crate) fn theme_selected_preview(&self) -> &Theme {
+        &self.themes[self.theme_selected].1
     }
 
     /// Whether the selected theme differs from the saved baseline.
@@ -227,9 +241,8 @@ impl SettingsApp {
     }
 
     /// The theme name to persist, if the selection has changed since save.
-    pub(crate) fn pending_theme_name(&self) -> Option<&'static str> {
-        self.theme_changed()
-            .then(|| Theme::built_in_names()[self.theme_selected])
+    pub(crate) fn pending_theme_name(&self) -> Option<&str> {
+        self.theme_changed().then(|| self.theme_selected_name())
     }
 
     /// Status message shown in the chrome.
@@ -339,7 +352,7 @@ impl SettingsApp {
     }
 
     fn handle_theme_key(&mut self, key: KeyEvent) -> bool {
-        let max = Theme::built_in_names().len().saturating_sub(1);
+        let max = self.themes.len().saturating_sub(1);
         match key.code {
             KeyCode::Esc | KeyCode::Backspace => {
                 self.screen = Screen::Section;
@@ -805,7 +818,7 @@ mod tests {
         app.handle_key(key(KeyCode::Up));
         assert_eq!(app.theme_selected(), 0, "clamps at the low end");
 
-        let max = Theme::built_in_names().len() - 1;
+        let max = app.theme_names().len() - 1;
         for _ in 0..max + 5 {
             app.handle_key(key(KeyCode::Down));
         }
@@ -833,7 +846,7 @@ mod tests {
         goto_theme_screen(&mut app);
         app.handle_key(key(KeyCode::Down));
         assert!(app.theme_changed());
-        assert_eq!(app.pending_theme_name(), Some(Theme::built_in_names()[1]));
+        assert_eq!(app.pending_theme_name(), Some(app.theme_names()[1]));
 
         assert!(app.handle_key(key(KeyCode::Enter)));
         app.mark_saved();
@@ -851,5 +864,64 @@ mod tests {
         assert!(app.handle_key(key(KeyCode::Char('r'))));
         assert_eq!(app.theme_selected(), 0);
         assert_eq!(app.theme_selected_name(), "default");
+    }
+
+    fn temp_config_file(prefix: &str, contents: &str) -> std::path::PathBuf {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT: AtomicU64 = AtomicU64::new(1);
+        let dir = std::env::temp_dir().join(format!(
+            "pb-settings-app-{prefix}-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let config_file = dir.join("config.toml");
+        std::fs::write(&config_file, contents).unwrap();
+        config_file
+    }
+
+    #[test]
+    fn registered_custom_themes_are_selectable_and_previewed() {
+        let config_file = temp_config_file(
+            "custom",
+            r##"
+[theme]
+name = "mytheme"
+
+[theme.custom.mytheme]
+accent = "#c678dd"
+muted = "#5c6370"
+selected_bg = "#3e4451"
+selected_fg = "#abb2bf"
+prompt_fg = "#282c34"
+prompt_bg = "#61afef"
+error_fg = "#e06c75"
+"##,
+        );
+        let mut config = test_config();
+        config.paths.config_file = config_file;
+
+        let mut app = SettingsApp::new(&config);
+        goto_theme_screen(&mut app);
+
+        let names = app.theme_names();
+        assert_eq!(names.last(), Some(&"mytheme"));
+        assert_eq!(app.theme_selected(), names.len() - 1);
+        assert_eq!(app.theme_selected_name(), "mytheme");
+        assert_eq!(
+            app.theme_selected_preview().selected_marker.fg,
+            Some(ratatui::style::Color::Rgb(0xc6, 0x78, 0xdd))
+        );
+    }
+
+    #[test]
+    fn invalid_custom_theme_is_skipped_from_picker() {
+        let config_file =
+            temp_config_file("invalid", "[theme.custom.broken]\naccent = \"#c678dd\"\n");
+        let mut config = test_config();
+        config.paths.config_file = config_file;
+
+        let app = SettingsApp::new(&config);
+        assert!(!app.theme_names().contains(&"broken"));
     }
 }

@@ -35,9 +35,7 @@ pub fn run(config: &AppConfig) -> io::Result<()> {
         terminal.draw(|frame| {
             let area = frame.area();
             viewport_top = viewport_top.or(Some(area.y));
-            let preview_theme = crate::config::Theme::named(app.theme_selected_name())
-                .expect("theme_selected_name always names a built-in theme");
-            render::draw(frame, &app, &preview_theme);
+            render::draw(frame, &app, app.theme_selected_preview());
         })?;
 
         if app.should_quit() {

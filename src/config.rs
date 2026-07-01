@@ -314,6 +314,31 @@ impl Theme {
         }
     }
 
+    /// Return `(name, resolved theme)` for every selectable theme: the 5
+    /// built-ins in order, followed by any `[theme.custom.<name>]` entries
+    /// that parse successfully. A custom entry that's missing a required
+    /// color is silently skipped rather than failing the whole list, so one
+    /// broken entry doesn't block selecting any other theme.
+    pub(crate) fn selectable(config_file: &PathBuf) -> Vec<(String, Theme)> {
+        let mut themes: Vec<(String, Theme)> = Theme::built_in_names()
+            .iter()
+            .map(|name| {
+                (
+                    (*name).to_string(),
+                    Theme::named(name).expect("built-in theme name"),
+                )
+            })
+            .collect();
+        if let Ok(file) = load_file_config(config_file) {
+            for (name, colors) in &file.theme.custom {
+                if let Ok(theme) = colors.to_theme() {
+                    themes.push((name.clone(), theme));
+                }
+            }
+        }
+        themes
+    }
+
     fn from_palette(palette: ThemePalette) -> Self {
         Self {
             chrome: Style::default()
@@ -428,9 +453,7 @@ pub fn theme_completion_names() -> io::Result<Vec<String>> {
         .iter()
         .map(|name| (*name).to_string())
         .collect::<Vec<_>>();
-    if file.theme.custom.is_some() {
-        names.push("custom".to_string());
-    }
+    names.extend(file.theme.custom.keys().cloned());
     Ok(names)
 }
 
@@ -527,21 +550,29 @@ struct ThemeFileConfig {
     name: Option<String>,
     #[serde(flatten)]
     colors: ThemeColorConfig,
-    custom: Option<ThemeColorConfig>,
+    /// Named custom palettes declared as `[theme.custom.<name>]` tables. Each
+    /// entry is selectable by its key, alongside the 5 built-in names.
+    #[serde(default)]
+    custom: BTreeMap<String, ThemeColorConfig>,
 }
 
 impl ThemeFileConfig {
     fn base_theme(&self, name: &str) -> io::Result<Theme> {
-        if name == "custom" {
-            let Some(custom) = &self.custom else {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "theme name 'custom' requires a [theme.custom] block",
-                ));
-            };
+        if let Some(custom) = self.custom.get(name) {
             return custom.to_theme();
         }
-        Theme::named(name)
+        if Theme::built_in_names().contains(&name) {
+            return Theme::named(name);
+        }
+        let mut known = Theme::built_in_names().to_vec();
+        known.extend(self.custom.keys().map(String::as_str));
+        Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "unknown theme {name}; expected one of: {}",
+                known.join(", ")
+            ),
+        ))
     }
 }
 
@@ -833,13 +864,13 @@ mod tests {
     }
 
     #[test]
-    fn custom_theme_requires_complete_custom_block() {
+    fn named_custom_theme_requires_complete_block() {
         let raw = r##"
 [theme]
-name = "custom"
+name = "mytheme"
 accent = "red"
 
-[theme.custom]
+[theme.custom.mytheme]
 accent = "#c678dd"
 muted = "#5c6370"
 selected_bg = "#3e4451"
@@ -853,6 +884,38 @@ error_fg = "#e06c75"
 
         assert_eq!(theme.selected_marker.fg, Some(Color::Red));
         assert_eq!(theme.active_prompt.bg, Some(Color::Rgb(0x61, 0xaf, 0xef)));
+    }
+
+    #[test]
+    fn multiple_named_custom_themes_are_independently_selectable() {
+        let raw = r##"
+[theme.custom.one]
+accent = "#111111"
+muted = "#222222"
+selected_bg = "#333333"
+selected_fg = "#444444"
+prompt_fg = "#555555"
+prompt_bg = "#666666"
+error_fg = "#777777"
+
+[theme.custom.two]
+accent = "#aaaaaa"
+muted = "#bbbbbb"
+selected_bg = "#cccccc"
+selected_fg = "#dddddd"
+prompt_fg = "#eeeeee"
+prompt_bg = "#ffffff"
+error_fg = "#123456"
+"##;
+        let parsed: FileConfig = toml::from_str(raw).unwrap();
+
+        let one = parsed.theme.base_theme("one").unwrap();
+        let two = parsed.theme.base_theme("two").unwrap();
+        assert_eq!(one.selected_marker.fg, Some(Color::Rgb(0x11, 0x11, 0x11)));
+        assert_eq!(two.selected_marker.fg, Some(Color::Rgb(0xaa, 0xaa, 0xaa)));
+
+        let err = parsed.theme.base_theme("three").unwrap_err();
+        assert!(err.to_string().contains("one, two"));
     }
 
     #[test]
