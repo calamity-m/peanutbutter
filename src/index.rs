@@ -186,15 +186,35 @@ fn _path_is_absolute(p: &Path) -> bool {
 mod tests {
     use super::*;
 
-    fn examples_root() -> PathBuf {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples")
+    fn temp_snippet_root(prefix: &str) -> PathBuf {
+        use std::sync::atomic::{AtomicU64, Ordering};
+
+        static NEXT: AtomicU64 = AtomicU64::new(1);
+        let root = std::env::temp_dir().join(format!(
+            "pb-index-{prefix}-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("nested")).unwrap();
+        fs::write(root.join("a.md"), "## A\n\n```bash\necho a\n```\n").unwrap();
+        fs::write(
+            root.join("nested/b.md"),
+            "## B\n\n```bash\necho b\n```\n\n## C\n\n```bash\necho c\n```\n",
+        )
+        .unwrap();
+        root
     }
 
     #[test]
-    fn loads_examples_with_expected_snippet_count() {
-        let index = load_from_roots(&[examples_root()]).expect("load");
-        assert!(!index.is_empty());
-        assert!(index.len() >= 10, "got only {} snippets", index.len());
+    fn loads_snippets_from_configured_roots() {
+        let root = temp_snippet_root("load");
+        let index = load_from_roots(std::slice::from_ref(&root)).expect("load");
+        assert_eq!(index.len(), 3);
+        assert!(index.get(&SnippetId::new("a.md", "a")).is_some());
+        assert!(index.get(&SnippetId::new("nested/b.md", "b")).is_some());
+        assert!(index.get(&SnippetId::new("nested/b.md", "c")).is_some());
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -235,10 +255,12 @@ mod tests {
 
     #[test]
     fn get_by_id_round_trips() {
-        let index = load_from_roots(&[examples_root()]).unwrap();
+        let root = temp_snippet_root("get");
+        let index = load_from_roots(std::slice::from_ref(&root)).unwrap();
         let first = index.iter().next().unwrap();
         let id = first.id().clone();
         assert_eq!(index.get(&id).unwrap().name(), first.name());
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]

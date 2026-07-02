@@ -324,21 +324,48 @@ fn longest_common_prefix<'a, I: Iterator<Item = &'a str>>(mut iter: I) -> String
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::index::load_from_roots;
+    use crate::domain::{Frontmatter, Snippet, SnippetFile};
+    use crate::index::SnippetIndex;
     use std::path::PathBuf;
 
-    fn examples_root() -> PathBuf {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples")
+    fn snippet_file(rel: &str, names: &[&str]) -> SnippetFile {
+        SnippetFile {
+            path: PathBuf::from("/fixtures").join(rel),
+            relative_path: PathBuf::from(rel),
+            frontmatter: Frontmatter::default(),
+            snippets: names
+                .iter()
+                .map(|name| Snippet {
+                    id: SnippetId::new(rel, &name.to_lowercase().replace(' ', "-")),
+                    name: (*name).to_string(),
+                    description: String::new(),
+                    body: format!("echo {name}"),
+                    variables: Vec::new(),
+                    language: Some("bash".to_string()),
+                })
+                .collect(),
+        }
     }
 
-    fn example_tree() -> BrowseTree {
-        let index = load_from_roots(&[examples_root()]).unwrap();
+    fn fixture_tree() -> BrowseTree {
+        let index = SnippetIndex::from_files([
+            snippet_file("simple/snippets.md", &["Simple fixture"]),
+            snippet_file("complex/complex.md", &["Complex fixture"]),
+            snippet_file("nested/root.md", &["Nested root fixture"]),
+            snippet_file(
+                "nested/docker/docker.md",
+                &["Run fixture container", "View fixture logs"],
+            ),
+            snippet_file("nested/docker/compose/snip.md", &["Start fixture services"]),
+            snippet_file("nested/docker/images/images.md", &["List fixture images"]),
+            snippet_file("nested/grep/grep.md", &["Search fixture pattern"]),
+        ]);
         BrowseTree::from_index(&index)
     }
 
     #[test]
-    fn tree_mirrors_example_directories() {
-        let tree = example_tree();
+    fn tree_mirrors_fixture_directories() {
+        let tree = fixture_tree();
         let root = tree.root();
         let dirs: Vec<&String> = root.children.keys().collect();
         assert!(dirs.iter().any(|s| s.as_str() == "nested"));
@@ -348,7 +375,7 @@ mod tests {
 
     #[test]
     fn nested_docker_has_compose_images_and_file_subdirs() {
-        let tree = example_tree();
+        let tree = fixture_tree();
         let docker = tree
             .get(&["nested".into(), "docker".into()])
             .expect("docker dir");
@@ -364,7 +391,7 @@ mod tests {
 
     #[test]
     fn recursive_count_sums_descendants_and_matches_file_snippet_count() {
-        let tree = example_tree();
+        let tree = fixture_tree();
         // File node count equals its snippet count.
         let file = tree
             .get(&["nested".into(), "docker".into(), "docker.md".into()])
@@ -395,7 +422,7 @@ mod tests {
 
     #[test]
     fn file_node_carries_its_snippets() {
-        let tree = example_tree();
+        let tree = fixture_tree();
         let file = tree
             .get(&["nested".into(), "docker".into(), "docker.md".into()])
             .expect("docker.md file node");
@@ -411,7 +438,7 @@ mod tests {
 
     #[test]
     fn tab_unique_prefix_descends_into_directory() {
-        let tree = example_tree();
+        let tree = fixture_tree();
         let mut state = BrowseState::new();
         state.type_char('s');
         let changed = state.tab_complete(&tree);
@@ -436,7 +463,7 @@ mod tests {
 
     #[test]
     fn backspace_empties_input_then_climbs_path() {
-        let tree = example_tree();
+        let tree = fixture_tree();
         let mut state = BrowseState::new();
         state.set_path(vec!["nested".into(), "docker".into()]);
         state.type_char('c');
@@ -454,7 +481,7 @@ mod tests {
 
     #[test]
     fn visible_filters_directories_by_prefix() {
-        let tree = example_tree();
+        let tree = fixture_tree();
         let mut state = BrowseState::new();
         state.set_path(vec!["nested".into()]);
         state.type_char('d');
@@ -469,7 +496,7 @@ mod tests {
 
     #[test]
     fn activate_descends_into_directory_entries() {
-        let tree = example_tree();
+        let tree = fixture_tree();
         let mut state = BrowseState::new();
         state.set_selection(Some(0));
         let id = state.activate(&tree);

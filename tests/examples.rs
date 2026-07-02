@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 fn temp_dir_stats(prefix: &str) -> PathBuf {
     static NEXT: AtomicU64 = AtomicU64::new(1);
     let path = std::env::temp_dir().join(format!(
-        "pb-examples-stats-{prefix}-{}-{}",
+        "pb-fixture-stats-{prefix}-{}-{}",
         std::process::id(),
         NEXT.fetch_add(1, Ordering::Relaxed)
     ));
@@ -32,12 +32,12 @@ fn stats_test_paths(root: &std::path::Path) -> Paths {
 
 const STATS_NOW: u64 = 1_715_600_000;
 
-fn examples_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples")
+fn fixtures_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/snippets")
 }
 
-fn parse_examples() -> BTreeMap<String, Vec<String>> {
-    let root = examples_root();
+fn parse_fixtures() -> BTreeMap<String, Vec<String>> {
+    let root = fixtures_root();
     let files = discover_markdown_files(&root).expect("discover");
     let mut by_file: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for file in files {
@@ -52,7 +52,7 @@ fn parse_examples() -> BTreeMap<String, Vec<String>> {
 
 #[test]
 fn simple_file_yields_seven_snippets() {
-    let by_file = parse_examples();
+    let by_file = parse_fixtures();
     let snippets = by_file
         .get("simple/snippets.md")
         .expect("simple/snippets.md parsed");
@@ -72,7 +72,7 @@ fn simple_file_yields_seven_snippets() {
 
 #[test]
 fn simple_file_frontmatter_is_parsed() {
-    let root = examples_root();
+    let root = fixtures_root();
     let path = root.join("simple/snippets.md");
     let content = fs::read_to_string(&path).unwrap();
     let parsed = parse_file(&path, &root, &content);
@@ -86,7 +86,7 @@ fn simple_file_frontmatter_is_parsed() {
 
 #[test]
 fn complex_file_has_five_snippets_with_variables() {
-    let root = examples_root();
+    let root = fixtures_root();
     let path = root.join("complex/complex.md");
     let content = fs::read_to_string(&path).unwrap();
     let parsed = parse_file(&path, &root, &content);
@@ -130,7 +130,7 @@ fn complex_file_has_five_snippets_with_variables() {
 
 #[test]
 fn nested_http_file_declares_url_default() {
-    let root = examples_root();
+    let root = fixtures_root();
     let path = root.join("nested/http/http.md");
     let content = fs::read_to_string(&path).unwrap();
     let parsed = parse_file(&path, &root, &content);
@@ -139,8 +139,8 @@ fn nested_http_file_declares_url_default() {
 }
 
 #[test]
-fn nested_examples_all_parse() {
-    let by_file = parse_examples();
+fn nested_fixtures_all_parse() {
+    let by_file = parse_fixtures();
     assert_eq!(
         by_file.get("nested/root.md"),
         Some(&vec![
@@ -151,78 +151,34 @@ fn nested_examples_all_parse() {
     );
     assert_eq!(
         by_file.get("nested/docker/docker.md"),
-        Some(&vec![
-            "Run a container".to_string(),
-            "Execute a shell in a running container".to_string(),
-            "View container logs".to_string(),
-            "Remove all stopped containers".to_string(),
-        ])
+        Some(&vec!["Run fixture container".to_string()])
     );
     assert_eq!(
         by_file.get("nested/docker/images/images.md"),
-        Some(&vec![
-            "List images".to_string(),
-            "Build an image".to_string(),
-            "Build with a specific Dockerfile".to_string(),
-            "Push an image".to_string(),
-            "Remove dangling images".to_string(),
-        ])
+        Some(&vec!["List fixture images".to_string()])
     );
     assert_eq!(
         by_file.get("nested/docker/compose/snip.md"),
-        Some(&vec![
-            "Start services in the background".to_string(),
-            "Stop and remove containers".to_string(),
-            "View logs for a service".to_string(),
-            "Rebuild and restart a service".to_string(),
-            "Run a one-off command in a service container".to_string(),
-            "Start with a specific compose file".to_string(),
-        ])
+        Some(&vec!["Start fixture services".to_string()])
     );
     assert_eq!(
         by_file.get("nested/grep/grep.md"),
-        Some(&vec![
-            "Search for a pattern in files".to_string(),
-            "Search only files of a specific type".to_string(),
-            "Search case-insensitively".to_string(),
-            "Show only the matching portion of each line".to_string(),
-            "Count matches per file".to_string(),
-            "Search and replace (preview without writing)".to_string(),
-        ])
+        Some(&vec!["Search fixture pattern".to_string()])
     );
     assert_eq!(
         by_file.get("nested/git/git.md"),
-        Some(&vec![
-            "Commit staged changes".to_string(),
-            "Stage path and commit".to_string(),
-            "Create and switch to a new branch".to_string(),
-            "Switch to an existing branch".to_string(),
-            "Push branch and set upstream".to_string(),
-            "Stash changes with a description".to_string(),
-            "Cherry-pick a commit".to_string(),
-            "Amend the last commit message".to_string(),
-            "View log with graph".to_string(),
-            "Soft reset to previous commit".to_string(),
-        ])
+        Some(&vec!["Commit fixture changes".to_string()])
     );
     assert_eq!(
         by_file.get("nested/http/http.md"),
-        Some(&vec![
-            "GET request".to_string(),
-            "GET with bearer token".to_string(),
-            "POST JSON body".to_string(),
-            "POST JSON with bearer token".to_string(),
-            "Check HTTP status code only".to_string(),
-            "Download a file".to_string(),
-            "Upload a file (multipart form)".to_string(),
-        ])
+        Some(&vec!["GET request fixture".to_string()])
     );
 }
 
 #[test]
-fn every_example_file_produces_at_least_one_snippet() {
-    let by_file = parse_examples();
-    assert!(!by_file.is_empty(), "no example files discovered");
+fn every_fixture_file_produces_at_least_one_snippet() {
+    let by_file = parse_fixtures();
+    assert!(!by_file.is_empty(), "no fixture files discovered");
     for (path, names) in &by_file {
         assert!(!names.is_empty(), "expected at least one snippet in {path}");
     }
@@ -356,7 +312,7 @@ fn stats_json_produces_valid_json_with_all_keys() {
 
 #[test]
 fn snippet_ids_are_stable_and_unique_across_tree() {
-    let root = examples_root();
+    let root = fixtures_root();
     let files = discover_markdown_files(&root).unwrap();
     let mut ids = std::collections::HashSet::new();
     for file in files {

@@ -94,9 +94,30 @@ fn is_markdown(path: &Path) -> bool {
 mod tests {
     use super::*;
 
+    fn temp_root(prefix: &str) -> PathBuf {
+        use std::sync::atomic::{AtomicU64, Ordering};
+
+        static NEXT: AtomicU64 = AtomicU64::new(1);
+        let root = std::env::temp_dir().join(format!(
+            "pb-discovery-{prefix}-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        root
+    }
+
     #[test]
-    fn discovers_examples_directory() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples");
+    fn discovers_markdown_files_in_nested_tree() {
+        let root = temp_root("nested");
+        fs::create_dir_all(root.join("alpha/deep")).unwrap();
+        fs::create_dir_all(root.join("beta")).unwrap();
+        fs::write(root.join("root.md"), "# root\n").unwrap();
+        fs::write(root.join("alpha/one.markdown"), "# one\n").unwrap();
+        fs::write(root.join("alpha/deep/two.md"), "# two\n").unwrap();
+        fs::write(root.join("beta/ignored.txt"), "not markdown\n").unwrap();
+
         let files = discover_markdown_files(&root).expect("discovery");
         let names: Vec<String> = files
             .iter()
@@ -107,13 +128,16 @@ mod tests {
                     .replace('\\', "/")
             })
             .collect();
-        assert!(names.contains(&"simple/snippets.md".to_string()));
-        assert!(names.contains(&"complex/complex.md".to_string()));
-        assert!(names.contains(&"nested/root.md".to_string()));
-        assert!(names.contains(&"nested/docker/docker.md".to_string()));
-        assert!(names.contains(&"nested/docker/compose/snip.md".to_string()));
-        assert!(names.contains(&"nested/docker/images/images.md".to_string()));
-        assert!(names.contains(&"nested/grep/grep.md".to_string()));
+        assert_eq!(
+            names,
+            vec![
+                "alpha/deep/two.md".to_string(),
+                "alpha/one.markdown".to_string(),
+                "root.md".to_string(),
+            ]
+        );
+
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
