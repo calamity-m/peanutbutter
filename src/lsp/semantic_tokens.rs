@@ -121,9 +121,11 @@ fn emit_placeholder(line_idx: u32, line: &str, start: usize, end: usize, out: &m
                 );
             }
             // Source region includes the `:` separator. A leading `?` marks a
-            // default (string); anything else is a suggestion command (function).
-            let is_default = line.as_bytes().get(name_end + 1) == Some(&b'?');
-            let base = if is_default { TOK_STRING } else { TOK_FUNCTION };
+            // default and a leading `@` marks a hint (both display/prefill
+            // text, so string); anything else is a suggestion command
+            // (function).
+            let is_text = matches!(line.as_bytes().get(name_end + 1), Some(&b'?') | Some(&b'@'));
+            let base = if is_text { TOK_STRING } else { TOK_FUNCTION };
             emit_source_region(line_idx, line, name_end, inner_end, base, out);
         }
     }
@@ -295,6 +297,15 @@ mod tests {
         assert!(toks.contains(&(0, 2, 4, TOK_VARIABLE)));
         // `:?.` spans columns 6..9.
         assert!(toks.contains(&(0, 6, 3, TOK_STRING)));
+    }
+
+    #[test]
+    fn hint_placeholder_is_string() {
+        // `<@input:@hello>` → name `input`, hint `@hello` typed as string.
+        let toks = absolute("<@input:@hello>");
+        assert!(toks.contains(&(0, 2, 5, TOK_VARIABLE)));
+        // `:@hello` spans columns 7..14.
+        assert!(toks.contains(&(0, 7, 7, TOK_STRING)));
     }
 
     #[test]

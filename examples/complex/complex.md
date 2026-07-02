@@ -6,6 +6,8 @@ tags:
 variables:
   http_method:
     suggestions: [GET, POST, PUT, PATCH, DELETE]
+  database_url:
+    hint: postgres://user:pass@host:5432/db
 ---
 
 # Scripts
@@ -50,7 +52,7 @@ tar -czf <@archive:?archive.tar.gz> <@source:?.>
 ```bash
 curl -s -X <@http_method> \
      -H "Content-Type: application/json" \
-     -H "<@header_name:?Authorization>: <@header_value>" \
+     -H "<@header_name:?Authorization>: <@header_value:@Bearer token>" \
      -d '<@body:?{}>'\
      <@url>
 ```

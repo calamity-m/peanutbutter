@@ -285,6 +285,11 @@ default = "GET"
 # Static suggestion list shown to the user.
 suggestions = ["GET", "POST", "PUT", "PATCH", "DELETE"]
 
+# Optional ghost text shown while the prompt input is empty. Unlike
+# `default`, a hint is display-only: accepting without typing yields an
+# empty value.
+# hint = "the HTTP method to use"
+
 [variables.file]
 # Current working directory files.
 command = "find . -maxdepth 1 -type f | sed 's#^./##' | sort"

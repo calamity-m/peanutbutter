@@ -67,6 +67,10 @@ fn parse_variable_inner(inner: &str) -> Option<Variable> {
                         vec![crate::syntax::Fragment::Literal(default.to_string())]
                     });
                 VariableSource::Default(template)
+            } else if let Some(hint) = rest.strip_prefix('@') {
+                // Checked before the command fallback so `<@name:@hint>` is a
+                // hint, not a suggestion command named `@hint`.
+                VariableSource::Hint(hint.to_string())
             } else {
                 VariableSource::Command(rest.to_string())
             };

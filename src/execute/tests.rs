@@ -18,6 +18,7 @@ use std::path::{Path, PathBuf};
 struct TestProvider {
     values: RefCell<HashMap<String, Vec<String>>>,
     command_sources: RefCell<HashMap<String, String>>,
+    hints: RefCell<HashMap<String, String>>,
     calls: RefCell<HashMap<String, usize>>,
     last_confirmed: RefCell<HashMap<String, BTreeMap<String, String>>>,
 }
@@ -36,6 +37,14 @@ impl TestProvider {
         self.command_sources
             .borrow_mut()
             .insert(name.to_string(), source.to_string());
+        self
+    }
+
+    #[allow(dead_code)]
+    fn with_hint(self, name: &str, hint: &str) -> Self {
+        self.hints
+            .borrow_mut()
+            .insert(name.to_string(), hint.to_string());
         self
     }
 
@@ -85,6 +94,17 @@ impl SuggestionProvider for TestProvider {
         _confirmed: &BTreeMap<String, String>,
     ) -> Option<String> {
         None
+    }
+
+    fn hint(
+        &self,
+        variable: &Variable,
+        _local_variables: &BTreeMap<String, VariableSpec>,
+    ) -> Option<String> {
+        if let crate::domain::VariableSource::Hint(text) = &variable.source {
+            return Some(text.clone());
+        }
+        self.hints.borrow().get(&variable.name).cloned()
     }
 
     fn command_source(
@@ -230,7 +250,7 @@ fn render_command_text_highlights_active_value() {
     let mut values = BTreeMap::new();
     values.insert("file".to_string(), "Cargo.toml".to_string());
     let theme = crate::config::Theme::default();
-    let rendered = render_command_text("cat <@file>", &values, Some("file"), &theme);
+    let rendered = render_command_text("cat <@file>", &values, Some("file"), None, &theme);
     assert_eq!(line_text(&rendered.lines[0]), "cat Cargo.toml");
     assert_eq!(
         span_style_for(&rendered.lines[0], "Cargo.toml"),
@@ -242,8 +262,13 @@ fn render_command_text_highlights_active_value() {
 fn render_command_text_highlights_active_placeholder_and_dims_others() {
     let values = BTreeMap::new();
     let theme = crate::config::Theme::default();
-    let rendered =
-        render_command_text("echo <@missing> <@later>", &values, Some("missing"), &theme);
+    let rendered = render_command_text(
+        "echo <@missing> <@later>",
+        &values,
+        Some("missing"),
+        None,
+        &theme,
+    );
     assert_eq!(line_text(&rendered.lines[0]), "echo <@missing> <@later>");
     assert_eq!(
         span_style_for(&rendered.lines[0], "<@missing>"),
@@ -1172,6 +1197,7 @@ fn variable_flow_uses_config_defined_inputs() {
             default: Some("POST".to_string()),
             suggestions: vec!["POST".to_string(), "PUT".to_string()],
             command: None,
+            hint: None,
         },
     );
     let mut app = ExecutionApp::new(
@@ -1210,6 +1236,7 @@ fn variable_flow_uses_file_local_specs_over_config_by_field() {
             default: Some("POST".to_string()),
             suggestions: vec!["POST".to_string(), "PUT".to_string()],
             command: None,
+            hint: None,
         },
     );
     let mut frontmatter = Frontmatter::default();
@@ -1219,6 +1246,7 @@ fn variable_flow_uses_file_local_specs_over_config_by_field() {
             default: Some("GET".to_string()),
             suggestions: vec![],
             command: None,
+            hint: None,
         },
     );
     let mut file = snippet_file("x.md", "Demo", "curl -X <@http_method>", variables);
@@ -1242,6 +1270,189 @@ fn variable_flow_uses_file_local_specs_over_config_by_field() {
 }
 
 #[test]
+fn inline_hint_shows_ghost_text_and_accepts_empty() {
+    let variables = vec![Variable {
+        name: "input".to_string(),
+        source: VariableSource::Hint("hello".to_string()),
+    }];
+    let mut app = app_with_body(
+        "echo \"<@input:@hello> world\"",
+        variables,
+        TestProvider::default(),
+    );
+
+    let _ = app.handle_key(press(KeyCode::Enter));
+    let Screen::Prompt(prompt) = &app.screen else {
+        panic!("expected prompt");
+    };
+    assert_eq!(prompt.hint.as_deref(), Some("hello"));
+    assert_eq!(prompt.input, "");
+
+    // Accepting without typing substitutes an empty value, not the hint.
+    let outcome = completed(app.handle_key(press(KeyCode::Enter)));
+    assert_eq!(outcome.command, "echo \" world\"");
+}
+
+#[test]
+fn typed_input_replaces_inline_hint() {
+    let variables = vec![Variable {
+        name: "input".to_string(),
+        source: VariableSource::Hint("hello".to_string()),
+    }];
+    let mut app = app_with_body(
+        "echo \"<@input:@hello> world\"",
+        variables,
+        TestProvider::default(),
+    );
+
+    let _ = app.handle_key(press(KeyCode::Enter));
+    let _ = app.handle_key(press(KeyCode::Char('h')));
+    let _ = app.handle_key(press(KeyCode::Char('i')));
+    let outcome = completed(app.handle_key(press(KeyCode::Enter)));
+    assert_eq!(outcome.command, "echo \"hi world\"");
+}
+
+#[test]
+fn hint_resolves_from_frontmatter_over_config() {
+    let variables = vec![Variable {
+        name: "input".to_string(),
+        source: VariableSource::Free,
+    }];
+    let mut configured = BTreeMap::new();
+    configured.insert(
+        "input".to_string(),
+        crate::config::VariableInputConfig {
+            default: None,
+            suggestions: vec![],
+            command: None,
+            hint: Some("from-config".to_string()),
+        },
+    );
+    let mut frontmatter = Frontmatter::default();
+    frontmatter.variables.insert(
+        "input".to_string(),
+        VariableSpec {
+            default: None,
+            suggestions: vec![],
+            command: None,
+            hint: Some("from-frontmatter".to_string()),
+        },
+    );
+    let mut file = snippet_file("x.md", "Demo", "echo <@input>", variables);
+    file.frontmatter = frontmatter;
+    let mut app = ExecutionApp::new(
+        SnippetIndex::from_files([file]),
+        FrecencyStore::new(),
+        PathBuf::from("."),
+        0,
+        crate::config::SearchConfig::default(),
+        crate::config::Theme::default(),
+        SystemSuggestionProvider::new(configured, Default::default()),
+    );
+
+    let _ = app.handle_key(press(KeyCode::Enter));
+    let Screen::Prompt(prompt) = &app.screen else {
+        panic!("expected prompt");
+    };
+    assert_eq!(prompt.hint.as_deref(), Some("from-frontmatter"));
+}
+
+#[test]
+fn inline_hint_takes_precedence_over_spec_hint() {
+    let variables = vec![Variable {
+        name: "input".to_string(),
+        source: VariableSource::Hint("inline".to_string()),
+    }];
+    let mut frontmatter = Frontmatter::default();
+    frontmatter.variables.insert(
+        "input".to_string(),
+        VariableSpec {
+            default: None,
+            suggestions: vec![],
+            command: None,
+            hint: Some("from-frontmatter".to_string()),
+        },
+    );
+    let mut file = snippet_file("x.md", "Demo", "echo <@input:@inline>", variables);
+    file.frontmatter = frontmatter;
+    let mut app = ExecutionApp::new(
+        SnippetIndex::from_files([file]),
+        FrecencyStore::new(),
+        PathBuf::from("."),
+        0,
+        crate::config::SearchConfig::default(),
+        crate::config::Theme::default(),
+        SystemSuggestionProvider::new(BTreeMap::new(), Default::default()),
+    );
+
+    let _ = app.handle_key(press(KeyCode::Enter));
+    let Screen::Prompt(prompt) = &app.screen else {
+        panic!("expected prompt");
+    };
+    assert_eq!(prompt.hint.as_deref(), Some("inline"));
+}
+
+#[test]
+fn spec_default_prefills_hint_placeholder() {
+    // With both a default and a hint configured, the default populates the
+    // editable buffer; the hint stays available for when the buffer is empty.
+    let variables = vec![Variable {
+        name: "input".to_string(),
+        source: VariableSource::Free,
+    }];
+    let mut frontmatter = Frontmatter::default();
+    frontmatter.variables.insert(
+        "input".to_string(),
+        VariableSpec {
+            default: Some("hello".to_string()),
+            suggestions: vec![],
+            command: None,
+            hint: Some("type a greeting".to_string()),
+        },
+    );
+    let mut file = snippet_file("x.md", "Demo", "echo <@input>", variables);
+    file.frontmatter = frontmatter;
+    let mut app = ExecutionApp::new(
+        SnippetIndex::from_files([file]),
+        FrecencyStore::new(),
+        PathBuf::from("."),
+        0,
+        crate::config::SearchConfig::default(),
+        crate::config::Theme::default(),
+        SystemSuggestionProvider::new(BTreeMap::new(), Default::default()),
+    );
+
+    let _ = app.handle_key(press(KeyCode::Enter));
+    let Screen::Prompt(prompt) = &app.screen else {
+        panic!("expected prompt");
+    };
+    assert_eq!(prompt.input, "hello");
+    assert_eq!(prompt.hint.as_deref(), Some("type a greeting"));
+
+    // Accepting the default keeps existing default semantics.
+    let outcome = completed(app.handle_key(press(KeyCode::Enter)));
+    assert_eq!(outcome.command, "echo hello");
+}
+
+#[test]
+fn render_command_text_shows_hint_as_ghost_for_empty_active_placeholder() {
+    let values = BTreeMap::new();
+    let theme = crate::config::Theme::default();
+    let rendered = render_command_text(
+        "echo <@input> world",
+        &values,
+        Some("input"),
+        Some("hello"),
+        &theme,
+    );
+    assert_eq!(line_text(&rendered.lines[0]), "echo hello world");
+    assert_eq!(
+        span_style_for(&rendered.lines[0], "hello"),
+        placeholder_prompt_style(&theme)
+    );
+}
+
+#[test]
 fn file_local_suggestions_override_config_suggestions() {
     let variables = vec![Variable {
         name: "namespace".to_string(),
@@ -1254,6 +1465,7 @@ fn file_local_suggestions_override_config_suggestions() {
             default: Some("default".to_string()),
             suggestions: vec!["prod".to_string()],
             command: None,
+            hint: None,
         },
     );
     let mut frontmatter = Frontmatter::default();
@@ -1263,6 +1475,7 @@ fn file_local_suggestions_override_config_suggestions() {
             default: None,
             suggestions: vec!["dev".to_string(), "stage".to_string()],
             command: None,
+            hint: None,
         },
     );
     let mut file = snippet_file("x.md", "Demo", "kubectl -n <@namespace>", variables);
@@ -1298,6 +1511,7 @@ fn file_local_suggestions_without_default_leave_input_empty() {
             default: None,
             suggestions: vec!["GET".to_string(), "POST".to_string()],
             command: None,
+            hint: None,
         },
     );
     let mut file = snippet_file("x.md", "Demo", "curl -X <@http_method>", variables);
@@ -1340,6 +1554,7 @@ fn inline_default_overrides_config_default() {
             default: Some("config-default".to_string()),
             suggestions: vec![],
             command: None,
+            hint: None,
         },
     );
     let mut app = ExecutionApp::new(
@@ -1379,6 +1594,7 @@ fn inline_default_overrides_file_local_default() {
             default: Some("frontmatter-default".to_string()),
             suggestions: vec![],
             command: None,
+            hint: None,
         },
     );
     let mut file = snippet_file(
@@ -1418,6 +1634,7 @@ fn file_local_command_spec_populates_suggestions() {
             default: None,
             suggestions: vec![],
             command: Some("echo hello".to_string()),
+            hint: None,
         },
     );
     let mut file = snippet_file("x.md", "Demo", "say <@greeting>", variables);

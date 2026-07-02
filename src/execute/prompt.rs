@@ -38,6 +38,9 @@ pub(crate) struct PromptState {
     pub(crate) input: String,
     /// Full suggestion list for the current variable (unfiltered).
     pub(crate) suggestions: Vec<String>,
+    /// Ghost text for the current variable, shown in the preview while the
+    /// input buffer is empty. Display-only: never stored as the value.
+    pub(crate) hint: Option<String>,
     /// Non-fatal error from the last suggestion provider call, shown in the UI.
     pub(crate) error: Option<String>,
     /// Currently highlighted row in the visible (filtered) suggestion list.
@@ -83,6 +86,7 @@ impl PromptState {
             values: BTreeMap::new(),
             input: String::new(),
             suggestions: Vec::new(),
+            hint: None,
             error: None,
             selection: None,
             dirty: BTreeSet::new(),
@@ -388,6 +392,7 @@ pub(crate) fn load_prompt_state<P: SuggestionProvider>(
             .or_else(|| provider.default_input(&variable, &prompt.local_variables, &confirmed))
             .unwrap_or_default()
     };
+    prompt.hint = provider.hint(&variable, &prompt.local_variables);
     prompt.error = None;
 
     let confirmed = confirmed_upstream(prompt);
@@ -515,6 +520,7 @@ pub(crate) fn render_command_text(
     template: &str,
     values: &BTreeMap<String, String>,
     active_variable: Option<&str>,
+    active_hint: Option<&str>,
     theme: &Theme,
 ) -> Text<'static> {
     let mut chunks = Vec::new();
@@ -533,6 +539,17 @@ pub(crate) fn render_command_text(
                         chunks.push(StyledChunk::new(value.clone(), style));
                     }
                     None => {
+                        // Empty active placeholder with a hint: show the hint
+                        // as muted ghost text instead of the raw placeholder.
+                        // The cursor stays at the placeholder start, so typing
+                        // visually replaces the hint.
+                        if is_active && let Some(hint) = active_hint {
+                            chunks.push(StyledChunk::new(
+                                hint.to_string(),
+                                placeholder_prompt_style(theme),
+                            ));
+                            continue;
+                        }
                         let style = if is_active {
                             active_prompt_style(theme)
                         } else {

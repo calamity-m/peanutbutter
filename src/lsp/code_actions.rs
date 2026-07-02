@@ -13,6 +13,7 @@ use super::{find_variable_declaration_line, frontmatter_end_line, line_range};
 enum InlineSourceKind {
     Default,
     Command,
+    Hint,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -123,9 +124,12 @@ fn inline_code_action(
     if !spec.suggestions.is_empty() {
         return None;
     }
-    let (kind, value) = match (&spec.default, &spec.command) {
-        (Some(default), None) => (InlineSourceKind::Default, default.as_str()),
-        (None, Some(command)) => (InlineSourceKind::Command, command.as_str()),
+    // Inlining removes the whole spec, so only offer it when the spec is a
+    // single source that has an inline equivalent.
+    let (kind, value) = match (&spec.default, &spec.command, &spec.hint) {
+        (Some(default), None, None) => (InlineSourceKind::Default, default.as_str()),
+        (None, Some(command), None) => (InlineSourceKind::Command, command.as_str()),
+        (None, None, Some(hint)) => (InlineSourceKind::Hint, hint.as_str()),
         _ => return None,
     };
     let target = first_placeholder(content, &name)?;
@@ -135,6 +139,7 @@ fn inline_code_action(
     let inline_text = match kind {
         InlineSourceKind::Default => format!("<@{}:?{}>", name, value),
         InlineSourceKind::Command => format!("<@{}:{}>", name, value),
+        InlineSourceKind::Hint => format!("<@{}:@{}>", name, value),
     };
     let mut title = format!("Inline frontmatter variable `{name}`");
     let usages = placeholder_usage_count(content, &name);
@@ -184,6 +189,8 @@ fn inline_placeholder_at(content: &str, pos: Position) -> Option<InlinePlacehold
                 }
                 let (kind, value) = if let Some(default) = rest.strip_prefix('?') {
                     (InlineSourceKind::Default, default)
+                } else if let Some(hint) = rest.strip_prefix('@') {
+                    (InlineSourceKind::Hint, hint)
                 } else {
                     (InlineSourceKind::Command, rest)
                 };
@@ -226,6 +233,8 @@ fn matching_inline_placeholders(
                     let name = name.trim();
                     let (kind, value) = if let Some(default) = rest.strip_prefix('?') {
                         (InlineSourceKind::Default, default)
+                    } else if let Some(hint) = rest.strip_prefix('@') {
+                        (InlineSourceKind::Hint, hint)
                     } else {
                         (InlineSourceKind::Command, rest)
                     };
@@ -296,6 +305,9 @@ fn spec_matches_inline(spec: &VariableSpec, inline: &InlinePlaceholder) -> bool 
         InlineSourceKind::Command => {
             spec.command.as_deref() == Some(inline.value.as_str()) && spec.default.is_none()
         }
+        // A hint is orthogonal to default/command, so only the hint field
+        // decides whether the spec already covers the inline source.
+        InlineSourceKind::Hint => spec.hint.as_deref() == Some(inline.value.as_str()),
     }
 }
 
@@ -391,9 +403,12 @@ fn variable_spec_text_preserving(
     inline: &InlinePlaceholder,
 ) -> String {
     let source_key = inline_source_key(inline.kind);
-    let opposite_key = match inline.kind {
-        InlineSourceKind::Default => "command",
-        InlineSourceKind::Command => "default",
+    // Keys the extracted source supersedes: default and command are mutually
+    // exclusive prefill/suggestion sources, while a hint is orthogonal and
+    // only replaces an existing hint.
+    let replaced_keys: &[&str] = match inline.kind {
+        InlineSourceKind::Default | InlineSourceKind::Command => &["default", "command"],
+        InlineSourceKind::Hint => &["hint"],
     };
     let mut out = format!(
         "{}\n    {}: {}\n",
@@ -414,7 +429,7 @@ fn variable_spec_text_preserving(
             skip_suggestions_list = false;
         }
         let key = trimmed.split_once(':').map(|(key, _)| key.trim());
-        if indent == 4 && (key == Some(source_key) || key == Some(opposite_key)) {
+        if indent == 4 && key.is_some_and(|key| replaced_keys.contains(&key)) {
             continue;
         }
         if indent == 4 && key == Some("suggestions") && trimmed.ends_with(':') {
@@ -430,6 +445,7 @@ fn inline_source_key(kind: InlineSourceKind) -> &'static str {
     match kind {
         InlineSourceKind::Default => "default",
         InlineSourceKind::Command => "command",
+        InlineSourceKind::Hint => "hint",
     }
 }
 
@@ -664,6 +680,38 @@ mod code_action_tests {
         // The differing override keeps its own inline value.
         assert!(updated.contains("<@p:?/tmp>"));
         assert!(updated.contains("variables:\n  p:\n    default: .\n"));
+    }
+
+    #[test]
+    fn extract_hint_to_frontmatter_and_inline_round_trip() {
+        let body = "## D\n\n```bash\necho <@input:@hello>\n```\n";
+        let extracted = compute_code_actions(&uri(), body, range(3, 8), &BTreeMap::new()).unwrap();
+        let with_frontmatter = apply_edits(body, edits(&extracted[0]));
+        assert!(with_frontmatter.starts_with("---\nvariables:\n  input:\n    hint: hello\n---\n"));
+        assert!(with_frontmatter.contains("echo <@input>"));
+
+        let inlined =
+            compute_code_actions(&uri(), &with_frontmatter, range(2, 3), &BTreeMap::new()).unwrap();
+        let round_tripped = apply_edits(&with_frontmatter, edits(&inlined[0]));
+        let body_after = round_tripped.split("---\n").last().unwrap();
+        assert_eq!(body_after, body);
+    }
+
+    #[test]
+    fn extract_default_preserves_existing_hint_key() {
+        let content = "---\nvariables:\n  p:\n    hint: guidance\n    default: old\n---\n## D\n\n```bash\n<@p:?new>\n```\n";
+        let actions = compute_code_actions(&uri(), content, range(9, 2), &BTreeMap::new()).unwrap();
+        let updated = apply_edits(content, edits(&actions[0]));
+        assert!(updated.contains("default: new"));
+        assert!(updated.contains("hint: guidance"));
+        assert!(!updated.contains("default: old"));
+    }
+
+    #[test]
+    fn inline_skips_spec_with_both_hint_and_default() {
+        let content =
+            "---\nvariables:\n  p:\n    default: a\n    hint: b\n---\n## D\n\n```bash\n<@p>\n```\n";
+        assert!(compute_code_actions(&uri(), content, range(2, 3), &BTreeMap::new()).is_none());
     }
 
     #[test]

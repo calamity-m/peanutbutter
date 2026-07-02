@@ -211,6 +211,14 @@ pub trait SuggestionProvider {
         local_variables: &std::collections::BTreeMap<String, VariableSpec>,
         confirmed: &BTreeMap<String, String>,
     ) -> Option<String>;
+    /// Return the ghost text to show while the input buffer is empty, if any,
+    /// resolving inline `<@name:@hint>` first, then file-local and config
+    /// variable specs. Hints are display-only and never become the value.
+    fn hint(
+        &self,
+        variable: &Variable,
+        local_variables: &std::collections::BTreeMap<String, VariableSpec>,
+    ) -> Option<String>;
     /// Return the raw suggestion-command source for `variable`, if any, by
     /// inspecting inline source, file-local spec, and config overrides in that
     /// order. The string is the *unrendered* template — `<#...>` references
@@ -263,7 +271,9 @@ impl SuggestionProvider for SystemSuggestionProvider {
         match &variable.source {
             VariableSource::Command(cmd) => run(cmd),
             VariableSource::Default(_) => Ok(Vec::new()),
-            VariableSource::Free => {
+            // An inline hint only supplies ghost text; suggestions resolve
+            // exactly like a free-form placeholder.
+            VariableSource::Free | VariableSource::Hint(_) => {
                 if let Some(config) = local_variables.get(&variable.name) {
                     if !config.suggestions.is_empty() {
                         return Ok(config.suggestions.clone());
@@ -285,6 +295,24 @@ impl SuggestionProvider for SystemSuggestionProvider {
         }
     }
 
+    fn hint(
+        &self,
+        variable: &Variable,
+        local_variables: &std::collections::BTreeMap<String, VariableSpec>,
+    ) -> Option<String> {
+        if let VariableSource::Hint(text) = &variable.source {
+            return Some(text.clone());
+        }
+        local_variables
+            .get(&variable.name)
+            .and_then(|config| config.hint.clone())
+            .or_else(|| {
+                self.variable_inputs
+                    .get(&variable.name)
+                    .and_then(|config| config.hint.clone())
+            })
+    }
+
     fn command_source(
         &self,
         variable: &Variable,
@@ -293,7 +321,7 @@ impl SuggestionProvider for SystemSuggestionProvider {
         match &variable.source {
             VariableSource::Command(cmd) => Some(cmd.clone()),
             VariableSource::Default(_) => None,
-            VariableSource::Free => {
+            VariableSource::Free | VariableSource::Hint(_) => {
                 if let Some(config) = local_variables.get(&variable.name) {
                     if !config.suggestions.is_empty() {
                         return None;
@@ -324,7 +352,9 @@ impl SuggestionProvider for SystemSuggestionProvider {
         match &variable.source {
             VariableSource::Default(template) => command_template::render(template, confirmed).ok(),
             VariableSource::Command(_) => None,
-            VariableSource::Free => local_variables
+            // A reusable-spec default still pre-fills a hint placeholder; the
+            // hint only shows once the buffer is cleared.
+            VariableSource::Free | VariableSource::Hint(_) => local_variables
                 .get(&variable.name)
                 .and_then(|config| config.default.clone())
                 .or_else(|| {

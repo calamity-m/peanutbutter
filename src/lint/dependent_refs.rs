@@ -284,7 +284,12 @@ fn is_free_form_upstream(
     else {
         return false;
     };
-    if !matches!(variable.source, VariableSource::Free) {
+    // A hint is display-only guidance, so a hint placeholder is just as
+    // free-form as a plain one.
+    if !matches!(
+        variable.source,
+        VariableSource::Free | VariableSource::Hint(_)
+    ) {
         return false;
     }
     let constrained_locally = locals.get(name).is_some_and(variable_spec_constrains);
@@ -313,7 +318,7 @@ fn command_sources(
         }
         match &variable.source {
             VariableSource::Command(command) => out.push((variable.name.clone(), command.clone())),
-            VariableSource::Free => {
+            VariableSource::Free | VariableSource::Hint(_) => {
                 if let Some(command) = locals
                     .get(&variable.name)
                     .and_then(|spec| spec.command.clone())

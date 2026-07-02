@@ -53,6 +53,28 @@ variables:
 }
 
 #[test]
+fn parses_frontmatter_variable_hint() {
+    let content = r#"---
+variables:
+  input:
+    hint: hello
+  path:
+    default: .
+    hint: "where to copy"
+---
+"#;
+    let lines: Vec<&str> = content.lines().collect();
+    let (fm, _) = parse_frontmatter(&lines);
+    assert_eq!(
+        fm.variables.get("input").unwrap().hint.as_deref(),
+        Some("hello")
+    );
+    let path = fm.variables.get("path").unwrap();
+    assert_eq!(path.default.as_deref(), Some("."));
+    assert_eq!(path.hint.as_deref(), Some("where to copy"));
+}
+
+#[test]
 fn parses_frontmatter_variable_block_suggestions() {
     let content = r#"---
 variables:
@@ -121,6 +143,23 @@ fn parses_all_variable_forms() {
     assert_eq!(
         vars[2].source,
         VariableSource::Command("rg . --files".to_string())
+    );
+}
+
+#[test]
+fn parses_inline_hint_as_hint_not_command() {
+    let vars = parse_variables("echo \"<@input:@hello> world\"");
+    assert_eq!(vars.len(), 1);
+    assert_eq!(vars[0].name, "input");
+    assert_eq!(vars[0].source, VariableSource::Hint("hello".to_string()));
+}
+
+#[test]
+fn inline_hint_preserves_spaces_and_at_signs() {
+    let vars = parse_variables("git clone <@repo:@user@host: path>");
+    assert_eq!(
+        vars[0].source,
+        VariableSource::Hint("user@host: path".to_string())
     );
 }
 

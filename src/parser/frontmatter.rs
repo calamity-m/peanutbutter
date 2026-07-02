@@ -134,6 +134,7 @@ fn parse_variable_block(lines: &[&str]) -> (BTreeMap<String, VariableSpec>, usiz
                             spec.suggestions = parse_inline_list(fval);
                         }
                         "command" => spec.command = Some(strip_quotes(fval)),
+                        "hint" => spec.hint = Some(strip_quotes(fval)),
                         _ => {}
                     }
                 } else if fkey == "suggestions" {

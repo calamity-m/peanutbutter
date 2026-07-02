@@ -34,6 +34,10 @@ const VARIABLE_SPEC_KEYS: &[(&str, &str)] = &[
         "command",
         "Shell command whose stdout lines are used as suggestions",
     ),
+    (
+        "hint",
+        "Ghost text shown while the prompt input is empty; never becomes the value",
+    ),
 ];
 
 pub(super) fn compute_completions(
@@ -196,6 +200,9 @@ pub(super) fn variable_spec_summary(spec: &crate::domain::VariableSpec) -> Strin
     }
     if let Some(cmd) = &spec.command {
         parts.push(format!("command: `{cmd}`"));
+    }
+    if let Some(hint) = &spec.hint {
+        parts.push(format!("hint: `{hint}`"));
     }
     if parts.is_empty() {
         "free-form input".to_string()

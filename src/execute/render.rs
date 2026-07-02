@@ -413,6 +413,7 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
             snippet.body(),
             &values,
             Some(prompt.current_variable().name.as_str()),
+            prompt.hint.as_deref(),
             &self.theme,
         )
     }

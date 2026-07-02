@@ -53,6 +53,9 @@ pub struct VariableSpec {
     pub suggestions: Vec<String>,
     /// Shell command whose stdout lines are used as suggestions.
     pub command: Option<String>,
+    /// Ghost text shown while the prompt input is empty. Unlike `default`, a
+    /// hint is display-only guidance and never becomes the variable's value.
+    pub hint: Option<String>,
 }
 
 /// How a template variable `<@name[:source]>` should be filled.
@@ -65,6 +68,9 @@ pub enum VariableSource {
     Command(String),
     /// Pre-populated default value (`<@name:?default>`); can be overridden.
     Default(CommandTemplate),
+    /// Display-only ghost text (`<@name:@hint>`) shown while the input is
+    /// empty; accepting without typing yields an empty value, never the hint.
+    Hint(String),
 }
 
 /// A single `<@name[:source]>` placeholder parsed from a snippet body.

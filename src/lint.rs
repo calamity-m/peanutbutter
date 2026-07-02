@@ -892,4 +892,34 @@ mod dependent_tests {
             .collect();
         assert_eq!(warnings.len(), 1, "got {:?}", result.findings);
     }
+
+    #[test]
+    fn hint_placeholder_is_not_a_command_and_stays_free_form_upstream() {
+        let root = temp_dir("hint-placeholder");
+        // `<@a:@echo hi>` is a hint, so it must not trip the inline-command
+        // lints, but it is still an unconstrained upstream for `:raw` splices.
+        fs::write(
+            root.join("snippets.md"),
+            "## Demo\n\n```bash\n<@a:@echo hi> <@b:?<#a:raw>>\n```\n",
+        )
+        .unwrap();
+        let result = lint(root);
+        assert!(
+            !result
+                .findings
+                .iter()
+                .any(|f| f.code == CODE_STATIC_INLINE_COMMAND
+                    || f.code == CODE_INVALID_DEPENDENT_REFERENCE),
+            "got {:?}",
+            result.findings
+        );
+        assert!(
+            result
+                .findings
+                .iter()
+                .any(|f| f.code == CODE_RAW_DEFAULT_UNTRUSTED_UPSTREAM),
+            "got {:?}",
+            result.findings
+        );
+    }
 }

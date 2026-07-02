@@ -58,6 +58,8 @@ Each variable spec may include:
 - `default` — pre-populates the prompt input.
 - `suggestions` — fixed suggestion values.
 - `command` — shell command whose stdout lines become suggestions.
+- `hint` — ghost text shown while the prompt input is empty; display-only,
+  never part of the value.
 
 These specs apply only to snippets in the same markdown file. They do not
 apply to other files. The peanutbutter LSP can refactor between inline
@@ -181,6 +183,18 @@ echo <@message>
 grep <@pattern> <@file>
 ```
 
+The source variants at a glance:
+
+| Form                | Meaning            | Behavior when accepted without typing        |
+| ------------------- | ------------------ | -------------------------------------------- |
+| `<@name>`           | free-form input    | empty value                                  |
+| `<@name:@hint>`     | ghost hint         | empty value; hint is display-only            |
+| `<@name:?default>`  | editable pre-fill  | the default becomes the value                |
+| `<@name:command>`   | suggestion command | selected suggestion (or empty with none)     |
+
+Inside defaults and suggestion commands, `<#name>` and `<#name:raw>` reference
+earlier confirmed values — see [Dependent Variables](#dependent-variables).
+
 ### Free-form Input
 
 ```text
@@ -197,6 +211,35 @@ Example:
 ```sh
 echo <@input>
 ```
+
+### Hint
+
+```text
+<@name:@hint>
+```
+
+Shows `hint` as ghost text in the prompt while the input is empty. The hint is
+guidance only: as soon as the user types, the typed input replaces it, and
+clearing the input back to empty shows it again. Accepting the prompt without
+typing substitutes an **empty** value — the hint never reaches the rendered
+command.
+
+Example:
+
+```sh
+echo "<@input:@hello> world"
+```
+
+Accepting `input` without typing renders `echo " world"`. Compare with the
+default form below, where accepting `<@input:?hello>` renders
+`echo "hello world"`.
+
+Hints can also come from a reusable spec (`variables.<name>.hint` in
+frontmatter or `[variables.<name>] hint = "..."` in config) for free-form
+placeholders. An inline hint takes precedence over reusable specs. `hint` is
+independent from `default`: if both are configured, the default pre-fills the
+editable buffer and the hint only becomes visible if the user clears it. Hints
+are not suggestions and never appear as selectable suggestion rows.
 
 ### Default Value
 
@@ -271,10 +314,15 @@ free-form placeholders such as `<@http_method>`.
 Frontmatter-defined variables can also provide defaults or suggestions for
 free-form placeholders in the same file. Resolution order is:
 
-1. Inline placeholder source (`<@target:?world>` or `<@target:command>`).
+1. Inline placeholder source (`<@target:?world>`, `<@target:@hint>`, or
+   `<@target:command>`).
 2. File-local frontmatter spec for that variable.
 3. Config-defined variable spec.
 4. Built-in suggestions for `file` and `directory`.
+
+An inline hint only supplies the ghost text; suggestions and defaults for that
+placeholder still resolve through the frontmatter/config/built-in chain as if
+it were free-form.
 
 File-local specs overlay config-defined specs by field. For example, if
 frontmatter defines only `default` and config defines `suggestions`, the prompt

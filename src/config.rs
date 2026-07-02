@@ -965,6 +965,18 @@ suggestions = ["GET", "POST"]
     }
 
     #[test]
+    fn variable_input_hint_deserializes() {
+        let raw = r#"
+[variables.input]
+hint = "hello"
+"#;
+        let parsed: FileConfig = toml::from_str(raw).unwrap();
+        let variable = parsed.variables.get("input").unwrap();
+        assert_eq!(variable.hint.as_deref(), Some("hello"));
+        assert_eq!(variable.default, None);
+    }
+
+    #[test]
     fn variable_input_command_only_deserializes() {
         let raw = r#"
 [variables.file]
