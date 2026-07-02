@@ -1,7 +1,11 @@
 //! State and key handling for the interactive settings editor.
 
 use crate::config::{AppConfig, FuzzyWeights, SearchConfig, Theme};
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crate::keybinds::{
+    SettingsGlobalAction, SettingsKeymap, SettingsListAction, SettingsSearchAction,
+    SettingsTunerAction, TextEntry, is_emergency_cancel,
+};
+use crossterm::event::KeyEvent;
 use std::path::PathBuf;
 
 /// The high-level screen currently shown by `pb settings`.
@@ -172,10 +176,12 @@ pub(crate) struct SettingsApp {
     status: Option<String>,
     should_quit: bool,
     confirm_quit: bool,
+    keymap: SettingsKeymap,
 }
 
 impl SettingsApp {
-    /// Build a settings state from the resolved application config.
+    /// Build a settings state from the resolved application config. Keybind
+    /// resolution warnings surface as the initial status message.
     pub(crate) fn new(config: &AppConfig) -> Self {
         let themes = Theme::selectable(&config.paths.config_file);
         let theme_name = crate::config::resolved_theme_name(&config.paths.config_file);
@@ -183,6 +189,8 @@ impl SettingsApp {
             .iter()
             .position(|(name, _)| *name == theme_name)
             .unwrap_or(0);
+        let status = (!config.keybinds.warnings.is_empty())
+            .then(|| format!("keybind config: {}", config.keybinds.warnings.join("; ")));
         Self {
             screen: Screen::Section,
             section_selected: 0,
@@ -195,10 +203,16 @@ impl SettingsApp {
             theme_original: theme_selected,
             paths: config.paths.snippet_roots.clone(),
             paths_selected: 0,
-            status: None,
+            status,
             should_quit: false,
             confirm_quit: false,
+            keymap: config.keybinds.settings.clone(),
         }
+    }
+
+    /// Resolved keybinds driving this editor; render derives help text here.
+    pub(crate) fn keymap(&self) -> &SettingsKeymap {
+        &self.keymap
     }
 
     /// Currently displayed screen.
@@ -318,12 +332,16 @@ impl SettingsApp {
     }
 
     /// Apply a key event. Returns true when save was requested.
+    ///
+    /// `Ctrl+C` is the unconditional emergency cancel and the global `quit`
+    /// action is resolved before screen dispatch, so both keep working even
+    /// when a screen's back-out bindings are fully unbound.
     pub(crate) fn handle_key(&mut self, key: KeyEvent) -> bool {
-        if key.modifiers.contains(KeyModifiers::CONTROL) && matches!(key.code, KeyCode::Char('c')) {
+        if is_emergency_cancel(&key) {
             self.should_quit = true;
             return false;
         }
-        if matches!(key.code, KeyCode::Char('q') | KeyCode::Char('Q')) {
+        if self.keymap.global.action_for(&key) == Some(SettingsGlobalAction::Quit) {
             return self.handle_quit_key();
         }
         self.confirm_quit = false;
@@ -341,22 +359,28 @@ impl SettingsApp {
             self.should_quit = true;
         } else {
             self.confirm_quit = true;
-            self.status =
-                Some("unsaved changes — press q again to discard, enter to save".to_string());
+            let quit_hint = self
+                .keymap
+                .global
+                .hint(SettingsGlobalAction::Quit)
+                .unwrap_or_else(|| "q".to_string());
+            self.status = Some(format!(
+                "unsaved changes — press {quit_hint} again to discard, enter to save"
+            ));
         }
         false
     }
 
     fn handle_section_key(&mut self, key: KeyEvent) -> bool {
-        match key.code {
-            KeyCode::Esc | KeyCode::Backspace => self.should_quit = true,
-            KeyCode::Up | KeyCode::Char('k') => {
+        match self.keymap.list.resolve(&key, TextEntry::None) {
+            Some(SettingsListAction::Back) => self.should_quit = true,
+            Some(SettingsListAction::MoveUp) => {
                 self.section_selected = self.section_selected.saturating_sub(1)
             }
-            KeyCode::Down | KeyCode::Char('j') => {
+            Some(SettingsListAction::MoveDown) => {
                 self.section_selected = (self.section_selected + 1).min(2)
             }
-            KeyCode::Enter => {
+            Some(SettingsListAction::Select) => {
                 self.screen = match self.section_selected {
                     0 => Screen::Search,
                     1 => Screen::Theme,
@@ -364,101 +388,122 @@ impl SettingsApp {
                 };
                 self.status = None;
             }
-            _ => {}
+            Some(SettingsListAction::Reset) | None => {}
         }
         false
     }
 
     fn handle_paths_key(&mut self, key: KeyEvent) -> bool {
         let max = self.paths.len().saturating_sub(1);
-        match key.code {
-            KeyCode::Esc | KeyCode::Backspace => {
+        match self.keymap.list.resolve(&key, TextEntry::None) {
+            Some(SettingsListAction::Back) => {
                 self.screen = Screen::Section;
                 self.status = None;
             }
-            KeyCode::Up | KeyCode::Char('k') => {
+            Some(SettingsListAction::MoveUp) => {
                 self.paths_selected = self.paths_selected.saturating_sub(1)
             }
-            KeyCode::Down | KeyCode::Char('j') => {
+            Some(SettingsListAction::MoveDown) => {
                 self.paths_selected = (self.paths_selected + 1).min(max)
             }
-            _ => {}
+            Some(SettingsListAction::Select | SettingsListAction::Reset) | None => {}
         }
         false
     }
 
     fn handle_theme_key(&mut self, key: KeyEvent) -> bool {
         let max = self.themes.len().saturating_sub(1);
-        match key.code {
-            KeyCode::Esc | KeyCode::Backspace => {
+        match self.keymap.list.resolve(&key, TextEntry::None) {
+            Some(SettingsListAction::Back) => {
                 self.screen = Screen::Section;
                 self.status = None;
             }
-            KeyCode::Up | KeyCode::Char('k') => {
+            Some(SettingsListAction::MoveUp) => {
                 self.theme_selected = self.theme_selected.saturating_sub(1)
             }
-            KeyCode::Down | KeyCode::Char('j') => {
+            Some(SettingsListAction::MoveDown) => {
                 self.theme_selected = (self.theme_selected + 1).min(max)
             }
-            KeyCode::Char('r') | KeyCode::Char('R') => {
+            Some(SettingsListAction::Reset) => {
                 self.theme_selected = 0;
                 return true;
             }
-            KeyCode::Enter => return true,
-            _ => {}
+            Some(SettingsListAction::Select) => return true,
+            None => {}
         }
         false
     }
 
     fn handle_search_key(&mut self, key: KeyEvent) -> bool {
-        match key.code {
-            KeyCode::Esc | KeyCode::Backspace => self.screen = Screen::Section,
-            KeyCode::Up | KeyCode::Char('k') => {
+        match self.keymap.search.resolve(&key, TextEntry::None) {
+            Some(SettingsSearchAction::Back) => self.screen = Screen::Section,
+            Some(SettingsSearchAction::MoveUp) => {
                 self.search_selected = self.search_selected.saturating_sub(1)
             }
-            KeyCode::Down | KeyCode::Char('j') => {
+            Some(SettingsSearchAction::MoveDown) => {
                 self.search_selected = (self.search_selected + 1).min(1)
             }
-            KeyCode::Enter => {
+            Some(SettingsSearchAction::Select) => {
                 self.field_selected = 0;
-                self.screen = Screen::Tuner(if self.search_selected == 0 {
-                    TunerGroup::Frecency
-                } else {
-                    TunerGroup::Fuzzy
-                });
+                self.screen = Screen::Tuner(self.selected_search_group());
             }
-            _ => {}
+            Some(SettingsSearchAction::Reset) => {
+                self.reset_group(self.selected_search_group());
+                return true;
+            }
+            None => {}
         }
         false
     }
 
     fn handle_tuner_key(&mut self, key: KeyEvent) -> bool {
-        match key.code {
-            KeyCode::Esc | KeyCode::Backspace => {
+        match self.keymap.tuner.resolve(&key, TextEntry::None) {
+            Some(SettingsTunerAction::Back) => {
                 self.screen = Screen::Search;
                 self.status = None;
             }
-            KeyCode::Up | KeyCode::Char('k') => {
+            Some(SettingsTunerAction::MoveUp) => {
                 self.field_selected = self.field_selected.saturating_sub(1)
             }
-            KeyCode::Down | KeyCode::Char('j') => {
+            Some(SettingsTunerAction::MoveDown) => {
                 let max = self.current_fields().len().saturating_sub(1);
                 self.field_selected = (self.field_selected + 1).min(max);
             }
-            KeyCode::Left | KeyCode::Char('-') => self.adjust_selected(-1),
-            KeyCode::Right | KeyCode::Char('+') | KeyCode::Char('=') => self.adjust_selected(1),
-            KeyCode::Char('r') | KeyCode::Char('R') => {
+            Some(SettingsTunerAction::Decrease) => self.adjust_selected(-1),
+            Some(SettingsTunerAction::Increase) => self.adjust_selected(1),
+            Some(SettingsTunerAction::Reset) => {
                 self.reset_current_group();
                 return true;
             }
-            KeyCode::Enter => return true,
-            _ => {}
+            Some(SettingsTunerAction::Save) => return true,
+            None => {}
         }
         false
     }
 
+    fn selected_search_group(&self) -> TunerGroup {
+        if self.search_selected == 0 {
+            TunerGroup::Frecency
+        } else {
+            TunerGroup::Fuzzy
+        }
+    }
+
     fn reset_current_group(&mut self) {
         for field in self.current_fields_mut() {
+            field.value = field.default;
+        }
+        self.status = Some("reset to defaults".to_string());
+    }
+
+    /// Reset one group's fields to defaults (used from the search chooser,
+    /// where the tuner screen is not active).
+    fn reset_group(&mut self, group: TunerGroup) {
+        let fields = match group {
+            TunerGroup::Frecency => &mut self.frecency_fields,
+            TunerGroup::Fuzzy => &mut self.fuzzy_fields,
+        };
+        for field in fields {
             field.value = field.default;
         }
         self.status = Some("reset to defaults".to_string());
@@ -906,6 +951,153 @@ mod tests {
         assert!(app.handle_key(key(KeyCode::Char('r'))));
         assert_eq!(app.theme_selected(), 0);
         assert_eq!(app.theme_selected_name(), "default");
+    }
+
+    fn config_with_keybinds(raw: &str) -> AppConfig {
+        let value: toml::Value = toml::from_str(raw).unwrap();
+        let mut config = test_config();
+        config.keybinds = crate::keybinds::Keymaps::resolve(value.get("keybinds"));
+        config
+    }
+
+    #[test]
+    fn remapped_quit_replaces_default() {
+        let mut app = SettingsApp::new(&config_with_keybinds(
+            r#"
+[keybinds.settings.global]
+quit = ["ctrl+q"]
+"#,
+        ));
+        app.handle_key(key(KeyCode::Char('q')));
+        assert!(!app.should_quit(), "replaced default must be inert");
+        app.handle_key(KeyEvent::new(
+            KeyCode::Char('q'),
+            crossterm::event::KeyModifiers::CONTROL,
+        ));
+        assert!(app.should_quit());
+    }
+
+    #[test]
+    fn remapped_navigation_and_back_apply_on_list_screens() {
+        let mut app = SettingsApp::new(&config_with_keybinds(
+            r#"
+[keybinds.settings.list]
+move_down = ["ctrl+n"]
+back = ["ctrl+o"]
+"#,
+        ));
+        let ctrl = crossterm::event::KeyModifiers::CONTROL;
+        app.handle_key(KeyEvent::new(KeyCode::Char('n'), ctrl));
+        assert_eq!(app.section_selected(), 1);
+        // Replaced defaults are inert.
+        app.handle_key(key(KeyCode::Down));
+        assert_eq!(app.section_selected(), 1);
+        app.handle_key(key(KeyCode::Char('j')));
+        assert_eq!(app.section_selected(), 1);
+        // Remapped back quits from the section screen.
+        app.handle_key(KeyEvent::new(KeyCode::Char('o'), ctrl));
+        assert!(app.should_quit());
+    }
+
+    #[test]
+    fn search_screen_reset_restores_defaults_and_requests_save() {
+        let mut app = SettingsApp::new(&{
+            let mut config = test_config();
+            config.search.frecency_weight = 900.0;
+            config
+        });
+        app.handle_key(key(KeyCode::Enter));
+        assert_eq!(app.screen(), &Screen::Search);
+        assert!(app.handle_key(key(KeyCode::Char('r'))));
+        assert_eq!(
+            app.frecency_fields[3].value,
+            SearchConfig::default().frecency_weight
+        );
+    }
+
+    #[test]
+    fn remapped_tuner_adjust_reset_and_save() {
+        let mut app = SettingsApp::new(&config_with_keybinds(
+            r#"
+[keybinds.settings.tuner]
+increase = ["ctrl+i"]
+decrease = ["ctrl+d"]
+reset = ["f6"]
+save = ["f7"]
+back = ["f8"]
+"#,
+        ));
+        let ctrl = crossterm::event::KeyModifiers::CONTROL;
+        app.handle_key(key(KeyCode::Enter));
+        app.handle_key(key(KeyCode::Enter));
+        assert_eq!(app.screen(), &Screen::Tuner(TunerGroup::Frecency));
+
+        let original = app.frecency_fields[0].value;
+        app.handle_key(KeyEvent::new(KeyCode::Char('i'), ctrl));
+        assert!(app.frecency_fields[0].value > original);
+        app.handle_key(KeyEvent::new(KeyCode::Char('d'), ctrl));
+        assert_eq!(app.frecency_fields[0].value, original);
+        // Replaced default is inert.
+        app.handle_key(key(KeyCode::Right));
+        assert_eq!(app.frecency_fields[0].value, original);
+
+        app.handle_key(KeyEvent::new(KeyCode::Char('i'), ctrl));
+        assert!(app.handle_key(key(KeyCode::F(6))), "reset requests save");
+        assert_eq!(app.frecency_fields[0].value, app.frecency_fields[0].default);
+        assert!(app.handle_key(key(KeyCode::F(7))), "save key requests save");
+        assert!(!app.handle_key(key(KeyCode::Enter)), "old save key inert");
+
+        app.handle_key(key(KeyCode::F(8)));
+        assert_eq!(app.screen(), &Screen::Search);
+    }
+
+    #[test]
+    fn fully_unbound_back_and_quit_still_exit_via_ctrl_c() {
+        let mut app = SettingsApp::new(&config_with_keybinds(
+            r#"
+[keybinds.settings.global]
+quit = []
+
+[keybinds.settings.list]
+back = []
+"#,
+        ));
+        app.handle_key(key(KeyCode::Char('q')));
+        app.handle_key(key(KeyCode::Esc));
+        app.handle_key(key(KeyCode::Backspace));
+        assert!(!app.should_quit(), "unbound back/quit must be inert");
+        app.handle_key(KeyEvent::new(
+            KeyCode::Char('c'),
+            crossterm::event::KeyModifiers::CONTROL,
+        ));
+        assert!(app.should_quit(), "ctrl+c is the reserved escape hatch");
+    }
+
+    #[test]
+    fn ctrl_c_quits_with_unsaved_changes_without_confirmation() {
+        let mut app = SettingsApp::new(&test_config());
+        app.handle_key(key(KeyCode::Enter));
+        app.handle_key(key(KeyCode::Enter));
+        app.handle_key(key(KeyCode::Right));
+        assert!(app.frecency_fields[0].changed());
+        app.handle_key(KeyEvent::new(
+            KeyCode::Char('c'),
+            crossterm::event::KeyModifiers::CONTROL,
+        ));
+        assert!(app.should_quit());
+    }
+
+    #[test]
+    fn keybind_warnings_surface_as_initial_status() {
+        let app = SettingsApp::new(&config_with_keybinds(
+            r#"
+[keybinds.settings.list]
+back = ["hyper+x"]
+"#,
+        ));
+        let status = app.status().expect("warnings surface as status");
+        assert!(status.contains("keybind config:"), "status: {status}");
+        assert!(status.contains("invalid key"), "status: {status}");
     }
 
     fn temp_config_file(prefix: &str, contents: &str) -> std::path::PathBuf {

@@ -273,6 +273,41 @@ mod tests {
     }
 
     #[test]
+    fn save_preserves_keybinds_tables_byte_for_byte() {
+        // Pins the persistence guarantee for hand-written [keybinds.*] tables:
+        // a settings save must never clobber or reformat them.
+        let root = temp_dir("keybinds-preserve");
+        let config = root.join("config.toml");
+        let keybinds_block = "\n# my remaps\n[keybinds.execute.select]\ncycle_mode = [\"ctrl+n\"]\n\n[keybinds.settings.tuner]\nincrease = [\"right\", \"plus\"]\n\n[keybinds.new.confirm_tokens]\ntoggle_variable = [\"space\"]\n";
+        fs::write(
+            &config,
+            format!("[search]\nfrecency_weight = 250.0\n{keybinds_block}"),
+        )
+        .unwrap();
+
+        save_changed_fields(
+            &config,
+            [field(
+                &["search"],
+                "frecency_weight",
+                FieldKind::Float,
+                300.0,
+                250.0,
+            )],
+        )
+        .unwrap();
+        save_theme_name(&config, "nord").unwrap();
+
+        let saved = fs::read_to_string(&config).unwrap();
+        assert!(saved.contains("frecency_weight = 300.0"));
+        assert!(saved.contains("name = \"nord\""));
+        assert!(
+            saved.contains(keybinds_block),
+            "keybinds tables must survive a save byte-for-byte: {saved}"
+        );
+    }
+
+    #[test]
     fn save_theme_name_preserves_other_theme_keys() {
         let root = temp_dir("theme-preserve");
         let config = root.join("config.toml");

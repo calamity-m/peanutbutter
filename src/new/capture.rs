@@ -5,6 +5,10 @@
 //! point wraps them with crossterm/ratatui plumbing.
 
 use crate::config::Theme;
+use crate::keybinds::{
+    ContextBindings, NewConfirmNameAction, NewConfirmRenameAction, NewConfirmTokensAction,
+    NewKeymap, NewPickerAction, TextEntry, help_hint, help_move_hint, is_emergency_cancel,
+};
 use crate::new::capture_heuristics::{Span, TokenCandidate};
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
@@ -301,6 +305,11 @@ pub struct CaptureRun<'a> {
     /// picks one in a dedicated stage after accepting; a single entry is used
     /// directly with no extra prompt.
     pub targets: Vec<TargetChoice>,
+    /// Resolved keybinds for the capture screens.
+    pub keymap: &'a NewKeymap,
+    /// Keybind resolution warnings, shown as TUI status (never stdout — `pb
+    /// new` prints its result there).
+    pub keybind_warnings: &'a [String],
 }
 
 /// Result of a full capture session.
@@ -346,7 +355,11 @@ pub fn run_capture(run: CaptureRun<'_>) -> io::Result<CaptureOutcome> {
         theme,
         viewport_height,
         targets,
+        keymap,
+        keybind_warnings,
     } = run;
+    let warning_status = (!keybind_warnings.is_empty())
+        .then(|| format!("keybind config: {}", keybind_warnings.join("; ")));
 
     let _raw = RawModeGuard::enter()?;
     let backend = CrosstermBackend::new(io::stdout());
@@ -367,7 +380,14 @@ pub fn run_capture(run: CaptureRun<'_>) -> io::Result<CaptureOutcome> {
         } else {
             let entries = history.clone().unwrap_or_default();
             let mut state = HistoryPickerState::new(entries);
-            match drive_picker(&mut terminal, &mut state, theme, &mut viewport_top)? {
+            match drive_picker(
+                &mut terminal,
+                &mut state,
+                theme,
+                &mut viewport_top,
+                keymap,
+                warning_status.as_deref(),
+            )? {
                 PickOutcome::Cancel => {
                     cleanup_terminal(viewport_top)?;
                     return Ok(CaptureOutcome::Cancelled);
@@ -378,17 +398,19 @@ pub fn run_capture(run: CaptureRun<'_>) -> io::Result<CaptureOutcome> {
 
         let candidates = crate::new::capture_heuristics::detect_variables(&raw_command);
         let mut state = TokenConfirmState::new(name_opt.clone(), raw_command.clone(), candidates);
+        state.hint = warning_status.clone();
 
         // Stage 2 + 3 loop so the target picker can step back to confirm.
         loop {
-            let accept = match drive_confirm(&mut terminal, &mut state, theme, &mut viewport_top)? {
-                ConfirmOutcome::Cancel => {
-                    cleanup_terminal(viewport_top)?;
-                    return Ok(CaptureOutcome::Cancelled);
-                }
-                ConfirmOutcome::Back => continue 'outer,
-                ConfirmOutcome::Accept(accept) => accept,
-            };
+            let accept =
+                match drive_confirm(&mut terminal, &mut state, theme, &mut viewport_top, keymap)? {
+                    ConfirmOutcome::Cancel => {
+                        cleanup_terminal(viewport_top)?;
+                        return Ok(CaptureOutcome::Cancelled);
+                    }
+                    ConfirmOutcome::Back => continue 'outer,
+                    ConfirmOutcome::Accept(accept) => accept,
+                };
 
             // Stage 3: target file picker. A single candidate is used directly.
             let target = if targets.len() == 1 {
@@ -396,7 +418,14 @@ pub fn run_capture(run: CaptureRun<'_>) -> io::Result<CaptureOutcome> {
             } else {
                 let labels: Vec<String> = targets.iter().map(|t| t.label.clone()).collect();
                 let mut picker = HistoryPickerState::new(labels);
-                match drive_target_picker(&mut terminal, &mut picker, theme, &mut viewport_top)? {
+                match drive_target_picker(
+                    &mut terminal,
+                    &mut picker,
+                    theme,
+                    &mut viewport_top,
+                    keymap,
+                    warning_status.as_deref(),
+                )? {
                     TargetPickOutcome::Cancel => {
                         cleanup_terminal(viewport_top)?;
                         return Ok(CaptureOutcome::Cancelled);
@@ -443,7 +472,11 @@ fn drive_picker(
     state: &mut HistoryPickerState,
     theme: &Theme,
     viewport_top: &mut Option<u16>,
+    keymap: &NewKeymap,
+    status: Option<&str>,
 ) -> io::Result<PickOutcome> {
+    let title = picker_title("pick a command", status);
+    let footer = picker_footer(&keymap.picker, "pick", "cancel");
     loop {
         terminal.draw(|frame| {
             *viewport_top = viewport_top.or(Some(frame.area().y));
@@ -452,8 +485,8 @@ fn drive_picker(
                 frame.buffer_mut(),
                 state,
                 theme,
-                "pick a command",
-                "↑↓/jk move   enter pick   type to filter   esc cancel",
+                &title,
+                &footer,
             );
         })?;
         if !event::poll(Duration::from_millis(250))? {
@@ -465,12 +498,43 @@ fn drive_picker(
         if key.kind == KeyEventKind::Release {
             continue;
         }
-        match picker_key(state, key) {
+        match picker_key(state, key, &keymap.picker) {
             PickerAction::Continue => {}
             PickerAction::Cancel => return Ok(PickOutcome::Cancel),
             PickerAction::Pick(s) => return Ok(PickOutcome::Pick(s)),
         }
     }
+}
+
+fn picker_title(title: &str, status: Option<&str>) -> String {
+    match status {
+        Some(status) => format!("{title} · {status}"),
+        None => title.to_string(),
+    }
+}
+
+/// Build a picker footer from the resolved bindings, omitting unbound
+/// actions. The "type to filter" hint is inherent to the widget, not a
+/// binding.
+fn picker_footer(
+    keys: &ContextBindings<NewPickerAction>,
+    accept_label: &str,
+    cancel_label: &str,
+) -> String {
+    [
+        help_move_hint(
+            keys.hint(NewPickerAction::MoveUp),
+            keys.hint(NewPickerAction::MoveDown),
+            "move",
+        ),
+        help_hint(keys.hint(NewPickerAction::Accept), accept_label),
+        Some("type to filter".to_string()),
+        help_hint(keys.hint(NewPickerAction::CancelOrBack), cancel_label),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>()
+    .join("   ")
 }
 
 /// Outcome of the target-file pick stage.
@@ -490,41 +554,36 @@ enum TargetPickAction {
     Pick(String),
 }
 
-fn target_picker_key(state: &mut HistoryPickerState, key: KeyEvent) -> TargetPickAction {
-    match key.code {
-        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            TargetPickAction::Cancel
-        }
-        KeyCode::Esc => TargetPickAction::Back,
-        KeyCode::Enter => match state.pick() {
+fn target_picker_key(
+    state: &mut HistoryPickerState,
+    key: KeyEvent,
+    keys: &ContextBindings<NewPickerAction>,
+) -> TargetPickAction {
+    if is_emergency_cancel(&key) {
+        return TargetPickAction::Cancel;
+    }
+    match keys.resolve(&key, TextEntry::WhenEmpty(state.filter().is_empty())) {
+        Some(NewPickerAction::Accept) => match state.pick() {
             Some(s) if !s.trim().is_empty() => TargetPickAction::Pick(s),
             _ => TargetPickAction::Continue,
         },
-        KeyCode::Up => {
+        Some(NewPickerAction::CancelOrBack) => TargetPickAction::Back,
+        Some(NewPickerAction::MoveUp) => {
             state.move_cursor(-1);
             TargetPickAction::Continue
         }
-        KeyCode::Down => {
+        Some(NewPickerAction::MoveDown) => {
             state.move_cursor(1);
             TargetPickAction::Continue
         }
-        KeyCode::Char('k') if key.modifiers.is_empty() && state.filter().is_empty() => {
-            state.move_cursor(-1);
-            TargetPickAction::Continue
-        }
-        KeyCode::Char('j') if key.modifiers.is_empty() && state.filter().is_empty() => {
-            state.move_cursor(1);
-            TargetPickAction::Continue
-        }
-        KeyCode::Backspace => {
+        Some(NewPickerAction::Backspace) => {
             state.pop_filter();
             TargetPickAction::Continue
         }
-        KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
-            state.append_filter(c);
+        None => {
+            filter_fallback(state, key);
             TargetPickAction::Continue
         }
-        _ => TargetPickAction::Continue,
     }
 }
 
@@ -533,7 +592,11 @@ fn drive_target_picker(
     state: &mut HistoryPickerState,
     theme: &Theme,
     viewport_top: &mut Option<u16>,
+    keymap: &NewKeymap,
+    status: Option<&str>,
 ) -> io::Result<TargetPickOutcome> {
+    let title = picker_title("pick a destination file", status);
+    let footer = picker_footer(&keymap.picker, "select", "back");
     loop {
         terminal.draw(|frame| {
             *viewport_top = viewport_top.or(Some(frame.area().y));
@@ -542,8 +605,8 @@ fn drive_target_picker(
                 frame.buffer_mut(),
                 state,
                 theme,
-                "pick a destination file",
-                "↑↓/jk move   enter select   type to filter   esc back",
+                &title,
+                &footer,
             );
         })?;
         if !event::poll(Duration::from_millis(250))? {
@@ -555,7 +618,7 @@ fn drive_target_picker(
         if key.kind == KeyEventKind::Release {
             continue;
         }
-        match target_picker_key(state, key) {
+        match target_picker_key(state, key, &keymap.picker) {
             TargetPickAction::Continue => {}
             TargetPickAction::Cancel => return Ok(TargetPickOutcome::Cancel),
             TargetPickAction::Back => return Ok(TargetPickOutcome::Back),
@@ -570,39 +633,46 @@ enum PickerAction {
     Pick(String),
 }
 
-fn picker_key(state: &mut HistoryPickerState, key: KeyEvent) -> PickerAction {
-    match key.code {
-        KeyCode::Esc => PickerAction::Cancel,
-        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => PickerAction::Cancel,
-        KeyCode::Enter => match state.pick() {
+/// Unresolved keys fall through to filter text entry, mirroring the widget's
+/// pre-keymap behavior (any unmodified or shifted printable char types).
+fn filter_fallback(state: &mut HistoryPickerState, key: KeyEvent) {
+    if let KeyCode::Char(c) = key.code
+        && !key.modifiers.contains(KeyModifiers::CONTROL)
+    {
+        state.append_filter(c);
+    }
+}
+
+fn picker_key(
+    state: &mut HistoryPickerState,
+    key: KeyEvent,
+    keys: &ContextBindings<NewPickerAction>,
+) -> PickerAction {
+    if is_emergency_cancel(&key) {
+        return PickerAction::Cancel;
+    }
+    match keys.resolve(&key, TextEntry::WhenEmpty(state.filter().is_empty())) {
+        Some(NewPickerAction::Accept) => match state.pick() {
             Some(s) if !s.trim().is_empty() => PickerAction::Pick(s),
             _ => PickerAction::Continue,
         },
-        KeyCode::Up => {
+        Some(NewPickerAction::CancelOrBack) => PickerAction::Cancel,
+        Some(NewPickerAction::MoveUp) => {
             state.move_cursor(-1);
             PickerAction::Continue
         }
-        KeyCode::Down => {
+        Some(NewPickerAction::MoveDown) => {
             state.move_cursor(1);
             PickerAction::Continue
         }
-        KeyCode::Char('k') if key.modifiers.is_empty() && state.filter().is_empty() => {
-            state.move_cursor(-1);
-            PickerAction::Continue
-        }
-        KeyCode::Char('j') if key.modifiers.is_empty() && state.filter().is_empty() => {
-            state.move_cursor(1);
-            PickerAction::Continue
-        }
-        KeyCode::Backspace => {
+        Some(NewPickerAction::Backspace) => {
             state.pop_filter();
             PickerAction::Continue
         }
-        KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
-            state.append_filter(c);
+        None => {
+            filter_fallback(state, key);
             PickerAction::Continue
         }
-        _ => PickerAction::Continue,
     }
 }
 
@@ -693,11 +763,12 @@ fn drive_confirm(
     state: &mut TokenConfirmState,
     theme: &Theme,
     viewport_top: &mut Option<u16>,
+    keymap: &NewKeymap,
 ) -> io::Result<ConfirmOutcome> {
     loop {
         terminal.draw(|frame| {
             *viewport_top = viewport_top.or(Some(frame.area().y));
-            render_confirm(frame.area(), frame.buffer_mut(), state, theme);
+            render_confirm(frame.area(), frame.buffer_mut(), state, theme, keymap);
         })?;
         if !event::poll(Duration::from_millis(250))? {
             continue;
@@ -708,7 +779,7 @@ fn drive_confirm(
         if key.kind == KeyEventKind::Release {
             continue;
         }
-        match confirm_key(state, key) {
+        match confirm_key(state, key, keymap) {
             ConfirmAction::Continue => {}
             ConfirmAction::Cancel => return Ok(ConfirmOutcome::Cancel),
             ConfirmAction::Back => return Ok(ConfirmOutcome::Back),
@@ -724,88 +795,96 @@ enum ConfirmAction {
     Accept(ConfirmAccept),
 }
 
-fn confirm_key(state: &mut TokenConfirmState, key: KeyEvent) -> ConfirmAction {
-    if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
+fn confirm_key(state: &mut TokenConfirmState, key: KeyEvent, keymap: &NewKeymap) -> ConfirmAction {
+    if is_emergency_cancel(&key) {
         return ConfirmAction::Cancel;
     }
     match state.focus {
-        Focus::Name => match key.code {
-            KeyCode::Esc => ConfirmAction::Cancel,
-            KeyCode::Enter => {
+        // The name field always accepts text, so plain-letter bindings are
+        // inert here by design (TextEntry::Always).
+        Focus::Name => match keymap.confirm_name.resolve(&key, TextEntry::Always) {
+            Some(NewConfirmNameAction::Cancel) => ConfirmAction::Cancel,
+            Some(NewConfirmNameAction::Accept) => {
                 if state.name.trim().is_empty() {
                     state.hint = Some("name required".to_string());
-                    ConfirmAction::Continue
                 } else {
                     state.focus = Focus::TokenList;
                     state.hint = None;
-                    ConfirmAction::Continue
                 }
+                ConfirmAction::Continue
             }
-            KeyCode::Backspace => {
+            Some(NewConfirmNameAction::Backspace) => {
                 state.name.pop();
                 ConfirmAction::Continue
             }
-            KeyCode::Tab | KeyCode::Down => {
+            Some(NewConfirmNameAction::CompleteOrFocusTokens) => {
                 state.focus = Focus::TokenList;
                 ConfirmAction::Continue
             }
-            KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
-                state.name.push(c);
+            None => {
+                if let KeyCode::Char(c) = key.code
+                    && !key.modifiers.contains(KeyModifiers::CONTROL)
+                {
+                    state.name.push(c);
+                }
                 ConfirmAction::Continue
             }
-            _ => ConfirmAction::Continue,
         },
-        Focus::TokenList => match key.code {
-            KeyCode::Esc => ConfirmAction::Cancel,
-            KeyCode::Char('b') => ConfirmAction::Back,
-            KeyCode::Up | KeyCode::Char('k') => {
+        Focus::TokenList => match keymap.confirm_tokens.resolve(&key, TextEntry::None) {
+            Some(NewConfirmTokensAction::Cancel) => ConfirmAction::Cancel,
+            Some(NewConfirmTokensAction::Back) => ConfirmAction::Back,
+            Some(NewConfirmTokensAction::MoveUp) => {
                 if state.cursor > 0 {
                     state.cursor -= 1;
                 }
                 ConfirmAction::Continue
             }
-            KeyCode::Down | KeyCode::Char('j') => {
+            Some(NewConfirmTokensAction::MoveDown) => {
                 if state.cursor + 1 < state.candidates.len() {
                     state.cursor += 1;
                 }
                 ConfirmAction::Continue
             }
-            KeyCode::Char(' ') => {
+            Some(NewConfirmTokensAction::ToggleVariable) => {
                 state.toggle_focused();
                 ConfirmAction::Continue
             }
-            KeyCode::Char('e') => {
+            Some(NewConfirmTokensAction::Rename) => {
                 state.start_rename();
                 ConfirmAction::Continue
             }
-            KeyCode::Char('n') => {
+            Some(NewConfirmTokensAction::EditName) => {
                 state.focus = Focus::Name;
                 ConfirmAction::Continue
             }
-            KeyCode::Enter => match state.try_accept() {
+            Some(NewConfirmTokensAction::Accept) => match state.try_accept() {
                 Some(payload) => ConfirmAction::Accept(payload),
                 None => ConfirmAction::Continue,
             },
-            _ => ConfirmAction::Continue,
+            None => ConfirmAction::Continue,
         },
-        Focus::TokenEdit => match key.code {
-            KeyCode::Esc => {
+        // The rename field always accepts text (TextEntry::Always).
+        Focus::TokenEdit => match keymap.confirm_rename.resolve(&key, TextEntry::Always) {
+            Some(NewConfirmRenameAction::Cancel) => {
                 state.cancel_rename();
                 ConfirmAction::Continue
             }
-            KeyCode::Enter => {
+            Some(NewConfirmRenameAction::Accept) => {
                 state.commit_rename();
                 ConfirmAction::Continue
             }
-            KeyCode::Backspace => {
+            Some(NewConfirmRenameAction::Backspace) => {
                 state.rename_buffer.pop();
                 ConfirmAction::Continue
             }
-            KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
-                state.rename_buffer.push(c);
+            None => {
+                if let KeyCode::Char(c) = key.code
+                    && !key.modifiers.contains(KeyModifiers::CONTROL)
+                {
+                    state.rename_buffer.push(c);
+                }
                 ConfirmAction::Continue
             }
-            _ => ConfirmAction::Continue,
         },
     }
 }
@@ -815,20 +894,63 @@ fn render_confirm(
     buf: &mut ratatui::buffer::Buffer,
     state: &TokenConfirmState,
     theme: &Theme,
+    keymap: &NewKeymap,
 ) {
     use ratatui::widgets::Widget;
 
     let footer = match state.focus {
-        Focus::Name => "type name   enter confirm   tab/↓ tokens   esc cancel".to_string(),
+        Focus::Name => confirm_footer_parts(vec![
+            Some("type name".to_string()),
+            help_hint(
+                keymap.confirm_name.hint(NewConfirmNameAction::Accept),
+                "confirm",
+            ),
+            help_hint(
+                keymap
+                    .confirm_name
+                    .hint(NewConfirmNameAction::CompleteOrFocusTokens),
+                "tokens",
+            ),
+            help_hint(
+                keymap.confirm_name.hint(NewConfirmNameAction::Cancel),
+                "cancel",
+            ),
+        ]),
         Focus::TokenList => {
-            let mut base = "space toggle   e rename   n name   ↑↓/jk move   enter accept   b back   esc cancel".to_string();
+            let tokens = &keymap.confirm_tokens;
+            let mut base = confirm_footer_parts(vec![
+                help_hint(
+                    tokens.hint(NewConfirmTokensAction::ToggleVariable),
+                    "toggle",
+                ),
+                help_hint(tokens.hint(NewConfirmTokensAction::Rename), "rename"),
+                help_hint(tokens.hint(NewConfirmTokensAction::EditName), "name"),
+                help_move_hint(
+                    tokens.hint(NewConfirmTokensAction::MoveUp),
+                    tokens.hint(NewConfirmTokensAction::MoveDown),
+                    "move",
+                ),
+                help_hint(tokens.hint(NewConfirmTokensAction::Accept), "accept"),
+                help_hint(tokens.hint(NewConfirmTokensAction::Back), "back"),
+                help_hint(tokens.hint(NewConfirmTokensAction::Cancel), "cancel"),
+            ]);
             if let Some(hint) = &state.hint {
                 base.push_str("   — ");
                 base.push_str(hint);
             }
             base
         }
-        Focus::TokenEdit => "type new name   enter commit   esc cancel".to_string(),
+        Focus::TokenEdit => confirm_footer_parts(vec![
+            Some("type new name".to_string()),
+            help_hint(
+                keymap.confirm_rename.hint(NewConfirmRenameAction::Accept),
+                "commit",
+            ),
+            help_hint(
+                keymap.confirm_rename.hint(NewConfirmRenameAction::Cancel),
+                "cancel",
+            ),
+        ]),
     };
     let content = crate::tui::chrome::Chrome {
         theme,
@@ -942,6 +1064,10 @@ fn render_confirm(
         }
         render_section(tokens_area, buf, rows);
     }
+}
+
+fn confirm_footer_parts(parts: Vec<Option<String>>) -> String {
+    parts.into_iter().flatten().collect::<Vec<_>>().join("   ")
 }
 
 fn truncate(s: &str, max: usize) -> String {
@@ -1071,8 +1197,22 @@ mod tests {
         KeyEvent::new(code, KeyModifiers::NONE)
     }
 
+    fn default_keymap() -> NewKeymap {
+        NewKeymap::default()
+    }
+
+    fn keymap_from(raw: &str) -> NewKeymap {
+        let value: toml::Value = toml::from_str(raw).unwrap();
+        crate::keybinds::Keymaps::resolve(value.get("keybinds")).new
+    }
+
+    fn ctrl(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::CONTROL)
+    }
+
     #[test]
     fn target_picker_enter_picks_filtered_entry() {
+        let keymap = default_keymap();
         let mut state = HistoryPickerState::new(vec![
             "work/db.md".to_string(),
             "personal/notes.md".to_string(),
@@ -1080,7 +1220,7 @@ mod tests {
         for c in "notes".chars() {
             state.append_filter(c);
         }
-        match target_picker_key(&mut state, key(KeyCode::Enter)) {
+        match target_picker_key(&mut state, key(KeyCode::Enter), &keymap.picker) {
             TargetPickAction::Pick(s) => assert_eq!(s, "personal/notes.md"),
             _ => panic!("expected pick"),
         }
@@ -1088,15 +1228,199 @@ mod tests {
 
     #[test]
     fn target_picker_esc_steps_back_ctrl_c_cancels() {
+        let keymap = default_keymap();
         let mut state = HistoryPickerState::new(vec!["a.md".to_string()]);
         assert!(matches!(
-            target_picker_key(&mut state, key(KeyCode::Esc)),
+            target_picker_key(&mut state, key(KeyCode::Esc), &keymap.picker),
             TargetPickAction::Back
         ));
-        let ctrl_c = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
         assert!(matches!(
-            target_picker_key(&mut state, ctrl_c),
+            target_picker_key(&mut state, ctrl(KeyCode::Char('c')), &keymap.picker),
             TargetPickAction::Cancel
         ));
+    }
+
+    #[test]
+    fn picker_letter_navigates_on_empty_filter_and_types_otherwise() {
+        let keymap = default_keymap();
+        let mut state =
+            HistoryPickerState::new(vec!["a".to_string(), "b".to_string(), "kite".to_string()]);
+        // Empty filter: `k` navigates.
+        picker_key(&mut state, key(KeyCode::Char('k')), &keymap.picker);
+        assert_eq!(state.cursor(), 2);
+        assert_eq!(state.filter(), "");
+        // Non-empty filter: `k` is text.
+        picker_key(&mut state, key(KeyCode::Char('i')), &keymap.picker);
+        picker_key(&mut state, key(KeyCode::Char('k')), &keymap.picker);
+        assert_eq!(state.filter(), "ik");
+        // Named keys still act mid-filter.
+        assert!(matches!(
+            picker_key(&mut state, key(KeyCode::Esc), &keymap.picker),
+            PickerAction::Cancel
+        ));
+    }
+
+    #[test]
+    fn remapped_plain_letter_picker_action_respects_text_rule() {
+        let keymap = keymap_from(
+            r#"
+[keybinds.new.picker]
+move_down = ["n"]
+"#,
+        );
+        let mut state = HistoryPickerState::new(vec!["one".to_string(), "two".to_string()]);
+        // Empty filter: remapped `n` navigates.
+        picker_key(&mut state, key(KeyCode::Char('n')), &keymap.picker);
+        assert_eq!(state.cursor(), 1);
+        assert_eq!(state.filter(), "");
+        // Replaced defaults are inert as actions; `j` types into the filter.
+        picker_key(&mut state, key(KeyCode::Char('j')), &keymap.picker);
+        assert_eq!(state.filter(), "j");
+        assert_eq!(state.cursor(), 0, "filter reset the cursor");
+        // With a non-empty filter, `n` is text again.
+        picker_key(&mut state, key(KeyCode::Char('n')), &keymap.picker);
+        assert_eq!(state.filter(), "jn");
+    }
+
+    #[test]
+    fn confirm_tokens_remapped_accept_toggle_rename_and_back() {
+        let keymap = keymap_from(
+            r#"
+[keybinds.new.confirm_tokens]
+accept = ["ctrl+a"]
+toggle_variable = ["t"]
+rename = ["f2"]
+back = ["ctrl+b"]
+"#,
+        );
+        let mut state = ssh_state();
+        state.focus = Focus::TokenList;
+        let was_selected = state.selected[0];
+        confirm_key(&mut state, key(KeyCode::Char('t')), &keymap);
+        assert_eq!(state.selected[0], !was_selected);
+        // Replaced default is inert.
+        confirm_key(&mut state, key(KeyCode::Char(' ')), &keymap);
+        assert_eq!(state.selected[0], !was_selected);
+
+        confirm_key(&mut state, key(KeyCode::F(2)), &keymap);
+        assert_eq!(state.focus, Focus::TokenEdit);
+        state.cancel_rename();
+
+        assert!(matches!(
+            confirm_key(&mut state, ctrl(KeyCode::Char('b')), &keymap),
+            ConfirmAction::Back
+        ));
+        assert!(matches!(
+            confirm_key(&mut state, ctrl(KeyCode::Char('a')), &keymap),
+            ConfirmAction::Accept(_)
+        ));
+        // Replaced accept default is inert.
+        assert!(matches!(
+            confirm_key(&mut state, key(KeyCode::Enter), &keymap),
+            ConfirmAction::Continue
+        ));
+    }
+
+    #[test]
+    fn confirm_name_remapped_complete_or_focus_tokens() {
+        let keymap = keymap_from(
+            r#"
+[keybinds.new.confirm_name]
+complete_or_focus_tokens = ["ctrl+t"]
+"#,
+        );
+        let mut state = ssh_state();
+        state.focus = Focus::Name;
+        confirm_key(&mut state, ctrl(KeyCode::Char('t')), &keymap);
+        assert_eq!(state.focus, Focus::TokenList);
+        // Replaced default is inert.
+        state.focus = Focus::Name;
+        confirm_key(&mut state, key(KeyCode::Tab), &keymap);
+        assert_eq!(state.focus, Focus::Name);
+    }
+
+    #[test]
+    fn plain_letter_bindings_stay_inert_in_text_widgets() {
+        // Plain letters can never be actions where text is always accepted.
+        let keymap = keymap_from(
+            r#"
+[keybinds.new.confirm_name]
+accept = ["a"]
+
+[keybinds.new.confirm_rename]
+cancel = ["z"]
+"#,
+        );
+        let mut state = ssh_state();
+        state.focus = Focus::Name;
+        state.name.clear();
+        confirm_key(&mut state, key(KeyCode::Char('a')), &keymap);
+        assert_eq!(state.name, "a", "letter must be typed, not accepted");
+        assert_eq!(state.focus, Focus::Name);
+
+        state.focus = Focus::TokenList;
+        state.cursor = 0;
+        state.start_rename();
+        confirm_key(&mut state, key(KeyCode::Char('z')), &keymap);
+        assert_eq!(state.focus, Focus::TokenEdit, "rename must not cancel");
+        assert!(state.rename_buffer.ends_with('z'), "letter must be typed");
+    }
+
+    #[test]
+    fn ctrl_c_cancels_from_every_capture_screen() {
+        let keymap = default_keymap();
+        let ctrl_c = ctrl(KeyCode::Char('c'));
+
+        let mut picker = HistoryPickerState::new(vec!["a".to_string()]);
+        assert!(matches!(
+            picker_key(&mut picker, ctrl_c, &keymap.picker),
+            PickerAction::Cancel
+        ));
+        assert!(matches!(
+            target_picker_key(&mut picker, ctrl_c, &keymap.picker),
+            TargetPickAction::Cancel
+        ));
+
+        for focus in [Focus::Name, Focus::TokenList, Focus::TokenEdit] {
+            let mut state = ssh_state();
+            state.focus = focus;
+            assert!(
+                matches!(
+                    confirm_key(&mut state, ctrl_c, &keymap),
+                    ConfirmAction::Cancel
+                ),
+                "ctrl+c must cancel from {focus:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn confirm_footers_derive_from_keymap() {
+        let keymap = keymap_from(
+            r#"
+[keybinds.new.confirm_tokens]
+toggle_variable = ["f9"]
+back = []
+"#,
+        );
+        let footer = confirm_footer_parts(vec![
+            help_hint(
+                keymap
+                    .confirm_tokens
+                    .hint(NewConfirmTokensAction::ToggleVariable),
+                "toggle",
+            ),
+            help_hint(
+                keymap.confirm_tokens.hint(NewConfirmTokensAction::Back),
+                "back",
+            ),
+        ]);
+        assert_eq!(footer, "f9 toggle");
+
+        let picker_help = picker_footer(&keymap.picker, "pick", "cancel");
+        assert_eq!(
+            picker_help,
+            "up/down move   enter pick   type to filter   esc cancel"
+        );
     }
 }

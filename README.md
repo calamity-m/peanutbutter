@@ -156,6 +156,10 @@ This file is optional. If it doesn't exist, peanutbutter uses built-in defaults.
 
 A fully commented example config lives at [examples/config.toml](examples/config.toml).
 
+### Keybinds
+
+The keys driving the `pb execute`, `pb settings`, and `pb new` TUIs are remappable through `[keybinds.execute.*]`, `[keybinds.settings.*]`, and `[keybinds.new.*]` tables in the config file. Each screen's help line reflects your remaps, invalid bindings show as a non-fatal warning inside the TUI, and `Ctrl+C` always cancels regardless of config. The commented reference in [examples/config.toml](examples/config.toml) (also shown by `pb docs config`) lists every action and its defaults.
+
 ### Snippet Paths
 
 By default, peanutbutter looks for snippets in `~/.config/peanutbutter/snippets/`. Additional directories can be added via the `PEANUTBUTTER_PATH` environment variable, using colon-separated paths (same convention as `$PATH`). Snippet paths can also be added via configuration

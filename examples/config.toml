@@ -120,24 +120,35 @@ error_fg = "red"
 # prompt_bg = "#61afef"
 # error_fg = "#e06c75"
 
-# Customizable keybinds for the `pb execute` TUI.
+# Customizable keybinds for the `pb execute`, `pb settings`, and `pb new`
+# TUIs.
 #
 # Each action takes an array of key chords. Omitted actions keep their
 # defaults, an empty array (`edit = []`) unbinds the action, and invalid
-# entries are reported as a status warning inside the TUI without breaking
+# entries are reported as a status warning inside the TUIs without breaking
 # the rest of the config.
 #
 # Key chord grammar: optional `ctrl+` / `alt+` / `shift+` modifiers followed
 # by a base key — a printable character or one of: enter, esc, backspace,
-# tab, backtab, up, down, left, right, pageup, pagedown, home, end, insert,
-# delete, f1..f12. `shift+tab` and `backtab` are the same chord. Chords like
-# alt+enter or shift+tab are best-effort: some terminals do not deliver them
-# as distinct key events.
+# tab, backtab, space, plus, up, down, left, right, pageup, pagedown, home,
+# end, insert, delete, f1..f12. `shift+tab` and `backtab` are the same chord;
+# `space` is the space bar and `plus` is the `+` character (a bare `"+"`
+# cannot be written because chords split on `+`). Chords like alt+enter or
+# shift+tab are best-effort: some terminals do not deliver them as distinct
+# key events.
 #
 # `ctrl+c` is reserved as an unconditional emergency cancel and cannot be
 # bound. If the same chord is bound to two actions in one context, the
 # earlier action (in the order shown below) keeps it and the duplicate is
 # ignored with a warning. The same chord may be reused across contexts.
+#
+# Plain letters and text entry: where a screen accepts typed text, bindings
+# made of a single unmodified printable character are limited so they cannot
+# eat your typing. In the `pb new` pickers, letters like `k`/`j` act as
+# bindings only while the filter is empty; once you have typed a filter they
+# are text. In widgets that always accept text (the `pb new` name field and
+# token rename field), plain-letter bindings never fire at all — they are
+# inert by design; use a modified or named chord there instead.
 #
 # The tables below list every action with its default binding.
 #
@@ -187,6 +198,60 @@ error_fg = "red"
 # complete_or_next = ["tab"]
 # previous_variable = ["shift+tab", "backtab"]
 # accept = ["enter"]
+#
+# [keybinds.settings.global]      # checked before screen dispatch
+# quit = ["q", "shift+q"]         # quit (asks to confirm unsaved changes)
+#
+# [keybinds.settings.list]        # section, theme, and paths screens
+# back = ["esc", "backspace"]     # back out (quits from the section screen)
+# move_up = ["up", "k"]
+# move_down = ["down", "j"]
+# select = ["enter"]              # enter section / apply theme
+# reset = ["r", "shift+r"]        # theme screen only: reset to default theme
+#
+# [keybinds.settings.search]      # search tuner chooser screen
+# back = ["esc", "backspace"]
+# move_up = ["up", "k"]
+# move_down = ["down", "j"]
+# select = ["enter"]              # open the highlighted tuner
+# reset = ["r", "shift+r"]        # reset the highlighted group's weights
+#
+# [keybinds.settings.tuner]       # frecency/fuzzy weight editor
+# back = ["esc", "backspace"]
+# move_up = ["up", "k"]
+# move_down = ["down", "j"]
+# decrease = ["left", "-"]
+# increase = ["right", "plus", "="]
+# reset = ["r", "shift+r"]
+# save = ["enter"]
+#
+# [keybinds.new.picker]           # history picker and destination picker
+# accept = ["enter"]
+# cancel_or_back = ["esc"]        # cancel (history) / step back (destination)
+# move_up = ["up", "k"]           # letters navigate only while the filter is
+# move_down = ["down", "j"]       # empty; otherwise they type into it
+# backspace = ["backspace"]
+#
+# [keybinds.new.confirm_name]     # snippet name field (always accepts text:
+# accept = ["enter"]              # plain-letter bindings are inert here)
+# cancel = ["esc"]
+# complete_or_focus_tokens = ["tab", "down"]
+# backspace = ["backspace"]
+#
+# [keybinds.new.confirm_tokens]   # placeholder token list
+# cancel = ["esc"]
+# back = ["b"]                    # return to the history picker
+# move_up = ["up", "k"]
+# move_down = ["down", "j"]
+# toggle_variable = ["space"]
+# rename = ["e"]                  # rename the highlighted token
+# edit_name = ["n"]               # jump to the snippet name field
+# accept = ["enter"]              # accept and write the snippet
+#
+# [keybinds.new.confirm_rename]   # token rename field (always accepts text:
+# cancel = ["esc"]                # plain-letter bindings are inert here)
+# accept = ["enter"]
+# backspace = ["backspace"]
 
 # Reusable predefined variable inputs.
 #

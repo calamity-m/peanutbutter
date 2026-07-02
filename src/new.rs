@@ -3,7 +3,7 @@
 pub mod capture;
 pub mod capture_heuristics;
 
-use crate::config::Paths;
+use crate::config::{AppConfig, Paths};
 use crate::new::capture::TargetChoice;
 use std::env;
 use std::fs;
@@ -16,12 +16,11 @@ use std::path::{Path, PathBuf};
 /// confirm placeholder candidates, choose a destination file, then append the
 /// generated Markdown snippet.
 pub fn run_new_command(
-    paths: &Paths,
-    theme: &crate::config::Theme,
-    viewport_height: u16,
+    config: &AppConfig,
     name_opt: Option<String>,
     explicit_argv: Vec<String>,
 ) -> io::Result<()> {
+    let paths = &config.paths;
     let targets = new_target_choices(paths)?;
 
     let explicit_command = if explicit_argv.is_empty() {
@@ -53,9 +52,11 @@ pub fn run_new_command(
         history,
         explicit_command,
         name_opt,
-        theme,
-        viewport_height,
+        theme: &config.theme,
+        viewport_height: config.ui.height,
         targets,
+        keymap: &config.keybinds.new,
+        keybind_warnings: &config.keybinds.warnings,
     })?;
 
     let (name, raw, accepted, first_token, target) = match outcome {

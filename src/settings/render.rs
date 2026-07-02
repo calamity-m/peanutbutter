@@ -1,6 +1,10 @@
 //! Rendering for the interactive settings editor.
 
 use crate::config::Theme;
+use crate::keybinds::{
+    SettingsGlobalAction, SettingsKeymap, SettingsListAction, SettingsSearchAction,
+    SettingsTunerAction, help_hint as hint, help_move_hint as move_hint,
+};
 use crate::settings::app::{
     ImpactBand, Readout, Screen, SettingsApp, TunerGroup, band, format_float,
 };
@@ -20,7 +24,7 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &SettingsApp, theme: &Theme) {
         theme,
         mode: "pb settings",
         title: &title,
-        footer,
+        footer: &footer,
     }
     .render(frame.area(), frame.buffer_mut());
 
@@ -65,7 +69,7 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &SettingsApp, theme: &Theme) {
     }
 }
 
-fn chrome_text(app: &SettingsApp) -> (String, &'static str) {
+fn chrome_text(app: &SettingsApp) -> (String, String) {
     let path = match app.screen() {
         Screen::Section => "settings".to_string(),
         Screen::Search => "settings / search".to_string(),
@@ -78,21 +82,89 @@ fn chrome_text(app: &SettingsApp) -> (String, &'static str) {
         Some(status) => format!("{path} · {status}"),
         None => path,
     };
+    let keymap = app.keymap();
     let footer = if app.confirm_quit() {
-        "unsaved changes · q again discards · enter saves"
+        let quit = keymap
+            .global
+            .hint(SettingsGlobalAction::Quit)
+            .unwrap_or_else(|| "q".to_string());
+        format!("unsaved changes · {quit} again discards · enter saves")
     } else {
-        match app.screen() {
-            Screen::Tuner(_) => {
-                "↑/↓ field · ←/→ adjust · r reset+save · enter save · esc/backspace back · q quit"
-            }
-            Screen::Theme => {
-                "↑/↓ or j/k move · enter save · r reset+save · esc/backspace back · q quit"
-            }
-            Screen::Paths => "↑/↓ or j/k move · esc/backspace back · q quit",
-            _ => "↑/↓ or j/k move · enter select · esc/backspace back · q quit",
-        }
+        footer_for(app.screen(), keymap)
     };
     (title, footer)
+}
+
+/// Build one screen's footer from its resolved bindings, omitting unbound
+/// actions so remapped or removed keys never teach stale defaults.
+fn footer_for(screen: &Screen, keymap: &SettingsKeymap) -> String {
+    let quit = keymap
+        .global
+        .hint(SettingsGlobalAction::Quit)
+        .map(|k| format!("{k} quit"));
+    let parts: Vec<Option<String>> = match screen {
+        Screen::Tuner(_) => vec![
+            move_hint(
+                keymap.tuner.hint(SettingsTunerAction::MoveUp),
+                keymap.tuner.hint(SettingsTunerAction::MoveDown),
+                "field",
+            ),
+            move_hint(
+                keymap.tuner.hint(SettingsTunerAction::Decrease),
+                keymap.tuner.hint(SettingsTunerAction::Increase),
+                "adjust",
+            ),
+            hint(keymap.tuner.hint(SettingsTunerAction::Reset), "reset+save"),
+            hint(keymap.tuner.hint(SettingsTunerAction::Save), "save"),
+            hint(keymap.tuner.hint(SettingsTunerAction::Back), "back"),
+            quit,
+        ],
+        Screen::Search => vec![
+            move_hint(
+                keymap.search.hint(SettingsSearchAction::MoveUp),
+                keymap.search.hint(SettingsSearchAction::MoveDown),
+                "move",
+            ),
+            hint(keymap.search.hint(SettingsSearchAction::Select), "select"),
+            hint(
+                keymap.search.hint(SettingsSearchAction::Reset),
+                "reset+save",
+            ),
+            hint(keymap.search.hint(SettingsSearchAction::Back), "back"),
+            quit,
+        ],
+        Screen::Theme => vec![
+            move_hint(
+                keymap.list.hint(SettingsListAction::MoveUp),
+                keymap.list.hint(SettingsListAction::MoveDown),
+                "move",
+            ),
+            hint(keymap.list.hint(SettingsListAction::Select), "save"),
+            hint(keymap.list.hint(SettingsListAction::Reset), "reset+save"),
+            hint(keymap.list.hint(SettingsListAction::Back), "back"),
+            quit,
+        ],
+        Screen::Paths => vec![
+            move_hint(
+                keymap.list.hint(SettingsListAction::MoveUp),
+                keymap.list.hint(SettingsListAction::MoveDown),
+                "move",
+            ),
+            hint(keymap.list.hint(SettingsListAction::Back), "back"),
+            quit,
+        ],
+        Screen::Section => vec![
+            move_hint(
+                keymap.list.hint(SettingsListAction::MoveUp),
+                keymap.list.hint(SettingsListAction::MoveDown),
+                "move",
+            ),
+            hint(keymap.list.hint(SettingsListAction::Select), "select"),
+            hint(keymap.list.hint(SettingsListAction::Back), "back"),
+            quit,
+        ],
+    };
+    parts.into_iter().flatten().collect::<Vec<_>>().join(" · ")
 }
 
 fn draw_picker(
@@ -270,5 +342,46 @@ fn clamped(area: Rect, width: u16, height: u16) -> Rect {
         y: area.y,
         width: area.width.min(width),
         height: area.height.min(height.max(1)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::keybinds::Keymaps;
+
+    fn keymap_from(raw: &str) -> SettingsKeymap {
+        let value: toml::Value = toml::from_str(raw).unwrap();
+        Keymaps::resolve(value.get("keybinds")).settings
+    }
+
+    #[test]
+    fn footer_reflects_defaults() {
+        let keymap = SettingsKeymap::default();
+        assert_eq!(
+            footer_for(&Screen::Section, &keymap),
+            "up/down move · enter select · esc back · q quit"
+        );
+        assert_eq!(
+            footer_for(&Screen::Tuner(TunerGroup::Frecency), &keymap),
+            "up/down field · left/right adjust · r reset+save · enter save · esc back · q quit"
+        );
+    }
+
+    #[test]
+    fn footer_reflects_remaps_and_omits_unbound_actions() {
+        let keymap = keymap_from(
+            r#"
+[keybinds.settings.global]
+quit = ["ctrl+q"]
+
+[keybinds.settings.list]
+move_up = ["ctrl+p"]
+select = []
+"#,
+        );
+        let footer = footer_for(&Screen::Section, &keymap);
+        assert_eq!(footer, "ctrl+p/down move · esc back · ctrl+q quit");
+        assert!(!footer.contains("select"), "unbound action must be omitted");
     }
 }
