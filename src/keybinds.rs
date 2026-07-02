@@ -357,6 +357,22 @@ keymap_actions!(
 );
 
 keymap_actions!(
+    /// Keybind editor action-list operations.
+    SettingsKeybindsAction, "keybinds", {
+        Back => "back", ["esc", "backspace"];
+        MoveUp => "move_up", ["up", "k"];
+        MoveDown => "move_down", ["down", "j"];
+        ChordLeft => "chord_left", ["left"];
+        ChordRight => "chord_right", ["right"];
+        Capture => "capture", ["enter", "a"];
+        DeleteChord => "delete_chord", ["d", "delete"];
+        Reset => "reset", ["r", "shift+r"];
+        Unbind => "unbind", ["u"];
+        Save => "save", ["s"];
+    }
+);
+
+keymap_actions!(
     /// Shared by the `pb new` history picker and target picker.
     /// `cancel_or_back` cancels the capture in the history picker and steps
     /// back to the confirm screen in the target picker.
@@ -453,6 +469,11 @@ impl<A: KeymapAction> Default for ContextBindings<A> {
 }
 
 impl<A: KeymapAction> ContextBindings<A> {
+    /// Resolved chords for an action, in config/display order.
+    pub fn chords(&self, action: A) -> &[KeyChord] {
+        &self.bindings[Self::index_of(action)]
+    }
+
     /// Resolve a canonical chord to the first matching action in precedence
     /// order.
     pub fn action(&self, chord: &KeyChord) -> Option<A> {
@@ -675,6 +696,7 @@ pub struct SettingsKeymap {
     pub list: ContextBindings<SettingsListAction>,
     pub search: ContextBindings<SettingsSearchAction>,
     pub tuner: ContextBindings<SettingsTunerAction>,
+    pub keybinds: ContextBindings<SettingsKeybindsAction>,
 }
 
 impl SettingsKeymap {
@@ -692,8 +714,9 @@ impl SettingsKeymap {
                 "list" => self.list.apply("settings", actions, warnings),
                 "search" => self.search.apply("settings", actions, warnings),
                 "tuner" => self.tuner.apply("settings", actions, warnings),
+                "keybinds" => self.keybinds.apply("settings", actions, warnings),
                 other => warnings.push(format!(
-                    "keybinds: unknown context `settings.{other}`; expected one of: global, list, search, tuner"
+                    "keybinds: unknown context `settings.{other}`; expected one of: global, list, search, tuner, keybinds"
                 )),
             }
         }
@@ -704,6 +727,7 @@ impl SettingsKeymap {
         self.list.resolve_conflicts("settings", warnings);
         self.search.resolve_conflicts("settings", warnings);
         self.tuner.resolve_conflicts("settings", warnings);
+        self.keybinds.resolve_conflicts("settings", warnings);
     }
 }
 

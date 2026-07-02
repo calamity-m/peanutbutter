@@ -5,14 +5,17 @@
 //! keys back to the resolved config file.
 
 mod app;
+mod keybinds;
 mod persist;
 mod render;
 
 use crate::config::AppConfig;
+use crate::keybinds::Keymaps;
 use crate::tui::terminal::{
     RawModeGuard, StdoutTtyGuard, TuiOutputKind, build_terminal, cleanup_terminal,
 };
 use crossterm::event::{self, Event};
+use std::fs;
 use std::io::{self, IsTerminal};
 use std::time::Duration;
 
@@ -62,10 +65,28 @@ pub fn run(config: &AppConfig) -> io::Result<()> {
                     Err(err) => error = Some(err),
                 }
             }
+            if error.is_none() {
+                match persist::save_keybind_entries(
+                    &config.paths.config_file,
+                    app.changed_keybind_entries(),
+                ) {
+                    Ok(n) => saved += n,
+                    Err(err) => error = Some(err),
+                }
+            }
             match error {
                 Some(err) => app.set_status(format!("save failed: {err}")),
                 None if saved == 0 => app.set_status("no changes"),
-                None => app.mark_saved(),
+                None => match reload_keymaps(&config.paths.config_file) {
+                    Ok(keymaps) => {
+                        app.mark_saved();
+                        app.reload_keymaps(&keymaps);
+                    }
+                    Err(err) => {
+                        app.mark_saved();
+                        app.set_status(format!("saved, but reload failed: {err}"));
+                    }
+                },
             }
         }
     }
@@ -74,6 +95,20 @@ pub fn run(config: &AppConfig) -> io::Result<()> {
         let _ = event::read();
     }
     cleanup_terminal(viewport_top, tui_output)
+}
+
+fn reload_keymaps(config_file: &std::path::Path) -> io::Result<Keymaps> {
+    let raw = match fs::read_to_string(config_file) {
+        Ok(raw) => raw,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => String::new(),
+        Err(err) => return Err(err),
+    };
+    if raw.trim().is_empty() {
+        return Ok(Keymaps::default());
+    }
+    let value: toml::Value =
+        toml::from_str(&raw).map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
+    Ok(Keymaps::resolve(value.get("keybinds")))
 }
 
 #[cfg(test)]

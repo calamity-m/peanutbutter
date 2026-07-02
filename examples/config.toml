@@ -150,7 +150,10 @@ error_fg = "red"
 # token rename field), plain-letter bindings never fire at all — they are
 # inert by design; use a modified or named chord there instead.
 #
-# The tables below list every action with its default binding.
+# The tables below list every action with its default binding. You can also
+# edit keybinds interactively from `pb settings` -> `keybinds`; capture mode
+# uses Esc to cancel and Ctrl+C to quit, so bare `esc`/reserved `ctrl+c` cannot
+# be assigned by pressing them (reset-to-default or hand-edit TOML instead).
 #
 # [keybinds.execute.select]      # handled before fuzzy/browse/tags dispatch
 # cancel_or_back = ["esc"]       # cancel, or back out of browse/tag drill
@@ -224,6 +227,18 @@ error_fg = "red"
 # increase = ["right", "plus", "="]
 # reset = ["r", "shift+r"]
 # save = ["enter"]
+#
+# [keybinds.settings.keybinds]    # keybind action list/editor
+# back = ["esc", "backspace"]
+# move_up = ["up", "k"]
+# move_down = ["down", "j"]
+# chord_left = ["left"]
+# chord_right = ["right"]
+# capture = ["enter", "a"]       # capture the next key press and append it
+# delete_chord = ["d", "delete"]
+# reset = ["r", "shift+r"]
+# unbind = ["u"]
+# save = ["s"]
 #
 # [keybinds.new.picker]           # history picker and destination picker
 # accept = ["enter"]

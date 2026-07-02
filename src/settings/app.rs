@@ -2,10 +2,13 @@
 
 use crate::config::{AppConfig, FuzzyWeights, SearchConfig, Theme};
 use crate::keybinds::{
-    SettingsGlobalAction, SettingsKeymap, SettingsListAction, SettingsSearchAction,
-    SettingsTunerAction, TextEntry, is_emergency_cancel,
+    KeyChord, Keymaps, SettingsGlobalAction, SettingsKeybindsAction, SettingsKeymap,
+    SettingsListAction, SettingsSearchAction, SettingsTunerAction, TextEntry, is_emergency_cancel,
 };
-use crossterm::event::KeyEvent;
+use crate::settings::keybinds::{
+    COMMANDS, KeybindEntry, conflict_owner, entries_from_keymaps, settings_global_shadow,
+};
+use crossterm::event::{KeyCode, KeyEvent, KeyEventKind};
 use std::path::PathBuf;
 
 /// The high-level screen currently shown by `pb settings`.
@@ -21,6 +24,10 @@ pub(crate) enum Screen {
     Theme,
     /// Read-only list of registered snippet root directories.
     Paths,
+    /// Picker for the command whose keybinds should be browsed/edited.
+    KeybindCommands,
+    /// Action list for one command's keybinds.
+    KeybindActions,
 }
 
 /// Search tuner groups available in v1.
@@ -173,6 +180,11 @@ pub(crate) struct SettingsApp {
     theme_original: usize,
     paths: Vec<PathBuf>,
     paths_selected: usize,
+    keybind_entries: Vec<KeybindEntry>,
+    keybind_command_selected: usize,
+    keybind_row_selected: usize,
+    keybind_chord_selected: usize,
+    capturing_keybind: bool,
     status: Option<String>,
     should_quit: bool,
     confirm_quit: bool,
@@ -203,6 +215,11 @@ impl SettingsApp {
             theme_original: theme_selected,
             paths: config.paths.snippet_roots.clone(),
             paths_selected: 0,
+            keybind_entries: entries_from_keymaps(&config.keybinds),
+            keybind_command_selected: 0,
+            keybind_row_selected: 0,
+            keybind_chord_selected: 0,
+            capturing_keybind: false,
             status,
             should_quit: false,
             confirm_quit: false,
@@ -276,6 +293,38 @@ impl SettingsApp {
         self.paths_selected
     }
 
+    /// Editable keybind rows.
+    pub(crate) fn keybind_entries(&self) -> &[KeybindEntry] {
+        &self.keybind_entries
+    }
+
+    /// Selected command index in the keybind command picker.
+    pub(crate) fn keybind_command_selected(&self) -> usize {
+        self.keybind_command_selected
+    }
+
+    /// Selected editable action index within the current command.
+    pub(crate) fn keybind_row_selected(&self) -> usize {
+        self.keybind_row_selected
+    }
+
+    /// Selected chord index within the focused action.
+    pub(crate) fn keybind_chord_selected(&self) -> usize {
+        self.keybind_chord_selected
+    }
+
+    /// Whether the next key press is being captured as a binding.
+    pub(crate) fn capturing_keybind(&self) -> bool {
+        self.capturing_keybind
+    }
+
+    /// Currently selected command name for keybind editing.
+    pub(crate) fn keybind_command(&self) -> &'static str {
+        COMMANDS[self
+            .keybind_command_selected
+            .min(COMMANDS.len().saturating_sub(1))]
+    }
+
     /// Status message shown in the chrome.
     pub(crate) fn status(&self) -> Option<&str> {
         self.status.as_deref()
@@ -323,7 +372,33 @@ impl SettingsApp {
             field.accept_current();
         }
         self.theme_original = self.theme_selected;
+        for entry in &mut self.keybind_entries {
+            entry.accept_current();
+        }
         self.status = Some("saved".to_string());
+    }
+
+    /// Replace the running keymap and rebaseline keybind rows after a save/reload.
+    pub(crate) fn reload_keymaps(&mut self, keymaps: &Keymaps) {
+        self.keymap = keymaps.settings.clone();
+        self.keybind_entries = entries_from_keymaps(keymaps);
+        self.keybind_row_selected = self
+            .keybind_row_selected
+            .min(self.current_keybind_indices().len().saturating_sub(1));
+        self.keybind_chord_selected = 0;
+        if keymaps.warnings.is_empty() {
+            self.status = Some("saved".to_string());
+        } else {
+            self.status = Some(format!(
+                "saved · keybind config: {}",
+                keymaps.warnings.join("; ")
+            ));
+        }
+    }
+
+    /// Dirty keybind entries to persist.
+    pub(crate) fn changed_keybind_entries(&self) -> impl Iterator<Item = &KeybindEntry> {
+        self.keybind_entries.iter().filter(|entry| entry.changed())
     }
 
     /// Show a non-fatal status/error message.
@@ -341,6 +416,9 @@ impl SettingsApp {
             self.should_quit = true;
             return false;
         }
+        if self.capturing_keybind {
+            return self.handle_keybind_capture(key);
+        }
         if self.keymap.global.action_for(&key) == Some(SettingsGlobalAction::Quit) {
             return self.handle_quit_key();
         }
@@ -351,11 +429,17 @@ impl SettingsApp {
             Screen::Tuner(_) => self.handle_tuner_key(key),
             Screen::Theme => self.handle_theme_key(key),
             Screen::Paths => self.handle_paths_key(key),
+            Screen::KeybindCommands => self.handle_keybind_commands_key(key),
+            Screen::KeybindActions => self.handle_keybind_actions_key(key),
         }
     }
 
     fn handle_quit_key(&mut self) -> bool {
-        if self.confirm_quit || (!self.all_fields().any(Field::changed) && !self.theme_changed()) {
+        if self.confirm_quit
+            || (!self.all_fields().any(Field::changed)
+                && !self.theme_changed()
+                && !self.keybind_entries.iter().any(KeybindEntry::changed))
+        {
             self.should_quit = true;
         } else {
             self.confirm_quit = true;
@@ -365,7 +449,8 @@ impl SettingsApp {
                 .hint(SettingsGlobalAction::Quit)
                 .unwrap_or_else(|| "q".to_string());
             self.status = Some(format!(
-                "unsaved changes — press {quit_hint} again to discard, enter to save"
+                "unsaved changes — press {quit_hint} again to discard, {} to save",
+                self.current_save_hint()
             ));
         }
         false
@@ -378,13 +463,14 @@ impl SettingsApp {
                 self.section_selected = self.section_selected.saturating_sub(1)
             }
             Some(SettingsListAction::MoveDown) => {
-                self.section_selected = (self.section_selected + 1).min(2)
+                self.section_selected = (self.section_selected + 1).min(3)
             }
             Some(SettingsListAction::Select) => {
                 self.screen = match self.section_selected {
                     0 => Screen::Search,
                     1 => Screen::Theme,
-                    _ => Screen::Paths,
+                    2 => Screen::Paths,
+                    _ => Screen::KeybindCommands,
                 };
                 self.status = None;
             }
@@ -479,6 +565,219 @@ impl SettingsApp {
             None => {}
         }
         false
+    }
+
+    fn handle_keybind_commands_key(&mut self, key: KeyEvent) -> bool {
+        match self.keymap.list.resolve(&key, TextEntry::None) {
+            Some(SettingsListAction::Back) => {
+                self.screen = Screen::Section;
+                self.status = None;
+            }
+            Some(SettingsListAction::MoveUp) => {
+                self.keybind_command_selected = self.keybind_command_selected.saturating_sub(1);
+                self.keybind_row_selected = 0;
+                self.keybind_chord_selected = 0;
+            }
+            Some(SettingsListAction::MoveDown) => {
+                self.keybind_command_selected =
+                    (self.keybind_command_selected + 1).min(COMMANDS.len().saturating_sub(1));
+                self.keybind_row_selected = 0;
+                self.keybind_chord_selected = 0;
+            }
+            Some(SettingsListAction::Select) => {
+                self.screen = Screen::KeybindActions;
+                self.keybind_row_selected = 0;
+                self.keybind_chord_selected = 0;
+                self.status = None;
+            }
+            Some(SettingsListAction::Reset) | None => {}
+        }
+        false
+    }
+
+    fn handle_keybind_actions_key(&mut self, key: KeyEvent) -> bool {
+        let indices = self.current_keybind_indices();
+        if indices.is_empty() {
+            return false;
+        }
+        self.keybind_row_selected = self
+            .keybind_row_selected
+            .min(indices.len().saturating_sub(1));
+        let entry_idx = indices[self.keybind_row_selected];
+        match self.keymap.keybinds.resolve(&key, TextEntry::None) {
+            Some(SettingsKeybindsAction::Back) => {
+                self.screen = Screen::KeybindCommands;
+                self.status = None;
+            }
+            Some(SettingsKeybindsAction::MoveUp) => {
+                self.keybind_row_selected = self.keybind_row_selected.saturating_sub(1);
+                self.clamp_keybind_chord_cursor();
+            }
+            Some(SettingsKeybindsAction::MoveDown) => {
+                self.keybind_row_selected = (self.keybind_row_selected + 1).min(indices.len() - 1);
+                self.clamp_keybind_chord_cursor();
+            }
+            Some(SettingsKeybindsAction::ChordLeft) => {
+                self.keybind_chord_selected = self.keybind_chord_selected.saturating_sub(1);
+            }
+            Some(SettingsKeybindsAction::ChordRight) => {
+                let max = self.keybind_entries[entry_idx]
+                    .current
+                    .len()
+                    .saturating_sub(1);
+                self.keybind_chord_selected = (self.keybind_chord_selected + 1).min(max);
+            }
+            Some(SettingsKeybindsAction::Capture) => {
+                self.capturing_keybind = true;
+                self.status = Some(
+                    "press a key to bind · esc cancels · ctrl+c quits · bind esc by editing config"
+                        .to_string(),
+                );
+            }
+            Some(SettingsKeybindsAction::DeleteChord) => {
+                let entry = &mut self.keybind_entries[entry_idx];
+                if !entry.current.is_empty() {
+                    let idx = self.keybind_chord_selected.min(entry.current.len() - 1);
+                    let removed = entry.current.remove(idx);
+                    self.status = Some(format!("removed {removed}"));
+                    self.clamp_keybind_chord_cursor();
+                }
+            }
+            Some(SettingsKeybindsAction::Reset) => {
+                if let Some(message) = self.reset_conflict_message(entry_idx) {
+                    self.status = Some(message);
+                } else {
+                    self.keybind_entries[entry_idx].current =
+                        self.keybind_entries[entry_idx].defaults.clone();
+                    self.keybind_chord_selected = 0;
+                    self.status = Some("reset to default".to_string());
+                }
+            }
+            Some(SettingsKeybindsAction::Unbind) => {
+                self.keybind_entries[entry_idx].current.clear();
+                self.keybind_chord_selected = 0;
+                self.status = Some("unbound".to_string());
+            }
+            Some(SettingsKeybindsAction::Save) => return true,
+            None => {}
+        }
+        false
+    }
+
+    fn handle_keybind_capture(&mut self, key: KeyEvent) -> bool {
+        if key.kind != KeyEventKind::Press {
+            return false;
+        }
+        if key.code == KeyCode::Esc {
+            self.capturing_keybind = false;
+            self.status = Some("capture canceled".to_string());
+            return false;
+        }
+        let Some(entry_idx) = self
+            .current_keybind_indices()
+            .get(self.keybind_row_selected)
+            .copied()
+        else {
+            self.capturing_keybind = false;
+            return false;
+        };
+        let chord = KeyChord::from_event(&key);
+        if KeyChord::parse(&chord.to_string()).ok() != Some(chord) {
+            self.status = Some("key cannot be written to config".to_string());
+            return false;
+        }
+        if chord == KeyChord::reserved_cancel() {
+            self.status = Some("ctrl+c is reserved".to_string());
+            return false;
+        }
+        if let Some(owner) = conflict_owner(&self.keybind_entries, entry_idx, &chord) {
+            self.status = Some(format!(
+                "{chord} already belongs to {}.{}.{}",
+                owner.section, owner.context, owner.action
+            ));
+            return false;
+        }
+        if let Some(owner) = settings_global_shadow(&self.keybind_entries, entry_idx, &chord) {
+            self.status = Some(format!(
+                "{chord} is shadowed by {}.{}.{}",
+                owner.section, owner.context, owner.action
+            ));
+            return false;
+        }
+        let entry = &mut self.keybind_entries[entry_idx];
+        if entry.current.contains(&chord) {
+            self.status = Some(format!("{chord} already bound"));
+        } else {
+            entry.current.push(chord);
+            self.keybind_chord_selected = entry.current.len().saturating_sub(1);
+            self.status = Some(format!("added {chord}"));
+        }
+        self.capturing_keybind = false;
+        false
+    }
+
+    fn reset_conflict_message(&self, entry_idx: usize) -> Option<String> {
+        for chord in &self.keybind_entries[entry_idx].defaults {
+            if let Some(owner) = conflict_owner(&self.keybind_entries, entry_idx, chord) {
+                return Some(format!(
+                    "cannot reset: {chord} belongs to {}.{}.{}",
+                    owner.section, owner.context, owner.action
+                ));
+            }
+            if let Some(owner) = settings_global_shadow(&self.keybind_entries, entry_idx, chord) {
+                return Some(format!(
+                    "cannot reset: {chord} is shadowed by {}.{}.{}",
+                    owner.section, owner.context, owner.action
+                ));
+            }
+        }
+        None
+    }
+
+    fn current_keybind_indices(&self) -> Vec<usize> {
+        let command = self.keybind_command();
+        self.keybind_entries
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, entry)| (entry.section == command).then_some(idx))
+            .collect()
+    }
+
+    fn clamp_keybind_chord_cursor(&mut self) {
+        if let Some(entry_idx) = self
+            .current_keybind_indices()
+            .get(self.keybind_row_selected)
+            .copied()
+        {
+            let max = self.keybind_entries[entry_idx]
+                .current
+                .len()
+                .saturating_sub(1);
+            self.keybind_chord_selected = self.keybind_chord_selected.min(max);
+        } else {
+            self.keybind_chord_selected = 0;
+        }
+    }
+
+    fn current_save_hint(&self) -> String {
+        match self.screen {
+            Screen::KeybindActions => self
+                .keymap
+                .keybinds
+                .hint(SettingsKeybindsAction::Save)
+                .unwrap_or_else(|| "save key".to_string()),
+            Screen::Tuner(_) => self
+                .keymap
+                .tuner
+                .hint(SettingsTunerAction::Save)
+                .unwrap_or_else(|| "enter".to_string()),
+            Screen::Theme => self
+                .keymap
+                .list
+                .hint(SettingsListAction::Select)
+                .unwrap_or_else(|| "enter".to_string()),
+            _ => "enter".to_string(),
+        }
     }
 
     fn selected_search_group(&self) -> TunerGroup {

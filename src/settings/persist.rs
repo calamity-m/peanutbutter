@@ -1,11 +1,12 @@
 //! Surgical TOML persistence for settings edits.
 
 use crate::settings::app::{Field, FieldKind};
+use crate::settings::keybinds::KeybindEntry;
 use std::borrow::Borrow;
 use std::fs::{self, File};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use toml_edit::{DocumentMut, Item, Table, Value};
+use toml_edit::{Array, DocumentMut, Item, Table, Value};
 
 /// Write changed fields to `config_file` while preserving unrelated TOML text.
 pub(crate) fn save_changed_fields<I, F>(config_file: &Path, fields: I) -> io::Result<usize>
@@ -44,6 +45,44 @@ where
     Ok(changed.len())
 }
 
+/// Write changed keybind entries to `[keybinds.*]` tables while preserving
+/// unrelated keys and comments.
+pub(crate) fn save_keybind_entries<I, E>(config_file: &Path, entries: I) -> io::Result<usize>
+where
+    I: IntoIterator<Item = E>,
+    E: Borrow<KeybindEntry>,
+{
+    let changed = entries
+        .into_iter()
+        .filter_map(|entry| {
+            let entry = entry.borrow();
+            entry.changed().then(|| entry.clone())
+        })
+        .collect::<Vec<_>>();
+    if changed.is_empty() {
+        return Ok(0);
+    }
+
+    let raw = match fs::read_to_string(config_file) {
+        Ok(raw) => raw,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => String::new(),
+        Err(err) => return Err(err),
+    };
+    let mut doc = if raw.trim().is_empty() {
+        DocumentMut::new()
+    } else {
+        raw.parse::<DocumentMut>()
+            .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?
+    };
+
+    for entry in &changed {
+        set_keybind_entry(&mut doc, entry)?;
+    }
+
+    atomic_write(config_file, doc.to_string().as_bytes())?;
+    Ok(changed.len())
+}
+
 /// Write the selected built-in theme name to `[theme].name`, preserving any
 /// other TOML content (including `[theme.colors]`/`[theme.custom]` overrides).
 pub(crate) fn save_theme_name(config_file: &Path, name: &str) -> io::Result<()> {
@@ -72,6 +111,36 @@ pub(crate) fn save_theme_name(config_file: &Path, name: &str) -> io::Result<()> 
     item.as_table_mut().expect("checked table")["name"] = Item::Value(Value::from(name));
 
     atomic_write(config_file, doc.to_string().as_bytes())
+}
+
+fn set_keybind_entry(doc: &mut DocumentMut, entry: &KeybindEntry) -> io::Result<()> {
+    let mut table = doc.as_table_mut();
+    for segment in ["keybinds", entry.section, entry.context] {
+        let item = table
+            .entry(segment)
+            .or_insert_with(|| Item::Table(Table::new()));
+        if !item.is_table() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "config path `keybinds.{}.{}` is not a table",
+                    entry.section, entry.context
+                ),
+            ));
+        }
+        table = item.as_table_mut().expect("checked table");
+    }
+
+    if entry.current == entry.defaults {
+        table.remove(entry.action);
+    } else {
+        let mut array = Array::default();
+        for chord in &entry.current {
+            array.push(chord.to_string());
+        }
+        table[entry.action] = Item::Value(Value::Array(array));
+    }
+    Ok(())
 }
 
 fn set_field(doc: &mut DocumentMut, field: &Field) -> io::Result<()> {
@@ -138,6 +207,33 @@ mod tests {
         let _ = fs::remove_dir_all(&path);
         fs::create_dir_all(&path).unwrap();
         path
+    }
+
+    fn keybind_entry(
+        section: &'static str,
+        context: &'static str,
+        action: &'static str,
+        defaults: &[&str],
+        original: &[&str],
+        current: &[&str],
+    ) -> KeybindEntry {
+        KeybindEntry {
+            section,
+            context,
+            action,
+            defaults: defaults
+                .iter()
+                .map(|raw| crate::keybinds::KeyChord::parse(raw).unwrap())
+                .collect(),
+            original: original
+                .iter()
+                .map(|raw| crate::keybinds::KeyChord::parse(raw).unwrap())
+                .collect(),
+            current: current
+                .iter()
+                .map(|raw| crate::keybinds::KeyChord::parse(raw).unwrap())
+                .collect(),
+        }
     }
 
     fn field(
@@ -258,6 +354,77 @@ mod tests {
 
         assert_eq!(err.kind(), io::ErrorKind::InvalidData);
         assert_eq!(fs::read_to_string(&config).unwrap(), "[search\nnope");
+    }
+
+    #[test]
+    fn save_keybind_entries_writes_removes_unbinds_and_preserves_comments() {
+        let root = temp_dir("keybind-write");
+        let config = root.join("config.toml");
+        fs::write(
+            &config,
+            "# top\n[keybinds.execute.fuzzy]\n# accept comment\naccept = [\"enter\"]\nmove_up = [\"ctrl+p\"]\n\n# tuner table comment\n[keybinds.settings.tuner]\nsave = [\"enter\"]\n",
+        )
+        .unwrap();
+
+        let changed = save_keybind_entries(
+            &config,
+            [
+                keybind_entry(
+                    "execute",
+                    "fuzzy",
+                    "accept",
+                    &["enter"],
+                    &["enter"],
+                    &["ctrl+x"],
+                ),
+                keybind_entry("execute", "fuzzy", "move_down", &["down"], &["down"], &[]),
+                keybind_entry(
+                    "settings",
+                    "tuner",
+                    "save",
+                    &["enter"],
+                    &["ctrl+s"],
+                    &["enter"],
+                ),
+            ],
+        )
+        .unwrap();
+        let saved = fs::read_to_string(&config).unwrap();
+
+        assert_eq!(changed, 3);
+        assert!(saved.contains("# top"));
+        assert!(saved.contains("# accept comment"));
+        assert!(saved.contains("accept = [\"ctrl+x\"]"));
+        assert!(saved.contains("move_up = [\"ctrl+p\"]"));
+        assert!(saved.contains("move_down = []"));
+        assert!(saved.contains("# tuner table comment"));
+        assert!(
+            !saved.contains("save ="),
+            "default-valued key should be removed: {saved}"
+        );
+    }
+
+    #[test]
+    fn save_keybind_entries_creates_missing_file() {
+        let root = temp_dir("keybind-missing");
+        let config = root.join("nested/config.toml");
+
+        save_keybind_entries(
+            &config,
+            [keybind_entry(
+                "new",
+                "picker",
+                "accept",
+                &["enter"],
+                &["enter"],
+                &["ctrl+x"],
+            )],
+        )
+        .unwrap();
+
+        let saved = fs::read_to_string(&config).unwrap();
+        assert!(saved.contains("[keybinds.new.picker]"));
+        assert!(saved.contains("accept = [\"ctrl+x\"]"));
     }
 
     #[test]

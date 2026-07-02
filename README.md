@@ -158,7 +158,7 @@ A fully commented example config lives at [examples/config.toml](examples/config
 
 ### Keybinds
 
-The keys driving the `pb execute`, `pb settings`, and `pb new` TUIs are remappable through `[keybinds.execute.*]`, `[keybinds.settings.*]`, and `[keybinds.new.*]` tables in the config file. Each screen's help line reflects your remaps, invalid bindings show as a non-fatal warning inside the TUI, and `Ctrl+C` always cancels regardless of config. The commented reference in [examples/config.toml](examples/config.toml) (also shown by `pb docs config`) lists every action and its defaults.
+The keys driving the `pb execute`, `pb settings`, and `pb new` TUIs are remappable through `pb settings` → `keybinds` or by editing `[keybinds.execute.*]`, `[keybinds.settings.*]`, and `[keybinds.new.*]` tables in the config file. Each screen's help line reflects your remaps, invalid bindings show as a non-fatal warning inside the TUI, and `Ctrl+C` always cancels regardless of config. In the interactive editor, `Esc` cancels key capture and `Ctrl+C` quits, so bare `esc` can only be restored via reset-to-default or TOML, and `ctrl+c` remains reserved. The commented reference in [examples/config.toml](examples/config.toml) (also shown by `pb docs config`) lists every action and its defaults.
 
 ### Snippet Paths
 

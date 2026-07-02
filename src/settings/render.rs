@@ -2,19 +2,20 @@
 
 use crate::config::Theme;
 use crate::keybinds::{
-    SettingsGlobalAction, SettingsKeymap, SettingsListAction, SettingsSearchAction,
-    SettingsTunerAction, help_hint as hint, help_move_hint as move_hint,
+    SettingsGlobalAction, SettingsKeybindsAction, SettingsKeymap, SettingsListAction,
+    SettingsSearchAction, SettingsTunerAction, help_hint as hint, help_move_hint as move_hint,
 };
 use crate::settings::app::{
     ImpactBand, Readout, Screen, SettingsApp, TunerGroup, band, format_float,
 };
+use crate::settings::keybinds::COMMANDS;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
 
-const SECTION_ITEMS: &[&str] = &["search", "theme", "paths"];
+const SECTION_ITEMS: &[&str] = &["search", "theme", "paths", "keybinds"];
 const SEARCH_ITEMS: &[&str] = &["frecency", "fuzzy"];
 
 /// Draw the current settings screen.
@@ -66,6 +67,15 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &SettingsApp, theme: &Theme) {
             let width = content_width + idx_width + 4;
             draw_picker(frame, content, &items, app.paths_selected(), theme, width);
         }
+        Screen::KeybindCommands => draw_picker(
+            frame,
+            content,
+            COMMANDS,
+            app.keybind_command_selected(),
+            theme,
+            40,
+        ),
+        Screen::KeybindActions => draw_keybind_actions(frame, content, app, theme),
     }
 }
 
@@ -77,6 +87,8 @@ fn chrome_text(app: &SettingsApp) -> (String, String) {
         Screen::Tuner(TunerGroup::Fuzzy) => "settings / search / fuzzy".to_string(),
         Screen::Theme => "settings / theme".to_string(),
         Screen::Paths => "settings / paths".to_string(),
+        Screen::KeybindCommands => "settings / keybinds".to_string(),
+        Screen::KeybindActions => format!("settings / keybinds / {}", app.keybind_command()),
     };
     let title = match app.status() {
         Some(status) => format!("{path} · {status}"),
@@ -153,6 +165,41 @@ fn footer_for(screen: &Screen, keymap: &SettingsKeymap) -> String {
             hint(keymap.list.hint(SettingsListAction::Back), "back"),
             quit,
         ],
+        Screen::KeybindCommands => vec![
+            move_hint(
+                keymap.list.hint(SettingsListAction::MoveUp),
+                keymap.list.hint(SettingsListAction::MoveDown),
+                "move",
+            ),
+            hint(keymap.list.hint(SettingsListAction::Select), "select"),
+            hint(keymap.list.hint(SettingsListAction::Back), "back"),
+            quit,
+        ],
+        Screen::KeybindActions => vec![
+            move_hint(
+                keymap.keybinds.hint(SettingsKeybindsAction::MoveUp),
+                keymap.keybinds.hint(SettingsKeybindsAction::MoveDown),
+                "action",
+            ),
+            move_hint(
+                keymap.keybinds.hint(SettingsKeybindsAction::ChordLeft),
+                keymap.keybinds.hint(SettingsKeybindsAction::ChordRight),
+                "chord",
+            ),
+            hint(keymap.keybinds.hint(SettingsKeybindsAction::Capture), "add"),
+            hint(
+                keymap.keybinds.hint(SettingsKeybindsAction::DeleteChord),
+                "delete",
+            ),
+            hint(keymap.keybinds.hint(SettingsKeybindsAction::Reset), "reset"),
+            hint(
+                keymap.keybinds.hint(SettingsKeybindsAction::Unbind),
+                "unbind",
+            ),
+            hint(keymap.keybinds.hint(SettingsKeybindsAction::Save), "save"),
+            hint(keymap.keybinds.hint(SettingsKeybindsAction::Back), "back"),
+            quit,
+        ],
         Screen::Section => vec![
             move_hint(
                 keymap.list.hint(SettingsListAction::MoveUp),
@@ -202,6 +249,86 @@ fn draw_picker(
         clamped(area, width, items.len() as u16),
         &mut state,
     );
+}
+
+fn draw_keybind_actions(frame: &mut Frame<'_>, area: Rect, app: &SettingsApp, theme: &Theme) {
+    let command = app.keybind_command();
+    let entries = app
+        .keybind_entries()
+        .iter()
+        .filter(|entry| entry.section == command)
+        .collect::<Vec<_>>();
+    let mut rows = Vec::new();
+    let mut last_context = None;
+    let mut selected_render_idx = 0usize;
+    for (row_idx, entry) in entries.iter().enumerate() {
+        if last_context != Some(entry.context) {
+            rows.push(ListItem::new(Line::from(vec![Span::styled(
+                format!("[{}]", entry.context),
+                theme.chrome,
+            )])));
+            last_context = Some(entry.context);
+        }
+        let selected = row_idx == app.keybind_row_selected();
+        if selected {
+            selected_render_idx = rows.len();
+        }
+        let marker = if selected { "▌ " } else { "  " };
+        let changed = if entry.differs_from_default() {
+            "*"
+        } else {
+            " "
+        };
+        let chords = if entry.current.is_empty() {
+            vec![Span::styled("unbound", theme.chrome)]
+        } else {
+            entry
+                .current
+                .iter()
+                .enumerate()
+                .flat_map(|(idx, chord)| {
+                    let style = if selected && idx == app.keybind_chord_selected() {
+                        theme.selected_item
+                    } else {
+                        Style::default()
+                    };
+                    let sep = (idx > 0).then(|| Span::raw(", "));
+                    sep.into_iter()
+                        .chain(std::iter::once(Span::styled(chord.to_string(), style)))
+                        .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>()
+        };
+        let mut spans = vec![
+            Span::styled(
+                marker,
+                if selected {
+                    theme.selected_marker
+                } else {
+                    theme.chrome
+                },
+            ),
+            Span::styled(
+                format!("{changed} {:<22} ", entry.action),
+                if selected {
+                    theme.selected_item
+                } else {
+                    Style::default()
+                },
+            ),
+        ];
+        spans.extend(chords);
+        rows.push(ListItem::new(Line::from(spans)));
+    }
+    let mut state = ListState::default();
+    state.select(Some(selected_render_idx));
+    frame.render_stateful_widget(List::new(rows), area, &mut state);
+
+    if app.capturing_keybind() {
+        let overlay = Paragraph::new("Press a key to bind\nEsc cancels; Ctrl+C quits\nBare Esc can only be restored by reset or config edit")
+            .block(Block::default().borders(Borders::ALL).title("capture key"));
+        frame.render_widget(overlay, centered(area, 54, 5));
+    }
 }
 
 fn draw_tuner(
@@ -342,6 +469,17 @@ fn clamped(area: Rect, width: u16, height: u16) -> Rect {
         y: area.y,
         width: area.width.min(width),
         height: area.height.min(height.max(1)),
+    }
+}
+
+fn centered(area: Rect, width: u16, height: u16) -> Rect {
+    let width = area.width.min(width);
+    let height = area.height.min(height);
+    Rect {
+        x: area.x + area.width.saturating_sub(width) / 2,
+        y: area.y + area.height.saturating_sub(height) / 2,
+        width,
+        height,
     }
 }
 
