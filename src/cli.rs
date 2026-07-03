@@ -12,7 +12,8 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-const STARTER_SNIPPETS_MD: &str = include_str!("../assets/starter_snippets.md");
+const STARTER_SNIPPETS_MD: &str =
+    include_str!(concat!(env!("OUT_DIR"), "/assets/starter_snippets.md"));
 
 /// Terminal snippet manager.
 #[derive(Debug, Clone, Parser, PartialEq, Eq)]
@@ -541,6 +542,21 @@ mod tests {
         let help = String::from_utf8(help).unwrap();
         assert!(help.contains("completions"));
         assert!(!help.contains("--bash"));
+    }
+
+    #[test]
+    fn starter_embed_matches_canonical_source() {
+        assert_eq!(
+            STARTER_SNIPPETS_MD,
+            include_str!("../examples/starter_snippets.md")
+        );
+    }
+
+    #[test]
+    fn starter_embed_contains_known_content_markers() {
+        assert!(STARTER_SNIPPETS_MD.len() > 100);
+        assert!(STARTER_SNIPPETS_MD.contains("# Peanutbutter starter snippets"));
+        assert!(STARTER_SNIPPETS_MD.contains("Conventional commit"));
     }
 
     #[test]
