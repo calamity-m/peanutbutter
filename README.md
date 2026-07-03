@@ -142,7 +142,7 @@ Snippets are really just **ANY** markdown file that follows the following struct
 
 A `##` heading, followed below by some fenced code wrapping block.
 
-I recommend just [just reading through the examples](/examples/simple/snippets.md). The snippet syntax is fairly intuitive and you'll just pick it up by reading it. Benefit from that is you can show snippets to random coworkers/friends/whatever without asking them to use a new tool.
+I recommend just [just reading through the examples](/examples/starter_snippets.md). The snippet syntax is fairly intuitive and you'll just pick it up by reading it. Benefit from that is you can show snippets to random coworkers/friends/whatever without asking them to use a new tool.
 
 This snippet syntax lets you show your snippets to random coworkers, friends or what have you without asking them to understand much - the input variable syntax is fairly simple and close to self explanatory.
 
