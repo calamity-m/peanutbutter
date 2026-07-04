@@ -129,14 +129,11 @@ but enough that I've thought about it for years.
 
 Code probably shit - but the code would be shit if I wrote every single line myself too. Use it like I do, or burn it at the stake. You have free-will right? ;)
 
-There is a bundled skill in this repository that I personally use to get my AI to help me refine complex (really complex) snippets.
+There is a bundled skill in this repository that I personally use to get my AI to help me refine complex (really complex) snippets: [skills/create-peanutbutter-snippet/SKILL.md](skills/create-peanutbutter-snippet/SKILL.md).
 
 ## Snippet Specification
 
 For the complete specification, see [docs/SNIPPET_SYNTAX.md](docs/SNIPPET_SYNTAX.md) or run `pb docs syntax`.
-
-skills/create-peanutbutter-snippet/SKILL.md](skills/create-peanutbutter-snippet/SKILL.md)
-into your agent's skills directory.
 
 Snippets are really just **ANY** markdown file that follows the following structure:
 
