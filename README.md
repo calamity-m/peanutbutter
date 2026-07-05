@@ -39,10 +39,15 @@ Prompts can use suggestions, dependent values, and editable defaults.
 
 ## Quick-Start
 
-Install:
+Install the latest release (Linux x86_64; installs to `~/.local/bin`):
 
+```sh
+curl -fsSL https://raw.githubusercontent.com/calamity-m/peanutbutter/main/scripts/install.sh | sh
 ```
-# Currently only github binaries are built, easiest way is to use something like mise
+
+Pin a version or change the destination with `PB_VERSION` / `PB_INSTALL_DIR`. Alternatively, grab a binary from [GitHub releases](https://github.com/calamity-m/peanutbutter/releases) directly or via a tool like mise:
+
+```sh
 mise use -g github:calamity-m/peanutbutter@latest
 ```
 
