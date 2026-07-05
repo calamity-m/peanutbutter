@@ -9,10 +9,10 @@ Help users create executable Markdown snippets for Peanutbutter (`pb`). Keep sni
 
 ## First: Load the Syntax Reference
 
-Before writing or changing snippets, prefer the canonical syntax reference from an installed `pb`:
+Before writing or changing snippets, prefer the canonical syntax reference from an installed `peanutbutter` (`pb` alias may not be available):
 
 ```bash
-pb docs syntax
+peanutbutter docs syntax
 ```
 
 Treat that reference as the source of truth. If this skill conflicts with it, follow the reference.
@@ -27,7 +27,7 @@ Treat that reference as the source of truth. If this skill conflicts with it, fo
 6. **Use `text` fences only for preview examples.** A bare `text` fence is never the executable body.
 7. **Put the executable command in the first non-`text` fenced block.** Use the user's shell for the fence and command syntax when known (`bash`, `zsh`, `fish`, `pwsh`, etc.); otherwise use `sh` for portable POSIX-style commands.
 8. **Add placeholders for values the user should decide at execution time.** Use Peanutbutter placeholders instead of hardcoding local-only values.
-9. **Validate with `pb lint`.** Use `pb lint --strict` when updating a reusable snippet collection.
+9. **Validate with `peanutbutter lint`.** Use `peanutbutter lint --strict` when updating a reusable snippet collection.
 
 ## New File Shape With Frontmatter
 
@@ -111,14 +111,14 @@ cp <@source> <@destination>
 - Do not hide important side effects in the command body.
 - Keep placeholder labels meaningful: `<@branch>`, `<@container>`, `<@pattern>`, not `<@x>`.
 - Prefer frontmatter variable specs when several snippets in one file share the same suggestions or defaults.
-- Do not invent syntax. Check `pb docs syntax` first when `pb` is available.
+- Do not invent syntax. Check `peanutbutter docs syntax` first when `peanutbutter` is available.
 
 ## Validation
 
 When possible, run lint against the snippet path:
 
 ```bash
-pb lint --strict
+peanutbutter lint --strict
 ```
 
 Before finalizing, check that:
