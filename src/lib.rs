@@ -42,6 +42,7 @@ pub mod execute;
 pub mod frecency;
 pub mod fuzzy;
 pub mod gc;
+pub mod history_trial;
 pub mod index;
 pub mod keybinds;
 pub mod lint;

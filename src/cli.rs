@@ -98,6 +98,11 @@ pub enum Command {
     },
     /// Open the interactive config tuning TUI.
     Settings,
+    /// EXPERIMENTAL: ctrl-r trial — fuzzy-search shell history, Ctrl+T falls
+    /// through to the snippet TUI. Hidden while the trial runs; see
+    /// `src/history_trial.rs` and `scripts/ctrl-r-trial.*`.
+    #[command(hide = true)]
+    History,
     /// Internal shell completion helper for `edit`.
     #[command(hide = true)]
     CompleteEdit { current: Option<String> },
@@ -310,6 +315,60 @@ where
         persist_warning,
         replace_buffer,
     })
+}
+
+/// EXPERIMENTAL: run the ctrl-r history trial (`pb history`).
+///
+/// Shows the fuzzy history picker over the full history piped on stdin (the
+/// TUI reads keys from `/dev/tty` when stdin is a pipe, like fzf), falling
+/// back to `$PEANUTBUTTER_HISTORY`. A picked history entry is written verbatim
+/// with `replace_buffer` semantics and never touches the frecency store.
+/// Ctrl+T (or an empty history payload) falls through to the normal snippet
+/// execute flow.
+pub fn run_history_command<W: Write>(
+    paths: &Paths,
+    writer: &mut W,
+    theme_name: Option<&str>,
+) -> io::Result<ExecuteCommandResult> {
+    use std::io::{IsTerminal, Read};
+    let mut raw = env::var("PEANUTBUTTER_HISTORY").unwrap_or_default();
+    if raw.is_empty() && !io::stdin().is_terminal() {
+        io::stdin().read_to_string(&mut raw)?;
+    }
+    let entries = crate::history_trial::parse_history_payload(&raw);
+    if !entries.is_empty() {
+        let app_config = crate::config::load_with_theme_override(theme_name)?;
+        // Like fzf's ctrl-r, whatever is already typed on the line seeds the
+        // history query; a pick then replaces the whole line.
+        let seed = env::var("PEANUTBUTTER_BUFFER").unwrap_or_default();
+        let outcome = crate::history_trial::run_history_picker(
+            entries,
+            &seed,
+            app_config.ui.height,
+            &app_config.theme,
+        )?;
+        match outcome {
+            crate::history_trial::HistoryOutcome::Cancelled => {
+                return Ok(ExecuteCommandResult {
+                    emitted: false,
+                    persist_warning: None,
+                    replace_buffer: false,
+                });
+            }
+            crate::history_trial::HistoryOutcome::Picked(command) => {
+                writer.write_all(command.as_bytes())?;
+                writer.write_all(b"\n")?;
+                writer.flush()?;
+                return Ok(ExecuteCommandResult {
+                    emitted: true,
+                    persist_warning: None,
+                    replace_buffer: true,
+                });
+            }
+            crate::history_trial::HistoryOutcome::Snippets => {}
+        }
+    }
+    run_execute_command(paths, writer, theme_name)
 }
 
 fn unix_now() -> u64 {

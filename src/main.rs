@@ -112,12 +112,30 @@ fn main() {
         }
     };
     let paths = app_config.paths.clone();
-    let is_execute = matches!(&command, cli::Command::Execute);
+    let is_execute = matches!(&command, cli::Command::Execute | cli::Command::History);
 
     let result = match command {
         cli::Command::Execute => {
             let mut stdout = io::stdout();
             let result = cli::run_execute_command(&paths, &mut stdout, theme_name);
+            let _ = stdout.flush();
+            match result {
+                Ok(result) => {
+                    if let Some(warning) = result.persist_warning {
+                        eprintln!("{BINARY_NAME}: warning: could not save frecency: {warning}");
+                    }
+                    if result.replace_buffer {
+                        std::process::exit(peanutbutter::REPLACE_BUFFER_EXIT_CODE);
+                    }
+                    Ok(())
+                }
+                Err(err) => Err(err),
+            }
+        }
+        // EXPERIMENTAL ctrl-r trial: same stdout/exit-code contract as Execute.
+        cli::Command::History => {
+            let mut stdout = io::stdout();
+            let result = cli::run_history_command(&paths, &mut stdout, theme_name);
             let _ = stdout.flush();
             match result {
                 Ok(result) => {
