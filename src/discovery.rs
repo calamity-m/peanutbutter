@@ -44,9 +44,11 @@ impl IgnoreRules {
     /// Returns `true` if `path` (a directory or file under `root`) is matched
     /// by any pattern, either by its root-relative path or its absolute path.
     ///
-    /// Only the path itself is tested — ancestors are not. Directory pruning
-    /// happens naturally during the walk because every ancestor directory is
-    /// itself visited and tested.
+    /// Each pattern also matches as a directory prefix (`pattern` +
+    /// `/anything`), so an entry naming a directory hides paths beneath it
+    /// even when the directory itself is never visited — e.g. a hidden git
+    /// repository that *encloses* a snippet root sits above the walk, but its
+    /// absolute-path entry must still exclude everything under that root.
     pub fn matches(&self, root: &Path, path: &Path) -> bool {
         if self.patterns.is_empty() {
             return false;
@@ -60,10 +62,16 @@ impl IgnoreRules {
         self.patterns.iter().any(|pattern| {
             relative
                 .as_deref()
-                .is_some_and(|rel| glob_matches(pattern, rel))
-                || glob_matches(pattern, &absolute)
+                .is_some_and(|rel| glob_matches_path(pattern, rel))
+                || glob_matches_path(pattern, &absolute)
         })
     }
+}
+
+/// Match `value` against `pattern` exactly, or as a directory prefix so a
+/// pattern naming a directory covers everything beneath it.
+fn glob_matches_path(pattern: &str, value: &str) -> bool {
+    glob_matches(pattern, value) || glob_matches(&format!("{pattern}/*"), value)
 }
 
 fn normalize_slashes(path: &Path) -> String {
@@ -288,6 +296,12 @@ mod tests {
         );
         // Empty rules keep everything.
         assert_eq!(names(&IgnoreRules::default()).len(), 4);
+
+        // An entry naming a directory *above* the root (e.g. a hidden git
+        // repo that encloses the snippet root) hides everything beneath it
+        // via prefix matching, even though that directory is never visited.
+        let ancestor = root.parent().unwrap().to_string_lossy().replace('\\', "/");
+        assert!(names(&IgnoreRules::new([ancestor])).is_empty());
 
         let _ = fs::remove_dir_all(&root);
     }

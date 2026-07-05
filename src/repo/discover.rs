@@ -34,8 +34,11 @@ impl SnippetRepo {
     }
 }
 
-/// Recursively find git repositories (directories containing `.git`) under the
-/// configured snippet roots, including the roots themselves.
+/// Find git repositories for the configured snippet roots: recursively below
+/// each root (directories containing `.git`, including the root itself), plus
+/// a best-effort upward scan to the nearest *enclosing* repository — a snippet
+/// root is often a subdirectory of the repo that versions it, so the `.git`
+/// marker sits above the root rather than under it.
 ///
 /// Ignored/hidden paths are deliberately *not* skipped — hidden repositories
 /// must stay visible in `pb repo` so they can be unhidden — but each repo is
@@ -58,9 +61,41 @@ pub fn discover_repos(paths: &Paths) -> io::Result<Vec<SnippetRepo>> {
             &mut visited,
             &mut seen_repos,
         )?;
+        scan_upward(root, &ignored, &mut out, &mut seen_repos);
     }
     out.sort_by(|a, b| a.display.cmp(&b.display));
     Ok(out)
+}
+
+/// Walk `root`'s ancestors and register the nearest one containing `.git`.
+/// Only the closest enclosing repository is taken — repositories further up
+/// govern the same snippet files through the same nested-repo boundary.
+fn scan_upward(
+    root: &Path,
+    ignored: &IgnoreRules,
+    out: &mut Vec<SnippetRepo>,
+    seen_repos: &mut HashSet<PathBuf>,
+) {
+    // A root that is itself a repo is a nested-repo boundary: the enclosing
+    // repository does not version the snippets, so don't surface it.
+    if root.join(".git").exists() {
+        return;
+    }
+    for ancestor in root.ancestors().skip(1) {
+        if !ancestor.join(".git").exists() {
+            continue;
+        }
+        let canonical = fs::canonicalize(ancestor).unwrap_or_else(|_| ancestor.to_path_buf());
+        if seen_repos.insert(canonical) {
+            out.push(SnippetRepo {
+                path: ancestor.to_path_buf(),
+                root: root.to_path_buf(),
+                display: ancestor.to_string_lossy().replace('\\', "/"),
+                hidden: ignored.matches(root, ancestor),
+            });
+        }
+        return;
+    }
 }
 
 fn visit(
@@ -168,7 +203,13 @@ mod tests {
         fs::create_dir_all(root.join("visible/.git")).unwrap();
         fs::create_dir_all(root.join("secret/.git")).unwrap();
 
-        let repos = discover_repos(&paths_for(&root, vec!["secret".to_string()])).unwrap();
+        // Keep the test hermetic: drop any enclosing repo the upward scan may
+        // find above the temp dir (e.g. a stray /tmp/.git on the host).
+        let repos: Vec<_> = discover_repos(&paths_for(&root, vec!["secret".to_string()]))
+            .unwrap()
+            .into_iter()
+            .filter(|repo| repo.path.starts_with(&root))
+            .collect();
 
         assert_eq!(repos.len(), 2);
         let secret = repos.iter().find(|repo| repo.display == "secret").unwrap();
@@ -202,11 +243,60 @@ mod tests {
     }
 
     #[test]
+    fn upward_scan_finds_nearest_enclosing_repo() {
+        let workspace = temp_root("upward");
+        // outer/.git encloses outer/inner/snippets (the snippet root); the
+        // nearer inner/.git must win over outer/.git.
+        fs::create_dir_all(workspace.join("outer/.git")).unwrap();
+        fs::create_dir_all(workspace.join("outer/inner/.git")).unwrap();
+        let root = workspace.join("outer/inner/snippets");
+        fs::create_dir_all(&root).unwrap();
+
+        let repos = discover_repos(&paths_for(&root, Vec::new())).unwrap();
+
+        assert_eq!(repos.len(), 1);
+        assert_eq!(repos[0].path, workspace.join("outer/inner"));
+        // Enclosing repos display and hide by absolute path.
+        assert_eq!(
+            repos[0].display,
+            workspace
+                .join("outer/inner")
+                .to_string_lossy()
+                .replace('\\', "/")
+        );
+        assert_eq!(repos[0].ignore_entry(), repos[0].display);
+
+        let _ = fs::remove_dir_all(&workspace);
+    }
+
+    #[test]
+    fn enclosing_repo_hidden_by_absolute_entry() {
+        let workspace = temp_root("upward-hidden");
+        fs::create_dir_all(workspace.join("outer/.git")).unwrap();
+        let root = workspace.join("outer/snippets");
+        fs::create_dir_all(&root).unwrap();
+        let entry = workspace.join("outer").to_string_lossy().replace('\\', "/");
+
+        let repos = discover_repos(&paths_for(&root, vec![entry])).unwrap();
+
+        assert_eq!(repos.len(), 1);
+        assert!(repos[0].hidden);
+
+        let _ = fs::remove_dir_all(&workspace);
+    }
+
+    #[test]
     fn missing_roots_are_skipped() {
         let root = temp_root("missing");
         let mut paths = paths_for(&root, Vec::new());
         paths.snippet_roots.push(root.join("does-not-exist"));
-        assert!(discover_repos(&paths).unwrap().is_empty());
+        // Filter out enclosing repos above the temp dir (host-dependent).
+        assert!(
+            discover_repos(&paths)
+                .unwrap()
+                .into_iter()
+                .all(|repo| !repo.path.starts_with(&root))
+        );
         let _ = fs::remove_dir_all(&root);
     }
 }
