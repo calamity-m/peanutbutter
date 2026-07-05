@@ -1,7 +1,7 @@
 use crate::config::{Paths, Theme};
 use crate::domain::SnippetId;
 use crate::frecency::FrecencyStore;
-use crate::index::load_from_roots;
+
 use owo_colors::OwoColorize;
 use std::collections::HashMap;
 use std::io::{self, IsTerminal, Write};
@@ -134,7 +134,7 @@ pub fn run_with<W: Write>(
         return Ok(());
     }
 
-    let index = load_from_roots(&paths.snippet_roots)?;
+    let index = crate::index::load_from_paths(paths)?;
 
     if index.is_empty() {
         match options.output {
@@ -733,6 +733,7 @@ mod tests {
             snippet_roots: vec![root.to_path_buf()],
             xdg_snippets_dir: root.to_path_buf(),
             snippet_overrides_active: false,
+            ignored: Vec::new(),
             state_file: root.join("state.tsv"),
             config_file: root.join("config.toml"),
         }
@@ -824,6 +825,36 @@ mod tests {
     }
 
     #[test]
+    fn ignored_paths_are_excluded_from_stats() {
+        let root = temp_dir("ignored-paths");
+        write_snippet(&root, "good.md", "good", "Visible");
+        write_snippet(&root, "hidden-repo/secret.md", "secret", "Secret");
+        let mut paths = test_paths(&root);
+        paths.ignored = vec!["hidden-repo".to_string()];
+        let mut store = FrecencyStore::new();
+        record_event(&mut store, "hidden-repo/secret.md", "secret", "/repo", NOW);
+        store.save(&paths.state_file).unwrap();
+
+        let mut out = Vec::new();
+        run(
+            &paths,
+            StatsOptions {
+                output: Output::Json,
+                ..opts_plain()
+            },
+            &mut out,
+        )
+        .unwrap();
+        let raw = String::from_utf8(out).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
+
+        assert!(raw.contains("good.md"), "visible snippet missing: {raw}");
+        assert!(!raw.contains("secret.md"), "hidden snippet leaked: {raw}");
+        // The hidden snippet's usage event now counts as orphaned history.
+        assert_eq!(v["orphaned_event_count"], 1);
+    }
+
+    #[test]
     fn orphaned_ids_excluded_from_ranked_lists() {
         let root = temp_dir("orphans-only");
         write_snippet(&root, "snippets.md", "echo", "Echo");
@@ -879,7 +910,7 @@ mod tests {
         record_event(&mut store, "d.md", "d", "/repo", NOW - 60 * 86400);
         store.save(&paths.state_file).unwrap();
 
-        let index = load_from_roots(&paths.snippet_roots).unwrap();
+        let index = crate::index::load_from_roots(&paths.snippet_roots).unwrap();
         let report = compute_report(&index, &store, &StatsOptions::default(), NOW);
 
         assert_eq!(report.recency.today, 1);
@@ -899,7 +930,7 @@ mod tests {
         record_event(&mut store, "b.md", "b", "/repo", NOW - 100); // newer
         store.save(&paths.state_file).unwrap();
 
-        let index = load_from_roots(&paths.snippet_roots).unwrap();
+        let index = crate::index::load_from_roots(&paths.snippet_roots).unwrap();
         let opts = StatsOptions {
             sort: Sort::Stale,
             ..Default::default()
@@ -922,7 +953,7 @@ mod tests {
         record_event(&mut store, "b.md", "b", "/repo", NOW - 300);
         store.save(&paths.state_file).unwrap();
 
-        let index = load_from_roots(&paths.snippet_roots).unwrap();
+        let index = crate::index::load_from_roots(&paths.snippet_roots).unwrap();
         let opts = StatsOptions {
             sort: Sort::Count,
             ..Default::default()
@@ -1037,7 +1068,7 @@ mod tests {
         record_event(&mut store, "c.md", "c", "/repo", NOW - 50); // orphan
         store.save(&paths.state_file).unwrap();
 
-        let index = load_from_roots(&paths.snippet_roots).unwrap();
+        let index = crate::index::load_from_roots(&paths.snippet_roots).unwrap();
         let report = compute_report(&index, &store, &StatsOptions::default(), NOW);
 
         assert_eq!(report.most_used.len(), 1);

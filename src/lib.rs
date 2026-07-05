@@ -26,6 +26,7 @@
 //! | [`config`] | TOML config loading and theme |
 //! | [`keybinds`] | Configurable key chords and the execute keymap |
 //! | [`settings`] | Interactive config tuning TUI |
+//! | [`repo`] | Snippet git repository manager TUI (`pb repo`) |
 //! | [`cli`] | Argument parsing and command dispatch |
 //! | [`docs`] | Embedded syntax/config reference printed by `pb docs` |
 //! | [`execute`] | Interactive TUI (ratatui, crossterm) |
@@ -42,12 +43,14 @@ pub mod execute;
 pub mod frecency;
 pub mod fuzzy;
 pub mod gc;
+pub(crate) mod glob;
 pub mod index;
 pub mod keybinds;
 pub mod lint;
 pub mod lsp;
 pub mod new;
 pub mod parser;
+pub mod repo;
 pub mod search;
 pub mod settings;
 pub(crate) mod shell;
