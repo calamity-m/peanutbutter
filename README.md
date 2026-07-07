@@ -109,7 +109,7 @@ I personally hate having to interact with snippet/cheatsheet tools, I want the e
 - In the picker, `Ctrl+E` opens the selected snippet in `$VISUAL` or `$EDITOR` at its heading line. When the editor exits, peanutbutter reloads snippets and returns to the picker.
 - You can add snippets via the cli - `pb edit <tab-complete>`.
 - After running a command you want to save, run `pb new [name]` — it harvests the last 50 entries from the shell's in-memory history, lets you pick one, suggests which arguments should become variables, and appends a snippet to `<first-root>/snippets.md`.
-- If your snippets live in git repositories, `pb repo` opens a manager TUI listing every repo discovered under your snippet roots. From there `s` syncs (commit, pull --rebase, push), `p` pushes, `u` pulls, `Enter` jumps into the repo with `$VISUAL`/`$EDITOR`, and `h` hides/unhides a repo. A snippet root with no git repository on or above it still appears so you can `Enter` to jump into it; sync/push/pull are disabled for it. Hidden repos are excluded from the picker, linting, and stats via `[paths] ignored`, but stay visible in `pb repo` so hiding is always reversible.
+- If your snippets live in git repositories, `pb repo` opens a manager TUI listing every repo discovered under your snippet roots. From there `s` syncs (commit, pull --rebase, push), `p` pushes, `u` pulls, and `Enter` jumps into the repo with `$VISUAL`/`$EDITOR`. A snippet root with no git repository on or above it still appears so you can `Enter` to jump into it; sync/push/pull are disabled for it.
 
 ## LSP
 
@@ -189,4 +189,4 @@ ignored = [
 ]
 ```
 
-Entries are glob patterns matched against both the path relative to each snippet root and the absolute path; matching a directory skips everything beneath it. `pb repo`'s hide/unhide action manages entries in this list for you.
+Entries are glob patterns matched against both the path relative to each snippet root and the absolute path; matching a directory skips everything beneath it.

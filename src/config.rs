@@ -18,9 +18,9 @@ pub struct Paths {
     /// Whether snippet roots were explicitly configured through env or config.
     pub snippet_overrides_active: bool,
     /// Glob patterns from `[paths] ignored` matched against root-relative and
-    /// absolute paths during snippet discovery. Matching directories (e.g.
-    /// repositories hidden via `pb repo`) are skipped entirely by indexing,
-    /// search, execution, linting, and stats.
+    /// absolute paths during snippet discovery. Matching directories or files
+    /// are skipped entirely by indexing, search, execution, linting, and
+    /// stats.
     pub ignored: Vec<String>,
     /// TSV file where usage events are appended for frecency scoring.
     /// Defaults to `$XDG_STATE_HOME/peanutbutter/state.tsv`.
@@ -536,7 +536,7 @@ struct PathsFileConfig {
     snippets: Vec<PathBuf>,
     state_file: Option<PathBuf>,
     /// Glob patterns for snippet roots, directories, and files to exclude from
-    /// discovery. `pb repo` hide/unhide toggles entries in this list.
+    /// discovery.
     #[serde(default)]
     ignored: Vec<String>,
 }

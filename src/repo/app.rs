@@ -4,7 +4,6 @@ use crate::config::{AppConfig, Theme};
 use crate::edit::editor::{self, EditorTarget};
 use crate::repo::discover::SnippetRepo;
 use crate::repo::git::{self, GitOperation, GitSummary};
-use crate::repo::persist;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::io;
 use std::path::PathBuf;
@@ -16,8 +15,6 @@ pub(crate) enum RepoEvent {
     Quit,
     /// Run a git operation against the selected repository.
     RunGit(GitOperation),
-    /// Hide or unhide the selected repository.
-    ToggleHide,
     /// Open `$VISUAL`/`$EDITOR` at the selected repository root.
     Jump,
 }
@@ -28,7 +25,7 @@ pub(crate) enum RepoGitState {
     Unknown,
     Summary(GitSummary),
     Error(String),
-    /// A snippet root that is not a git repository (jump/hide only).
+    /// A snippet root that is not a git repository (jump only).
     NotARepo,
 }
 
@@ -38,7 +35,6 @@ pub(crate) struct RepoApp {
     pub(crate) git_states: Vec<RepoGitState>,
     pub(crate) selected: usize,
     pub(crate) status: Option<String>,
-    config_file: PathBuf,
 }
 
 impl RepoApp {
@@ -50,7 +46,6 @@ impl RepoApp {
             git_states,
             selected: 0,
             status: None,
-            config_file: config.paths.config_file.clone(),
         }
     }
 
@@ -90,7 +85,6 @@ impl RepoApp {
             KeyCode::Char('s') => self.git_event(GitOperation::Sync),
             KeyCode::Char('p') => self.git_event(GitOperation::Push),
             KeyCode::Char('u') => self.git_event(GitOperation::Pull),
-            KeyCode::Char('h') => RepoEvent::ToggleHide,
             KeyCode::Enter => RepoEvent::Jump,
             _ => RepoEvent::Continue,
         }
@@ -103,7 +97,7 @@ impl RepoApp {
             RepoEvent::RunGit(operation)
         } else {
             self.set_status(format!(
-                "{} unavailable: not a git repository (jump and hide only)",
+                "{} unavailable: not a git repository (jump only)",
                 operation.label()
             ));
             RepoEvent::Continue
@@ -162,42 +156,6 @@ impl RepoApp {
         self.set_status(status);
     }
 
-    /// Hide the selected repository (append its entry to `[paths] ignored`) or
-    /// unhide it (remove the entry). Updates the in-memory flag and status.
-    pub(crate) fn toggle_hide_selected(&mut self) {
-        let Some(repo) = self.repos.get(self.selected) else {
-            return;
-        };
-        let entry = repo.ignore_entry();
-        let display = repo.display.clone();
-        let hide = !repo.hidden;
-        let result: io::Result<String> = if hide {
-            persist::add_ignored_entry(&self.config_file, &entry)
-                .map(|()| format!("{display}: hidden ({entry} added to [paths] ignored)"))
-        } else {
-            persist::remove_ignored_entry(&self.config_file, &entry).map(|removed| {
-                if removed {
-                    format!("{display}: unhidden")
-                } else {
-                    format!(
-                        "{display}: no verbatim `{entry}` entry; it may be hidden by a glob — edit [paths] ignored manually"
-                    )
-                }
-            })
-        };
-        match result {
-            Ok(status) => {
-                // Only flip the flag when hiding, or when an entry was really
-                // removed; a glob-hidden repo stays hidden.
-                if hide || status.ends_with("unhidden") {
-                    self.repos[self.selected].hidden = hide;
-                }
-                self.set_status(status);
-            }
-            Err(err) => self.set_status(format!("{display}: config update failed: {err}")),
-        }
-    }
-
     /// Open `$VISUAL` / `$EDITOR` at the selected repository root. The caller
     /// must suspend the TUI around this. Returns the repo path on success.
     pub(crate) fn jump_selected(&mut self) -> io::Result<PathBuf> {
@@ -251,12 +209,11 @@ mod tests {
         }
     }
 
-    fn repo(root: &Path, display: &str, hidden: bool) -> SnippetRepo {
+    fn repo(root: &Path, display: &str) -> SnippetRepo {
         SnippetRepo {
             path: root.join(display),
             root: root.to_path_buf(),
             display: display.to_string(),
-            hidden,
             is_repo: true,
         }
     }
@@ -266,7 +223,6 @@ mod tests {
             path: root.join(display),
             root: root.to_path_buf(),
             display: display.to_string(),
-            hidden: false,
             is_repo: false,
         }
     }
@@ -279,10 +235,7 @@ mod tests {
     fn navigation_clamps_and_actions_map_to_events() {
         let root = temp_dir("nav");
         let config = test_config(&root);
-        let mut app = RepoApp::new(
-            &config,
-            vec![repo(&root, "a", false), repo(&root, "b", false)],
-        );
+        let mut app = RepoApp::new(&config, vec![repo(&root, "a"), repo(&root, "b")]);
 
         assert_eq!(app.handle_key(key(KeyCode::Up)), RepoEvent::Continue);
         assert_eq!(app.selected, 0);
@@ -303,10 +256,6 @@ mod tests {
             app.handle_key(key(KeyCode::Char('u'))),
             RepoEvent::RunGit(GitOperation::Pull)
         );
-        assert_eq!(
-            app.handle_key(key(KeyCode::Char('h'))),
-            RepoEvent::ToggleHide
-        );
         assert_eq!(app.handle_key(key(KeyCode::Enter)), RepoEvent::Jump);
         assert_eq!(app.handle_key(key(KeyCode::Char('q'))), RepoEvent::Quit);
         assert_eq!(
@@ -318,7 +267,7 @@ mod tests {
     }
 
     #[test]
-    fn non_repo_entry_disables_git_but_keeps_jump_and_hide() {
+    fn non_repo_entry_disables_git_but_keeps_jump() {
         let root = temp_dir("non-repo");
         let config = test_config(&root);
         let mut app = RepoApp::new(&config, vec![non_repo(&root, "plain")]);
@@ -336,12 +285,8 @@ mod tests {
             );
         }
 
-        // jump and hide remain available.
+        // jump remains available.
         assert_eq!(app.handle_key(key(KeyCode::Enter)), RepoEvent::Jump);
-        assert_eq!(
-            app.handle_key(key(KeyCode::Char('h'))),
-            RepoEvent::ToggleHide
-        );
 
         let _ = fs::remove_dir_all(&root);
     }
@@ -355,43 +300,6 @@ mod tests {
         assert_eq!(app.handle_key(key(KeyCode::Char('s'))), RepoEvent::Continue);
         assert_eq!(app.handle_key(key(KeyCode::Enter)), RepoEvent::Continue);
         assert_eq!(app.handle_key(key(KeyCode::Char('q'))), RepoEvent::Quit);
-        app.toggle_hide_selected();
-        assert!(app.status.is_none());
-
-        let _ = fs::remove_dir_all(&root);
-    }
-
-    #[test]
-    fn toggle_hide_writes_and_removes_config_entry() {
-        let root = temp_dir("toggle");
-        let config = test_config(&root);
-        let mut app = RepoApp::new(&config, vec![repo(&root, "team", false)]);
-
-        app.toggle_hide_selected();
-        assert!(app.repos[0].hidden);
-        let saved = fs::read_to_string(root.join("config.toml")).unwrap();
-        assert!(saved.contains("ignored"));
-        assert!(saved.contains("team"));
-
-        app.toggle_hide_selected();
-        assert!(!app.repos[0].hidden);
-        let saved = fs::read_to_string(root.join("config.toml")).unwrap();
-        assert!(!saved.contains("\"team\""));
-
-        let _ = fs::remove_dir_all(&root);
-    }
-
-    #[test]
-    fn unhide_without_verbatim_entry_keeps_repo_hidden() {
-        let root = temp_dir("glob-hidden");
-        let config = test_config(&root);
-        fs::write(root.join("config.toml"), "[paths]\nignored = [\"te*\"]\n").unwrap();
-        let mut app = RepoApp::new(&config, vec![repo(&root, "team", true)]);
-
-        app.toggle_hide_selected();
-
-        assert!(app.repos[0].hidden, "glob-hidden repo must stay hidden");
-        assert!(app.status.as_deref().unwrap().contains("glob"));
 
         let _ = fs::remove_dir_all(&root);
     }

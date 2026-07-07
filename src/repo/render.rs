@@ -7,8 +7,7 @@ use ratatui::layout::Rect;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
-const FOOTER: &str =
-    "↑/↓ select · s sync · p push · u pull · h hide/unhide · enter jump · r refresh · q quit";
+const FOOTER: &str = "↑/↓ select · s sync · p push · u pull · enter jump · r refresh · q quit";
 
 pub(crate) fn draw(frame: &mut Frame, app: &RepoApp) {
     let area = frame.area();
@@ -88,9 +87,6 @@ fn repo_line<'a>(
         Span::styled(if selected { "> " } else { "  " }, marker_style),
         Span::styled(repo.display.clone(), name_style),
     ];
-    if repo.hidden {
-        spans.push(Span::styled(" [hidden]", app.theme.placeholder));
-    }
     spans.push(Span::raw("  "));
     match state {
         RepoGitState::Unknown => spans.push(Span::styled("…", app.theme.chrome)),

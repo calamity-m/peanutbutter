@@ -9,8 +9,7 @@ use std::path::{Path, PathBuf};
 /// Each pattern is a glob (`*` / `?`, see [`crate::glob`]) matched against two
 /// slash-normalized spellings of every directory and file the walk encounters:
 /// its path relative to the snippet root being walked, and its absolute path.
-/// A pattern that matches a directory prunes the entire subtree, which is how
-/// `pb repo` hides whole snippet repositories.
+/// A pattern that matches a directory prunes the entire subtree.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct IgnoreRules {
     patterns: Vec<String>,

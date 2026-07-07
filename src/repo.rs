@@ -1,15 +1,11 @@
 //! Snippet repository manager for `pb repo`.
 //!
 //! Discovers git repositories under the configured snippet roots and drives an
-//! inline TUI that can sync, push, pull, hide, unhide, and jump into them.
-//! Hidden repositories are excluded from snippet discovery via the
-//! `[paths] ignored` config setting but remain visible here so hiding is
-//! reversible.
+//! inline TUI that can sync, push, pull, and jump into them.
 
 mod app;
 mod discover;
 mod git;
-mod persist;
 mod render;
 
 pub use discover::{SnippetRepo, discover_repos};
@@ -62,9 +58,6 @@ pub fn run(config: &AppConfig) -> io::Result<()> {
                 app.run_git_operation(operation, &mut |app| {
                     let _ = terminal.draw(|frame| render::draw(frame, app));
                 });
-            }
-            app::RepoEvent::ToggleHide => {
-                app.toggle_hide_selected();
             }
             app::RepoEvent::Jump => {
                 // The editor owns the terminal while it runs; tear the
