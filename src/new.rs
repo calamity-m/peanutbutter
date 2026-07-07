@@ -89,10 +89,7 @@ pub fn run_new_command(
 /// When no files exist yet, falls back to a single default
 /// `<first-root>/snippets.md` choice so the picker can be skipped.
 fn new_target_choices(paths: &Paths) -> io::Result<Vec<TargetChoice>> {
-    let files = crate::discovery::discover_all_ignoring(
-        &paths.snippet_roots,
-        &crate::discovery::IgnoreRules::new(paths.ignored.clone()),
-    )?;
+    let files = crate::discovery::discover_all(&paths.snippet_roots)?;
     if files.is_empty() {
         let root = paths
             .snippet_roots
@@ -334,7 +331,6 @@ mod tests {
             snippet_roots: vec![root.to_path_buf()],
             xdg_snippets_dir: root.to_path_buf(),
             snippet_overrides_active: false,
-            ignored: Vec::new(),
             state_file: root.join("state.tsv"),
             config_file: root.join("config.toml"),
         }
@@ -346,7 +342,6 @@ mod tests {
             snippet_roots: roots,
             xdg_snippets_dir: first.clone(),
             snippet_overrides_active: false,
-            ignored: Vec::new(),
             state_file: first.join("state.tsv"),
             config_file: first.join("config.toml"),
         }

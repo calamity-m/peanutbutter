@@ -174,19 +174,3 @@ export PEANUTBUTTER_PATH="/path/to/peanutbutter/examples"
 ```
 
 The XDG default (`~/.config/peanutbutter/snippets/`) is always included and doesn't need to be listed explicitly.
-
-### Ignoring Snippet Paths
-
-Directories and files under snippet roots can be excluded from indexing, search, execution, linting, and stats with the `ignored` setting:
-
-```toml
-[paths]
-ignored = [
-  "archived-repo",        # a directory, relative to any snippet root
-  "nested/generated.md",  # a single file
-  "*.tmp.md",             # globs (`*` and `?`) work too
-  "/abs/path/elsewhere",  # absolute paths are matched as well
-]
-```
-
-Entries are glob patterns matched against both the path relative to each snippet root and the absolute path; matching a directory skips everything beneath it.

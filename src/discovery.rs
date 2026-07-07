@@ -1,102 +1,19 @@
-use crate::glob::glob_matches;
 use std::collections::HashSet;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-
-/// Config-driven ignore rules applied while walking snippet roots.
-///
-/// Each pattern is a glob (`*` / `?`, see [`crate::glob`]) matched against two
-/// slash-normalized spellings of every directory and file the walk encounters:
-/// its path relative to the snippet root being walked, and its absolute path.
-/// A pattern that matches a directory prunes the entire subtree.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct IgnoreRules {
-    patterns: Vec<String>,
-}
-
-impl IgnoreRules {
-    /// Build rules from raw config patterns. Trailing slashes are trimmed so
-    /// `dir/` and `dir` hide the same directory.
-    pub fn new<I, S>(patterns: I) -> Self
-    where
-        I: IntoIterator<Item = S>,
-        S: Into<String>,
-    {
-        Self {
-            patterns: patterns
-                .into_iter()
-                .map(|pattern| {
-                    let pattern: String = pattern.into();
-                    pattern.trim_end_matches('/').to_string()
-                })
-                .filter(|pattern| !pattern.is_empty())
-                .collect(),
-        }
-    }
-
-    /// Returns `true` when no patterns are configured.
-    pub fn is_empty(&self) -> bool {
-        self.patterns.is_empty()
-    }
-
-    /// Returns `true` if `path` (a directory or file under `root`) is matched
-    /// by any pattern, either by its root-relative path or its absolute path.
-    ///
-    /// Each pattern also matches as a directory prefix (`pattern` +
-    /// `/anything`), so an entry naming a directory hides paths beneath it
-    /// even when the directory itself is never visited — e.g. a hidden git
-    /// repository that *encloses* a snippet root sits above the walk, but its
-    /// absolute-path entry must still exclude everything under that root.
-    pub fn matches(&self, root: &Path, path: &Path) -> bool {
-        if self.patterns.is_empty() {
-            return false;
-        }
-        let relative = path
-            .strip_prefix(root)
-            .ok()
-            .filter(|rel| !rel.as_os_str().is_empty())
-            .map(normalize_slashes);
-        let absolute = normalize_slashes(path);
-        self.patterns.iter().any(|pattern| {
-            relative
-                .as_deref()
-                .is_some_and(|rel| glob_matches_path(pattern, rel))
-                || glob_matches_path(pattern, &absolute)
-        })
-    }
-}
-
-/// Match `value` against `pattern` exactly, or as a directory prefix so a
-/// pattern naming a directory covers everything beneath it.
-fn glob_matches_path(pattern: &str, value: &str) -> bool {
-    glob_matches(pattern, value) || glob_matches(&format!("{pattern}/*"), value)
-}
-
-fn normalize_slashes(path: &Path) -> String {
-    path.to_string_lossy().replace('\\', "/")
-}
 
 /// Recursively find all `.md` / `.markdown` files under `root`, sorted
 /// alphabetically. Symlinks to directories are followed; symlink cycles are
 /// detected via canonical paths and skipped. Returns an empty vec if `root`
 /// does not exist.
 pub fn discover_markdown_files(root: &Path) -> io::Result<Vec<PathBuf>> {
-    discover_markdown_files_ignoring(root, &IgnoreRules::default())
-}
-
-/// Like [`discover_markdown_files`] but skipping directories and files matched
-/// by `ignored`.
-pub fn discover_markdown_files_ignoring(
-    root: &Path,
-    ignored: &IgnoreRules,
-) -> io::Result<Vec<PathBuf>> {
     let mut out = Vec::new();
     if !root.exists() {
         return Ok(out);
     }
     let mut visited = HashSet::new();
-    visit(root, root, ignored, &mut out, &mut visited)?;
+    visit(root, &mut out, &mut visited)?;
     out.sort();
     Ok(out)
 }
@@ -105,16 +22,6 @@ pub fn discover_markdown_files_ignoring(
 /// directories shared between roots (e.g. via symlinks) so each file appears
 /// at most once. Files from each root are sorted before appending.
 pub fn discover_all<I, P>(roots: I) -> io::Result<Vec<PathBuf>>
-where
-    I: IntoIterator<Item = P>,
-    P: AsRef<Path>,
-{
-    discover_all_ignoring(roots, &IgnoreRules::default())
-}
-
-/// Like [`discover_all`] but skipping directories and files matched by
-/// `ignored`.
-pub fn discover_all_ignoring<I, P>(roots: I, ignored: &IgnoreRules) -> io::Result<Vec<PathBuf>>
 where
     I: IntoIterator<Item = P>,
     P: AsRef<Path>,
@@ -129,22 +36,13 @@ where
             continue;
         }
         let start = out.len();
-        visit(root, root, ignored, &mut out, &mut visited)?;
+        visit(root, &mut out, &mut visited)?;
         out[start..].sort();
     }
     Ok(out)
 }
 
-fn visit(
-    root: &Path,
-    path: &Path,
-    ignored: &IgnoreRules,
-    out: &mut Vec<PathBuf>,
-    visited: &mut HashSet<PathBuf>,
-) -> io::Result<()> {
-    if ignored.matches(root, path) {
-        return Ok(());
-    }
+fn visit(path: &Path, out: &mut Vec<PathBuf>, visited: &mut HashSet<PathBuf>) -> io::Result<()> {
     let meta = fs::metadata(path)?;
     if meta.is_file() {
         if is_markdown(path) {
@@ -165,19 +63,14 @@ fn visit(
     entries.sort_by_key(|e| e.file_name());
     for entry in entries {
         let child = entry.path();
-        if ignored.matches(root, &child) {
-            continue;
-        }
         let file_type = entry.file_type()?;
         if file_type.is_dir() {
-            visit(root, &child, ignored, out, visited)?;
+            visit(&child, out, visited)?;
         } else if file_type.is_symlink() {
             // file_type() does not follow links; resolve via metadata() to
             // decide whether the target is a dir we should recurse into.
             match fs::metadata(&child) {
-                Ok(target_meta) if target_meta.is_dir() => {
-                    visit(root, &child, ignored, out, visited)?
-                }
+                Ok(target_meta) if target_meta.is_dir() => visit(&child, out, visited)?,
                 Ok(target_meta) if target_meta.is_file() && is_markdown(&child) => {
                     out.push(child);
                 }
@@ -243,64 +136,6 @@ mod tests {
                 "root.md".to_string(),
             ]
         );
-
-        let _ = fs::remove_dir_all(&root);
-    }
-
-    #[test]
-    fn ignored_patterns_skip_files_directories_and_globs() {
-        let root = temp_root("ignored");
-        fs::create_dir_all(root.join("keep")).unwrap();
-        fs::create_dir_all(root.join("hidden-repo/nested")).unwrap();
-        fs::write(root.join("keep/a.md"), "# a\n").unwrap();
-        fs::write(root.join("keep/generated.md"), "# gen\n").unwrap();
-        fs::write(root.join("hidden-repo/b.md"), "# b\n").unwrap();
-        fs::write(root.join("hidden-repo/nested/c.md"), "# c\n").unwrap();
-
-        let names = |ignored: &IgnoreRules| -> Vec<String> {
-            discover_markdown_files_ignoring(&root, ignored)
-                .unwrap()
-                .iter()
-                .map(|p| {
-                    p.strip_prefix(&root)
-                        .unwrap()
-                        .to_string_lossy()
-                        .replace('\\', "/")
-                })
-                .collect()
-        };
-
-        // Directory entry (with trailing slash) prunes the whole subtree.
-        assert_eq!(
-            names(&IgnoreRules::new(["hidden-repo/"])),
-            vec!["keep/a.md".to_string(), "keep/generated.md".to_string()]
-        );
-        // Glob against relative file paths.
-        assert_eq!(
-            names(&IgnoreRules::new(["*generated*"])),
-            vec![
-                "hidden-repo/b.md".to_string(),
-                "hidden-repo/nested/c.md".to_string(),
-                "keep/a.md".to_string(),
-            ]
-        );
-        // Absolute path entry hides the directory too.
-        let absolute = root
-            .join("hidden-repo")
-            .to_string_lossy()
-            .replace('\\', "/");
-        assert_eq!(
-            names(&IgnoreRules::new([absolute])),
-            vec!["keep/a.md".to_string(), "keep/generated.md".to_string()]
-        );
-        // Empty rules keep everything.
-        assert_eq!(names(&IgnoreRules::default()).len(), 4);
-
-        // An entry naming a directory *above* the root (e.g. a hidden git
-        // repo that encloses the snippet root) hides everything beneath it
-        // via prefix matching, even though that directory is never visited.
-        let ancestor = root.parent().unwrap().to_string_lossy().replace('\\', "/");
-        assert!(names(&IgnoreRules::new([ancestor])).is_empty());
 
         let _ = fs::remove_dir_all(&root);
     }

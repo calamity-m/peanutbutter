@@ -64,9 +64,6 @@ pub struct ExecuteOptions {
     /// Snippet roots used to build the original index. These are reused when
     /// the TUI reloads snippets after editing.
     pub snippet_roots: Vec<PathBuf>,
-    /// `[paths] ignored` patterns applied when the TUI reloads snippets after
-    /// editing, so hidden repositories stay excluded from the reloaded index.
-    pub ignored: Vec<String>,
     /// Controls how suggestion commands are executed (timeout, allow/deny).
     pub suggestion_commands: config::SuggestionCommandsConfig,
     /// Current shell buffer content (from `PEANUTBUTTER_BUFFER`), used to
@@ -89,7 +86,6 @@ impl Default for ExecuteOptions {
             theme: config::Theme::default(),
             variables: std::collections::BTreeMap::new(),
             snippet_roots: Vec::new(),
-            ignored: Vec::new(),
             suggestion_commands: config::SuggestionCommandsConfig::default(),
             initial_buffer: None,
             keybinds: crate::keybinds::ExecuteKeymap::default(),

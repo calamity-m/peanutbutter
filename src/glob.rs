@@ -1,4 +1,4 @@
-//! Minimal glob matching shared by lint suppression and discovery ignores.
+//! Minimal glob matching shared by lint suppression and the LSP workspace ignore list.
 
 /// Match `value` against `pattern`, where `*` matches any run of characters
 /// (including none) and `?` matches exactly one. Matching is byte-wise and

@@ -17,11 +17,6 @@ pub struct Paths {
     pub xdg_snippets_dir: PathBuf,
     /// Whether snippet roots were explicitly configured through env or config.
     pub snippet_overrides_active: bool,
-    /// Glob patterns from `[paths] ignored` matched against root-relative and
-    /// absolute paths during snippet discovery. Matching directories or files
-    /// are skipped entirely by indexing, search, execution, linting, and
-    /// stats.
-    pub ignored: Vec<String>,
     /// TSV file where usage events are appended for frecency scoring.
     /// Defaults to `$XDG_STATE_HOME/peanutbutter/state.tsv`.
     pub state_file: PathBuf,
@@ -422,7 +417,6 @@ pub fn load_with_theme_override(theme_name: Option<&str>) -> io::Result<AppConfi
         snippet_roots: resolve_snippet_roots(&file, &xdg_snippets_dir),
         xdg_snippets_dir,
         snippet_overrides_active: snippet_overrides_active(&file),
-        ignored: file.paths.ignored.clone(),
         state_file: resolve_state_file(&file),
         config_file,
     };
@@ -495,7 +489,6 @@ pub fn default_paths() -> Paths {
             snippet_roots: resolve_snippet_roots(&file, &xdg_snippets_dir),
             xdg_snippets_dir,
             snippet_overrides_active: snippet_overrides_active(&file),
-            ignored: file.paths.ignored.clone(),
             state_file: resolve_state_file(&file),
             config_file: resolve_config_file(),
         }
@@ -535,10 +528,6 @@ struct PathsFileConfig {
     #[serde(default)]
     snippets: Vec<PathBuf>,
     state_file: Option<PathBuf>,
-    /// Glob patterns for snippet roots, directories, and files to exclude from
-    /// discovery.
-    #[serde(default)]
-    ignored: Vec<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -998,22 +987,6 @@ command = "find . -type f"
         assert_eq!(variable.default, None);
         assert!(variable.suggestions.is_empty());
         assert_eq!(variable.command.as_deref(), Some("find . -type f"));
-    }
-
-    #[test]
-    fn paths_ignored_deserializes() {
-        let raw = r#"
-[paths]
-ignored = ["hidden-repo", "nested/generated.md", "*.tmp.md"]
-"#;
-        let parsed: FileConfig = toml::from_str(raw).unwrap();
-        assert_eq!(
-            parsed.paths.ignored,
-            vec!["hidden-repo", "nested/generated.md", "*.tmp.md"]
-        );
-
-        let empty: FileConfig = toml::from_str("").unwrap();
-        assert!(empty.paths.ignored.is_empty());
     }
 
     #[test]

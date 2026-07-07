@@ -733,7 +733,6 @@ mod tests {
             snippet_roots: vec![root.to_path_buf()],
             xdg_snippets_dir: root.to_path_buf(),
             snippet_overrides_active: false,
-            ignored: Vec::new(),
             state_file: root.join("state.tsv"),
             config_file: root.join("config.toml"),
         }
@@ -822,36 +821,6 @@ mod tests {
         assert!(!s.contains("No frecency history yet"));
         // Should show never-used section since snippet exists but has no events
         assert!(s.contains("Never Used") || s.contains("Echo"));
-    }
-
-    #[test]
-    fn ignored_paths_are_excluded_from_stats() {
-        let root = temp_dir("ignored-paths");
-        write_snippet(&root, "good.md", "good", "Visible");
-        write_snippet(&root, "hidden-repo/secret.md", "secret", "Secret");
-        let mut paths = test_paths(&root);
-        paths.ignored = vec!["hidden-repo".to_string()];
-        let mut store = FrecencyStore::new();
-        record_event(&mut store, "hidden-repo/secret.md", "secret", "/repo", NOW);
-        store.save(&paths.state_file).unwrap();
-
-        let mut out = Vec::new();
-        run(
-            &paths,
-            StatsOptions {
-                output: Output::Json,
-                ..opts_plain()
-            },
-            &mut out,
-        )
-        .unwrap();
-        let raw = String::from_utf8(out).unwrap();
-        let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
-
-        assert!(raw.contains("good.md"), "visible snippet missing: {raw}");
-        assert!(!raw.contains("secret.md"), "hidden snippet leaked: {raw}");
-        // The hidden snippet's usage event now counts as orphaned history.
-        assert_eq!(v["orphaned_event_count"], 1);
     }
 
     #[test]

@@ -134,9 +134,8 @@ pub fn run<W: Write>(
     let mut findings = Vec::new();
     let mut files = Vec::new();
 
-    let ignored = discovery::IgnoreRules::new(config.paths.ignored.clone());
     for root in &config.paths.snippet_roots {
-        for path in discovery::discover_markdown_files_ignoring(root, &ignored)? {
+        for path in discovery::discover_markdown_files(root)? {
             let content = match fs::read_to_string(&path) {
                 Ok(content) => content,
                 Err(err) => {
@@ -340,7 +339,6 @@ mod tests {
                 snippet_roots: vec![root.clone()],
                 xdg_snippets_dir: root.clone(),
                 snippet_overrides_active: false,
-                ignored: Vec::new(),
                 state_file: root.join("state.tsv"),
                 config_file: root.join("config.toml"),
             },
@@ -359,38 +357,6 @@ mod tests {
                 allow_commands: true,
             },
         }
-    }
-
-    #[test]
-    fn ignored_paths_are_excluded_from_lint() {
-        let root = temp_dir("ignored-paths");
-        fs::create_dir_all(root.join("hidden-repo")).unwrap();
-        // Broken frontmatter would produce a finding if the file were linted.
-        fs::write(
-            root.join("hidden-repo/bad.md"),
-            "---\nunterminated\n\n## Bad\n\n```bash\necho hi\n```\n",
-        )
-        .unwrap();
-        fs::write(root.join("good.md"), "## Good\n\n```bash\necho hi\n```\n").unwrap();
-        let mut cfg = config(root);
-        cfg.paths.ignored = vec!["hidden-repo".to_string()];
-
-        let mut out = Vec::new();
-        let result = run(
-            &cfg,
-            LintOptions {
-                strict: false,
-                json: false,
-            },
-            &mut out,
-        )
-        .unwrap();
-
-        assert!(
-            !result.has_findings(),
-            "hidden repo findings leaked: {:?}",
-            result.findings
-        );
     }
 
     #[test]
@@ -704,7 +670,6 @@ mod dependent_tests {
                 snippet_roots: vec![root.clone()],
                 xdg_snippets_dir: root.clone(),
                 snippet_overrides_active: false,
-                ignored: Vec::new(),
                 state_file: root.join("state.tsv"),
                 config_file: root.join("config.toml"),
             },

@@ -100,9 +100,8 @@ pub enum Command {
     Settings,
     /// Manage git repositories discovered under the snippet roots.
     ///
-    /// Opens a TUI to sync, push, pull, hide, unhide, and jump into snippet
-    /// repositories. Hidden repositories are excluded from snippet indexing,
-    /// linting, and stats via `[paths] ignored`, but stay listed here.
+    /// Opens a TUI to sync (commit, pull --rebase, push), push, pull, and jump
+    /// into snippet repositories.
     Repo,
     /// Internal shell completion helper for `edit`.
     #[command(hide = true)]
@@ -284,7 +283,6 @@ where
         theme: app_config.theme.clone(),
         variables: app_config.variables.clone(),
         snippet_roots: paths.snippet_roots.clone(),
-        ignored: paths.ignored.clone(),
         suggestion_commands: app_config.suggestion_commands.clone(),
         initial_buffer: env::var("PEANUTBUTTER_BUFFER")
             .ok()
@@ -351,7 +349,6 @@ mod tests {
             snippet_roots: vec![root.to_path_buf()],
             xdg_snippets_dir: root.to_path_buf(),
             snippet_overrides_active: false,
-            ignored: Vec::new(),
             state_file: root.join("state.tsv"),
             config_file: root.join("config.toml"),
         }
@@ -649,7 +646,6 @@ mod tests {
             snippet_roots: vec![root.join("empty")],
             xdg_snippets_dir: blocker.join("snippets"),
             snippet_overrides_active: false,
-            ignored: Vec::new(),
             state_file: root.join("state.tsv"),
             config_file: root.join("config.toml"),
         };
