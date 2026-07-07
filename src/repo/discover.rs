@@ -20,6 +20,10 @@ pub struct SnippetRepo {
     /// `true` when the repository is currently matched by `[paths] ignored`
     /// and therefore excluded from snippet discovery.
     pub hidden: bool,
+    /// `true` for an actual git repository; `false` for a snippet root that has
+    /// no git repository anywhere on or above it. Non-repo entries are surfaced
+    /// only so they can be jumped into and hidden — sync/push/pull are inert.
+    pub is_repo: bool,
 }
 
 impl SnippetRepo {
@@ -42,7 +46,9 @@ impl SnippetRepo {
 ///
 /// Ignored/hidden paths are deliberately *not* skipped — hidden repositories
 /// must stay visible in `pb repo` so they can be unhidden — but each repo is
-/// flagged via [`SnippetRepo::hidden`]. Results are deduplicated by canonical
+/// flagged via [`SnippetRepo::hidden`]. Snippet roots with no git repository on
+/// or above them are still surfaced as non-repo entries ([`SnippetRepo::is_repo`]
+/// `= false`) so they can be jumped into. Results are deduplicated by canonical
 /// path and sorted by display label.
 pub fn discover_repos(paths: &Paths) -> io::Result<Vec<SnippetRepo>> {
     let ignored = IgnoreRules::new(paths.ignored.clone());
@@ -53,6 +59,7 @@ pub fn discover_repos(paths: &Paths) -> io::Result<Vec<SnippetRepo>> {
         if !root.is_dir() {
             continue;
         }
+        let before = out.len();
         visit(
             root,
             root,
@@ -62,6 +69,20 @@ pub fn discover_repos(paths: &Paths) -> io::Result<Vec<SnippetRepo>> {
             &mut seen_repos,
         )?;
         scan_upward(root, &ignored, &mut out, &mut seen_repos);
+        // No repository nested under, equal to, or enclosing this root: fall
+        // back to the root itself so it stays reachable (jump only).
+        if out.len() == before {
+            let canonical = fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+            if seen_repos.insert(canonical) {
+                out.push(SnippetRepo {
+                    path: root.to_path_buf(),
+                    root: root.to_path_buf(),
+                    display: root.to_string_lossy().replace('\\', "/"),
+                    hidden: ignored.matches(root, root),
+                    is_repo: false,
+                });
+            }
+        }
     }
     out.sort_by(|a, b| a.display.cmp(&b.display));
     Ok(out)
@@ -92,6 +113,7 @@ fn scan_upward(
                 root: root.to_path_buf(),
                 display: ancestor.to_string_lossy().replace('\\', "/"),
                 hidden: ignored.matches(root, ancestor),
+                is_repo: true,
             });
         }
         return;
@@ -123,6 +145,7 @@ fn visit(
             root: root.to_path_buf(),
             display,
             hidden: ignored.matches(root, dir),
+            is_repo: true,
         });
     }
 
@@ -290,13 +313,56 @@ mod tests {
         let root = temp_root("missing");
         let mut paths = paths_for(&root, Vec::new());
         paths.snippet_roots.push(root.join("does-not-exist"));
-        // Filter out enclosing repos above the temp dir (host-dependent).
-        assert!(
-            discover_repos(&paths)
-                .unwrap()
-                .into_iter()
-                .all(|repo| !repo.path.starts_with(&root))
-        );
+        // The nonexistent root contributes nothing; the existing (repo-less)
+        // root falls back to a single non-repo entry for itself.
+        let under_root: Vec<_> = discover_repos(&paths)
+            .unwrap()
+            .into_iter()
+            .filter(|repo| repo.path.starts_with(&root))
+            .collect();
+        assert_eq!(under_root.len(), 1);
+        assert_eq!(under_root[0].path, root);
+        assert!(!under_root[0].is_repo);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn repo_less_root_falls_back_to_non_repo_entry() {
+        let workspace = temp_root("fallback");
+        // A snippet root with no `.git` on it, under it, or above it (the
+        // temp dir has no enclosing repo we control) — but guard anyway.
+        let root = workspace.join("plain");
+        fs::create_dir_all(root.join("sub")).unwrap();
+
+        let repos: Vec<_> = discover_repos(&paths_for(&root, Vec::new()))
+            .unwrap()
+            .into_iter()
+            .filter(|repo| repo.path.starts_with(&root))
+            .collect();
+
+        assert_eq!(repos.len(), 1);
+        assert!(!repos[0].is_repo);
+        assert_eq!(repos[0].path, root);
+        assert_eq!(repos[0].display, root.to_string_lossy().replace('\\', "/"));
+
+        let _ = fs::remove_dir_all(&workspace);
+    }
+
+    #[test]
+    fn repo_bearing_root_has_no_non_repo_fallback() {
+        let root = temp_root("no-fallback");
+        fs::create_dir_all(root.join("has-repo/.git")).unwrap();
+
+        let repos: Vec<_> = discover_repos(&paths_for(&root, Vec::new()))
+            .unwrap()
+            .into_iter()
+            .filter(|repo| repo.path.starts_with(&root))
+            .collect();
+
+        // Only the nested repo; no synthetic non-repo entry for the root.
+        assert_eq!(repos.len(), 1);
+        assert!(repos.iter().all(|repo| repo.is_repo));
+
         let _ = fs::remove_dir_all(&root);
     }
 }

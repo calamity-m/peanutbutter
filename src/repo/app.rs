@@ -28,6 +28,8 @@ pub(crate) enum RepoGitState {
     Unknown,
     Summary(GitSummary),
     Error(String),
+    /// A snippet root that is not a git repository (jump/hide only).
+    NotARepo,
 }
 
 pub(crate) struct RepoApp {
@@ -85,18 +87,37 @@ impl RepoApp {
                 RepoEvent::Continue
             }
             _ if self.repos.is_empty() => RepoEvent::Continue,
-            KeyCode::Char('s') => RepoEvent::RunGit(GitOperation::Sync),
-            KeyCode::Char('p') => RepoEvent::RunGit(GitOperation::Push),
-            KeyCode::Char('u') => RepoEvent::RunGit(GitOperation::Pull),
+            KeyCode::Char('s') => self.git_event(GitOperation::Sync),
+            KeyCode::Char('p') => self.git_event(GitOperation::Push),
+            KeyCode::Char('u') => self.git_event(GitOperation::Pull),
             KeyCode::Char('h') => RepoEvent::ToggleHide,
             KeyCode::Enter => RepoEvent::Jump,
             _ => RepoEvent::Continue,
         }
     }
 
-    /// (Re)load branch/dirty/upstream summaries for every repository.
+    /// Map a git action to an event, refusing it on a non-repo entry (a snippet
+    /// root with no git repository) where sync/push/pull are meaningless.
+    fn git_event(&mut self, operation: GitOperation) -> RepoEvent {
+        if self.selected_repo().is_some_and(|repo| repo.is_repo) {
+            RepoEvent::RunGit(operation)
+        } else {
+            self.set_status(format!(
+                "{} unavailable: not a git repository (jump and hide only)",
+                operation.label()
+            ));
+            RepoEvent::Continue
+        }
+    }
+
+    /// (Re)load branch/dirty/upstream summaries for every repository. Non-repo
+    /// entries have no git state to read and are flagged as such.
     pub(crate) fn refresh_git_summaries(&mut self) {
         for (repo, state) in self.repos.iter().zip(self.git_states.iter_mut()) {
+            if !repo.is_repo {
+                *state = RepoGitState::NotARepo;
+                continue;
+            }
             *state = match git::summarize(&repo.path) {
                 Ok(summary) => RepoGitState::Summary(summary),
                 Err(err) => RepoGitState::Error(err),
@@ -106,15 +127,31 @@ impl RepoApp {
 
     /// Run `operation` against the selected repository and report the result
     /// in the status line. Blocking; git output is captured, never printed.
-    pub(crate) fn run_git_operation(&mut self, operation: GitOperation) {
+    ///
+    /// `redraw` is called after each step's status is set so the caller can
+    /// repaint the (otherwise frozen) TUI while the subprocess runs, surfacing
+    /// e.g. `sync — pulling (rebase)` before the network round-trip.
+    pub(crate) fn run_git_operation(
+        &mut self,
+        operation: GitOperation,
+        redraw: &mut dyn FnMut(&RepoApp),
+    ) {
         let Some(repo) = self.selected_repo() else {
             return;
         };
         let display = repo.display.clone();
         let path = repo.path.clone();
-        let status = match git::run_operation(&path, operation) {
-            Ok(steps) => format!("{display}: {} ok ({steps})", operation.label()),
-            Err(err) => format!("{display}: {} failed: {err}", operation.label()),
+        let label = operation.label();
+        let result = {
+            let mut progress = |step: &str| {
+                self.status = Some(format!("{display}: {label} — {step}"));
+                redraw(self);
+            };
+            git::run_operation(&path, operation, &mut progress)
+        };
+        let status = match result {
+            Ok(steps) => format!("{display}: {label} ok ({steps})"),
+            Err(err) => format!("{display}: {label} failed: {err}"),
         };
         if let Some(state) = self.git_states.get_mut(self.selected) {
             *state = match git::summarize(&path) {
@@ -220,6 +257,17 @@ mod tests {
             root: root.to_path_buf(),
             display: display.to_string(),
             hidden,
+            is_repo: true,
+        }
+    }
+
+    fn non_repo(root: &Path, display: &str) -> SnippetRepo {
+        SnippetRepo {
+            path: root.join(display),
+            root: root.to_path_buf(),
+            display: display.to_string(),
+            hidden: false,
+            is_repo: false,
         }
     }
 
@@ -264,6 +312,35 @@ mod tests {
         assert_eq!(
             app.handle_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)),
             RepoEvent::Quit
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn non_repo_entry_disables_git_but_keeps_jump_and_hide() {
+        let root = temp_dir("non-repo");
+        let config = test_config(&root);
+        let mut app = RepoApp::new(&config, vec![non_repo(&root, "plain")]);
+
+        // sync/push/pull are refused with an explanatory status.
+        for code in [KeyCode::Char('s'), KeyCode::Char('p'), KeyCode::Char('u')] {
+            assert_eq!(app.handle_key(key(code)), RepoEvent::Continue);
+            assert!(
+                app.status
+                    .as_deref()
+                    .unwrap()
+                    .contains("not a git repository"),
+                "unexpected status: {:?}",
+                app.status
+            );
+        }
+
+        // jump and hide remain available.
+        assert_eq!(app.handle_key(key(KeyCode::Enter)), RepoEvent::Jump);
+        assert_eq!(
+            app.handle_key(key(KeyCode::Char('h'))),
+            RepoEvent::ToggleHide
         );
 
         let _ = fs::remove_dir_all(&root);

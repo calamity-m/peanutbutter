@@ -93,26 +93,41 @@ pub fn summarize(repo: &Path) -> Result<GitSummary, String> {
 
 /// Run `operation` against `repo`, returning a one-line status message
 /// describing the steps taken, or the first failing step's error output.
-pub fn run_operation(repo: &Path, operation: GitOperation) -> Result<String, String> {
+///
+/// `progress` is invoked with a short present-tense description *before* each
+/// step so a caller driving a TUI can surface what the (blocking) subprocess
+/// is doing — e.g. `committing changes`, then `pulling (rebase)`, then
+/// `pushing` for a sync.
+pub fn run_operation(
+    repo: &Path,
+    operation: GitOperation,
+    progress: &mut dyn FnMut(&str),
+) -> Result<String, String> {
     let mut steps = Vec::new();
     match operation {
         GitOperation::Sync => {
+            progress("committing changes");
             if commit_all(repo)? {
                 steps.push("committed");
             }
+            progress("pulling (rebase)");
             pull_rebase(repo)?;
             steps.push("pulled");
+            progress("pushing");
             push(repo)?;
             steps.push("pushed");
         }
         GitOperation::Push => {
+            progress("committing changes");
             if commit_all(repo)? {
                 steps.push("committed");
             }
+            progress("pushing");
             push(repo)?;
             steps.push("pushed");
         }
         GitOperation::Pull => {
+            progress("pulling (rebase)");
             pull_rebase(repo)?;
             steps.push("pulled");
         }
@@ -259,9 +274,17 @@ mod tests {
         git(&other, &["push"]);
 
         fs::write(clone.join("local.md"), "## Local\n\n```\ntrue\n```\n").unwrap();
-        let message = run_operation(&clone, GitOperation::Sync).unwrap();
+        let mut progress = Vec::new();
+        let message = run_operation(&clone, GitOperation::Sync, &mut |step| {
+            progress.push(step.to_string())
+        })
+        .unwrap();
 
         assert_eq!(message, "committed, pulled, pushed");
+        assert_eq!(
+            progress,
+            ["committing changes", "pulling (rebase)", "pushing"]
+        );
         assert!(clone.join("from-other.md").exists());
         let summary = summarize(&clone).unwrap();
         assert_eq!(summary.dirty, 0);
@@ -275,8 +298,14 @@ mod tests {
         let workspace = temp_dir("push-pull");
         let (_remote, clone) = remote_and_clone(&workspace);
 
-        assert_eq!(run_operation(&clone, GitOperation::Push).unwrap(), "pushed");
-        assert_eq!(run_operation(&clone, GitOperation::Pull).unwrap(), "pulled");
+        assert_eq!(
+            run_operation(&clone, GitOperation::Push, &mut |_| {}).unwrap(),
+            "pushed"
+        );
+        assert_eq!(
+            run_operation(&clone, GitOperation::Pull, &mut |_| {}).unwrap(),
+            "pulled"
+        );
 
         let _ = fs::remove_dir_all(&workspace);
     }
@@ -291,7 +320,7 @@ mod tests {
         git(&repo, &["config", "user.email", "pb@test"]);
 
         // No remote configured: pull must fail with a git error message.
-        let err = run_operation(&repo, GitOperation::Pull).unwrap_err();
+        let err = run_operation(&repo, GitOperation::Pull, &mut |_| {}).unwrap_err();
         assert!(err.starts_with("git pull:"), "unexpected error: {err}");
 
         let _ = fs::remove_dir_all(&workspace);

@@ -57,8 +57,11 @@ pub fn run(config: &AppConfig) -> io::Result<()> {
             app::RepoEvent::Quit => break,
             app::RepoEvent::RunGit(operation) => {
                 // Runs synchronously with output captured; nothing is written
-                // to the terminal or stdout by the git subprocesses.
-                app.run_git_operation(operation);
+                // to the terminal or stdout by the git subprocesses. The
+                // redraw hook repaints per-step progress while git blocks.
+                app.run_git_operation(operation, &mut |app| {
+                    let _ = terminal.draw(|frame| render::draw(frame, app));
+                });
             }
             app::RepoEvent::ToggleHide => {
                 app.toggle_hide_selected();

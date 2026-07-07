@@ -70,6 +70,15 @@ fn ignored_array(doc: &mut DocumentMut) -> io::Result<&mut Array> {
         })
 }
 
+/// Write `bytes` to a sibling temp file, then atomically rename it over
+/// `path`.
+///
+/// Temp-file cleanup: a successful `rename` consumes the temp file (it becomes
+/// `path`), so nothing is left behind. If the `rename` fails, the temp file is
+/// explicitly removed before returning the error. The only path that can leak
+/// a temp file is a failure in `create`/`write_all`/`sync_all` before the
+/// rename; the process-id-suffixed name keeps such a stray file from colliding
+/// with a later write, and it is overwritten by the next successful toggle.
 fn atomic_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;

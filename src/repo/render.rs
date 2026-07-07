@@ -98,6 +98,9 @@ fn repo_line<'a>(
             spans.push(Span::styled(summary.describe(), app.theme.chrome))
         }
         RepoGitState::Error(err) => spans.push(Span::styled(err.clone(), app.theme.error)),
+        RepoGitState::NotARepo => {
+            spans.push(Span::styled("(not a git repo)", app.theme.placeholder))
+        }
     }
     Line::from(spans)
 }
