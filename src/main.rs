@@ -218,6 +218,7 @@ fn main() {
             )
         }
         cli::Command::Settings => peanutbutter::settings::run(&app_config),
+        cli::Command::Repo => peanutbutter::repo::run(&app_config),
         cli::Command::CompleteEdit { current } => {
             match peanutbutter::edit::complete_edit(&paths, current.as_deref().unwrap_or("")) {
                 Ok(candidates) => {

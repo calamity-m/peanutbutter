@@ -61,7 +61,7 @@ pub fn run_with<R: BufRead, W: Write>(
     input: &mut R,
     writer: &mut W,
 ) -> io::Result<GcResult> {
-    let index = crate::index::load_from_roots(&paths.snippet_roots)?;
+    let index = crate::index::load_from_paths(paths)?;
     let mut store = FrecencyStore::load(&paths.state_file)?;
     let orphan_counts = orphan_counts(&index, &store);
 
@@ -155,7 +155,7 @@ pub fn run_with<R: BufRead, W: Write>(
 /// Collect orphaned frecency ids and likely reattachment candidates without
 /// prompting, purging, saving, or writing formatted output.
 pub fn collect_orphans(paths: &Paths) -> io::Result<Vec<GcOrphan>> {
-    let index = crate::index::load_from_roots(&paths.snippet_roots)?;
+    let index = crate::index::load_from_paths(paths)?;
     collect_orphans_with_index(paths, &index)
 }
 
@@ -499,6 +499,7 @@ mod tests {
             snippet_roots: vec![root.to_path_buf()],
             xdg_snippets_dir: root.to_path_buf(),
             snippet_overrides_active: false,
+            ignored: Vec::new(),
             state_file: root.join("state.tsv"),
             config_file: root.join("config.toml"),
         }

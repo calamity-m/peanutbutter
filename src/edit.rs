@@ -333,6 +333,7 @@ mod tests {
             snippet_roots: vec![root.to_path_buf()],
             xdg_snippets_dir: root.to_path_buf(),
             snippet_overrides_active: false,
+            ignored: Vec::new(),
             state_file: root.join("state.tsv"),
             config_file: root.join("config.toml"),
         }
@@ -344,6 +345,7 @@ mod tests {
             snippet_roots: roots,
             xdg_snippets_dir: first.clone(),
             snippet_overrides_active: false,
+            ignored: Vec::new(),
             state_file: first.join("state.tsv"),
             config_file: first.join("config.toml"),
         }
