@@ -1,5 +1,5 @@
 use crate::config::Paths;
-use crate::discovery::discover_markdown_files;
+use crate::discovery::{IgnoreRules, discover_markdown_files_ignoring};
 use crate::domain::{Frontmatter, Snippet, SnippetFile, SnippetId};
 use crate::parser::parse_file;
 use std::collections::{BTreeMap, HashMap};
@@ -160,9 +160,17 @@ impl SnippetIndex {
 /// Walk each root directory, parse every `.md` file found, and return a
 /// populated [`SnippetIndex`]. Missing roots are silently skipped.
 pub fn load_from_roots(roots: &[PathBuf]) -> io::Result<SnippetIndex> {
+    load_from_roots_ignoring(roots, &IgnoreRules::default())
+}
+
+/// Like [`load_from_roots`] but skipping paths matched by `ignored`.
+pub fn load_from_roots_ignoring(
+    roots: &[PathBuf],
+    ignored: &IgnoreRules,
+) -> io::Result<SnippetIndex> {
     let mut index = SnippetIndex::new();
     for root in roots {
-        for file_path in discover_markdown_files(root)? {
+        for file_path in discover_markdown_files_ignoring(root, ignored)? {
             let content = fs::read_to_string(&file_path)?;
             let parsed = parse_file(&file_path, root, &content);
             index.insert_file(parsed);
@@ -171,10 +179,20 @@ pub fn load_from_roots(roots: &[PathBuf]) -> io::Result<SnippetIndex> {
     Ok(index)
 }
 
+/// Load a [`SnippetIndex`] from resolved [`Paths`], applying the configured
+/// `[paths] ignored` patterns. Production entry points should prefer this over
+/// [`load_from_roots`] so hidden repositories stay excluded.
+pub fn load_from_paths(paths: &Paths) -> io::Result<SnippetIndex> {
+    load_from_roots_ignoring(
+        &paths.snippet_roots,
+        &IgnoreRules::new(paths.ignored.clone()),
+    )
+}
+
 /// Load a [`SnippetIndex`] from the paths resolved by [`crate::config::default_paths`].
 pub fn load_default() -> io::Result<SnippetIndex> {
     let paths: Paths = crate::config::default_paths();
-    load_from_roots(&paths.snippet_roots)
+    load_from_paths(&paths)
 }
 
 #[allow(dead_code)]

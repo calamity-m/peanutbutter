@@ -103,6 +103,12 @@ pub enum Command {
     /// `src/history_trial.rs` and `scripts/ctrl-r-trial.*`.
     #[command(hide = true)]
     History,
+    /// Manage git repositories discovered under the snippet roots.
+    ///
+    /// Opens a TUI to sync, push, pull, hide, unhide, and jump into snippet
+    /// repositories. Hidden repositories are excluded from snippet indexing,
+    /// linting, and stats via `[paths] ignored`, but stay listed here.
+    Repo,
     /// Internal shell completion helper for `edit`.
     #[command(hide = true)]
     CompleteEdit { current: Option<String> },
@@ -272,7 +278,7 @@ where
     F: FnOnce(SnippetIndex, FrecencyStore, ExecuteOptions) -> io::Result<Option<ExecutionOutcome>>,
 {
     auto_init_if_needed(paths);
-    let index = crate::index::load_from_roots(&paths.snippet_roots)?;
+    let index = crate::index::load_from_paths(paths)?;
     let mut store = FrecencyStore::load(&paths.state_file)?;
     let cwd = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let app_config = crate::config::load_with_theme_override(theme_name)?;
@@ -283,6 +289,7 @@ where
         theme: app_config.theme.clone(),
         variables: app_config.variables.clone(),
         snippet_roots: paths.snippet_roots.clone(),
+        ignored: paths.ignored.clone(),
         suggestion_commands: app_config.suggestion_commands.clone(),
         initial_buffer: env::var("PEANUTBUTTER_BUFFER")
             .ok()
@@ -403,6 +410,7 @@ mod tests {
             snippet_roots: vec![root.to_path_buf()],
             xdg_snippets_dir: root.to_path_buf(),
             snippet_overrides_active: false,
+            ignored: Vec::new(),
             state_file: root.join("state.tsv"),
             config_file: root.join("config.toml"),
         }
@@ -528,6 +536,12 @@ mod tests {
                 .unwrap()
                 .command,
             Some(Command::Settings)
+        );
+        assert_eq!(
+            Cli::try_parse_from(["peanutbutter", "repo"])
+                .unwrap()
+                .command,
+            Some(Command::Repo)
         );
         assert_eq!(
             Cli::try_parse_from(["peanutbutter", "docs"])
@@ -694,6 +708,7 @@ mod tests {
             snippet_roots: vec![root.join("empty")],
             xdg_snippets_dir: blocker.join("snippets"),
             snippet_overrides_active: false,
+            ignored: Vec::new(),
             state_file: root.join("state.tsv"),
             config_file: root.join("config.toml"),
         };

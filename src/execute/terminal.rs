@@ -18,7 +18,7 @@ use super::{ExecuteOptions, ExecutionOutcome};
 /// Convenience entry point used by the `execute` CLI command.
 pub fn execute_default() -> io::Result<Option<ExecutionOutcome>> {
     let app_config = config::load()?;
-    let index = crate::index::load_from_roots(&app_config.paths.snippet_roots)?;
+    let index = crate::index::load_from_paths(&app_config.paths)?;
     let frecency = FrecencyStore::load(&app_config.paths.state_file)?;
     let options = ExecuteOptions {
         cwd: std::env::current_dir().unwrap_or_else(|_| ".".into()),
@@ -27,6 +27,7 @@ pub fn execute_default() -> io::Result<Option<ExecutionOutcome>> {
         theme: app_config.theme.clone(),
         variables: app_config.variables.clone(),
         snippet_roots: app_config.paths.snippet_roots.clone(),
+        ignored: app_config.paths.ignored.clone(),
         keybinds: app_config.keybinds.execute.clone(),
         keybind_warnings: app_config.keybinds.warnings.clone(),
         ..ExecuteOptions::default()
@@ -117,6 +118,7 @@ pub fn run_execute_with_provider<P: SuggestionProvider>(
                         EditResult::MissingSnippet(id),
                         &mut app,
                         &options.snippet_roots,
+                        &options.ignored,
                     ));
                     continue;
                 };
@@ -126,7 +128,12 @@ pub fn run_execute_with_provider<P: SuggestionProvider>(
                 raw_mode.resume()?;
                 terminal = build_terminal(options.viewport_height, tui_output)?;
                 viewport_top = None;
-                app.status = Some(edit_status(edit_result, &mut app, &options.snippet_roots));
+                app.status = Some(edit_status(
+                    edit_result,
+                    &mut app,
+                    &options.snippet_roots,
+                    &options.ignored,
+                ));
             }
             AppEvent::Cancelled => break None,
             AppEvent::Completed(outcome) => break Some(outcome),
@@ -159,9 +166,10 @@ fn edit_status<P: SuggestionProvider>(
     result: EditResult,
     app: &mut ExecutionApp<P>,
     snippet_roots: &[std::path::PathBuf],
+    ignored: &[String],
 ) -> String {
     match result {
-        EditResult::Edited(name) => reload_after_edit(app, snippet_roots, name),
+        EditResult::Edited(name) => reload_after_edit(app, snippet_roots, ignored, name),
         EditResult::Failed(err) => format!("edit failed: {err}"),
         EditResult::MissingSnippet(id) => format!("snippet no longer exists: {id}"),
     }
@@ -170,13 +178,17 @@ fn edit_status<P: SuggestionProvider>(
 fn reload_after_edit<P: SuggestionProvider>(
     app: &mut ExecutionApp<P>,
     snippet_roots: &[std::path::PathBuf],
+    ignored: &[String],
     name: String,
 ) -> String {
     let previous_id = app.selected_snippet().map(|snippet| snippet.id().clone());
     if snippet_roots.is_empty() {
         return format!("edited {name}; reload skipped");
     }
-    match crate::index::load_from_roots(snippet_roots) {
+    match crate::index::load_from_roots_ignoring(
+        snippet_roots,
+        &crate::discovery::IgnoreRules::new(ignored.to_vec()),
+    ) {
         Ok(index) => {
             let previous_found = app.replace_index(index, previous_id.as_ref());
             if previous_found {
@@ -207,7 +219,7 @@ mod tests {
     fn edit_status_reports_success() {
         let mut app = test_app();
         assert_eq!(
-            edit_status(EditResult::Edited("Demo".to_string()), &mut app, &[]),
+            edit_status(EditResult::Edited("Demo".to_string()), &mut app, &[], &[]),
             "edited Demo; reload skipped"
         );
     }
@@ -218,6 +230,7 @@ mod tests {
         let status = edit_status(
             EditResult::Failed(io::Error::other("no editor")),
             &mut app,
+            &[],
             &[],
         );
 
@@ -230,7 +243,7 @@ mod tests {
         let id = SnippetId::new("snippets.md", "demo");
 
         assert_eq!(
-            edit_status(EditResult::MissingSnippet(id), &mut app, &[]),
+            edit_status(EditResult::MissingSnippet(id), &mut app, &[], &[]),
             "snippet no longer exists: snippets.md#demo"
         );
     }
@@ -243,7 +256,12 @@ mod tests {
         let mut app = test_app_with_file(snippet_file(&path, "echo old"));
         fs::write(&path, "## Demo\n\n```\necho new\n```\n").unwrap();
 
-        let status = reload_after_edit(&mut app, std::slice::from_ref(&root), "Demo".to_string());
+        let status = reload_after_edit(
+            &mut app,
+            std::slice::from_ref(&root),
+            &[],
+            "Demo".to_string(),
+        );
 
         assert_eq!(status, "edited Demo; reloaded");
         assert_eq!(
@@ -261,7 +279,12 @@ mod tests {
         let mut app = test_app_with_file(snippet_file(&path, "echo old"));
         fs::write(&path, b"\xff").unwrap();
 
-        let status = reload_after_edit(&mut app, std::slice::from_ref(&root), "Demo".to_string());
+        let status = reload_after_edit(
+            &mut app,
+            std::slice::from_ref(&root),
+            &[],
+            "Demo".to_string(),
+        );
 
         assert!(status.starts_with("edited Demo; reload failed:"));
         assert_eq!(

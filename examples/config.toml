@@ -19,6 +19,17 @@ snippets = [
 # Optional override for the frecency state file.
 state_file = "/home/me/.local/state/peanutbutter/state.tsv"
 
+# Directories and files to exclude from snippet indexing, search, execution,
+# linting, and stats. Entries are glob patterns (`*` and `?`) matched against
+# both the path relative to each snippet root and the absolute path; matching
+# a directory skips everything under it. Repositories hidden via `pb repo`
+# are stored here, and stay listed in `pb repo` so they can be unhidden.
+ignored = [
+  "archived-repo",
+  "nested/generated.md",
+  "*.tmp.md",
+]
+
 [ui]
 # Maximum inline TUI height.
 # The terminal may still clamp this lower depending on available rows.

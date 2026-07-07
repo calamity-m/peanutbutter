@@ -39,10 +39,15 @@ Prompts can use suggestions, dependent values, and editable defaults.
 
 ## Quick-Start
 
-Install:
+Install the latest release (Linux x86_64; installs to `~/.local/bin`):
 
+```sh
+curl -fsSL https://raw.githubusercontent.com/calamity-m/peanutbutter/main/scripts/install.sh | sh
 ```
-# Currently only github binaries are built, easiest way is to use something like mise
+
+Pin a version or change the destination with `PB_VERSION` / `PB_INSTALL_DIR`. Alternatively, grab a binary from [GitHub releases](https://github.com/calamity-m/peanutbutter/releases) directly or via a tool like mise:
+
+```sh
 mise use -g github:calamity-m/peanutbutter@latest
 ```
 
@@ -104,6 +109,7 @@ I personally hate having to interact with snippet/cheatsheet tools, I want the e
 - In the picker, `Ctrl+E` opens the selected snippet in `$VISUAL` or `$EDITOR` at its heading line. When the editor exits, peanutbutter reloads snippets and returns to the picker.
 - You can add snippets via the cli - `pb edit <tab-complete>`.
 - After running a command you want to save, run `pb new [name]` — it harvests the last 50 entries from the shell's in-memory history, lets you pick one, suggests which arguments should become variables, and appends a snippet to `<first-root>/snippets.md`.
+- If your snippets live in git repositories, `pb repo` opens a manager TUI listing every repo discovered under your snippet roots. From there `s` syncs (commit, pull --rebase, push), `p` pushes, `u` pulls, `Enter` jumps into the repo with `$VISUAL`/`$EDITOR`, and `h` hides/unhides a repo. A snippet root with no git repository on or above it still appears so you can `Enter` to jump into it; sync/push/pull are disabled for it. Hidden repos are excluded from the picker, linting, and stats via `[paths] ignored`, but stay visible in `pb repo` so hiding is always reversible.
 
 ## LSP
 
@@ -168,3 +174,19 @@ export PEANUTBUTTER_PATH="/path/to/peanutbutter/examples"
 ```
 
 The XDG default (`~/.config/peanutbutter/snippets/`) is always included and doesn't need to be listed explicitly.
+
+### Ignoring Snippet Paths
+
+Directories and files under snippet roots can be excluded from indexing, search, execution, linting, and stats with the `ignored` setting:
+
+```toml
+[paths]
+ignored = [
+  "archived-repo",        # a directory, relative to any snippet root
+  "nested/generated.md",  # a single file
+  "*.tmp.md",             # globs (`*` and `?`) work too
+  "/abs/path/elsewhere",  # absolute paths are matched as well
+]
+```
+
+Entries are glob patterns matched against both the path relative to each snippet root and the absolute path; matching a directory skips everything beneath it. `pb repo`'s hide/unhide action manages entries in this list for you.
