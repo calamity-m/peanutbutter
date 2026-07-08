@@ -12,6 +12,11 @@ gives editors a rich authoring experience for `.md` snippet files.
 | Hover | `<@name>` shows the resolved variable spec; frontmatter keys show brief docs |
 | Go-to-definition | `<@name>` in a code block → `variables.name:` in frontmatter |
 | Find references | Frontmatter variable declaration → every `<@name>` in the file |
+| Code actions | `Add Peanutbutter frontmatter` for files with no frontmatter; extract inline sourced placeholders to frontmatter or inline simple frontmatter variables |
+
+The `Add Peanutbutter frontmatter` code action inserts a starter block with
+`name`, `description`, `tags`, and an empty `variables:` block at the top of the
+document without changing existing snippet content.
 
 ## Activation scope
 

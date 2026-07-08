@@ -224,11 +224,12 @@ impl LanguageServer for Backend {
         let Some(content) = docs.get(uri) else {
             return Ok(None);
         };
-        Ok(code_actions::compute_code_actions(
+        Ok(code_actions::compute_code_actions_filtered(
             uri,
             content,
             params.range,
             &self.config.variables,
+            params.context.only.as_deref(),
         ))
     }
 

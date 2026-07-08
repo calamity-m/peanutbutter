@@ -9,6 +9,9 @@ use super::{find_variable_declaration_line, frontmatter_end_line, line_range};
 // Code actions
 // ---------------------------------------------------------------------------
 
+const FRONTMATTER_SCAFFOLD: &str =
+    "---\nname: \"\"\ndescription: \"\"\ntags: []\nvariables:\n---\n";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum InlineSourceKind {
     Default,
@@ -26,11 +29,22 @@ struct InlinePlaceholder {
     end: usize,
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub(super) fn compute_code_actions(
     uri: &Url,
     content: &str,
     range: Range,
     config_vars: &BTreeMap<String, VariableSpec>,
+) -> Option<CodeActionResponse> {
+    compute_code_actions_filtered(uri, content, range, config_vars, None)
+}
+
+pub(super) fn compute_code_actions_filtered(
+    uri: &Url,
+    content: &str,
+    range: Range,
+    config_vars: &BTreeMap<String, VariableSpec>,
+    only: Option<&[CodeActionKind]>,
 ) -> Option<CodeActionResponse> {
     let pos = range.start;
     let mut actions = Vec::new();
@@ -40,6 +54,14 @@ pub(super) fn compute_code_actions(
     if let Some(action) = inline_code_action(uri, content, pos, config_vars) {
         actions.push(action);
     }
+    let lines: Vec<&str> = content.lines().collect();
+    if should_offer_frontmatter_scaffold(&lines) {
+        actions.push(frontmatter_scaffold_code_action(uri));
+    }
+    let actions: Vec<_> = actions
+        .into_iter()
+        .filter(|action| code_action_allowed(action, only))
+        .collect();
     if actions.is_empty() {
         None
     } else {
@@ -50,6 +72,49 @@ pub(super) fn compute_code_actions(
                 .collect(),
         )
     }
+}
+
+fn should_offer_frontmatter_scaffold(lines: &[&str]) -> bool {
+    frontmatter_end_line(lines).is_none() && lines.first().map(|line| line.trim()) != Some("---")
+}
+
+fn frontmatter_scaffold_code_action(uri: &Url) -> CodeAction {
+    CodeAction {
+        title: "Add Peanutbutter frontmatter".to_string(),
+        kind: Some(CodeActionKind::SOURCE),
+        edit: Some(workspace_edit(
+            uri,
+            vec![TextEdit {
+                range: empty_line_range(0, 0),
+                new_text: FRONTMATTER_SCAFFOLD.to_string(),
+            }],
+        )),
+        ..Default::default()
+    }
+}
+
+fn code_action_allowed(action: &CodeAction, only: Option<&[CodeActionKind]>) -> bool {
+    let Some(only) = only else {
+        return true;
+    };
+    if only.is_empty() {
+        return true;
+    }
+    let Some(kind) = action.kind.as_ref() else {
+        return false;
+    };
+    only.iter()
+        .any(|requested| code_action_kind_matches(kind, requested))
+}
+
+fn code_action_kind_matches(kind: &CodeActionKind, requested: &CodeActionKind) -> bool {
+    let kind = kind.as_str();
+    let requested = requested.as_str();
+    kind == requested
+        || (!requested.is_empty()
+            && kind
+                .strip_prefix(requested)
+                .is_some_and(|suffix| suffix.starts_with('.')))
 }
 
 fn extract_code_action(
@@ -571,19 +636,21 @@ mod code_action_tests {
         Url::parse("file:///snippets.md").unwrap()
     }
 
-    fn edits(action: &CodeActionOrCommand) -> &[TextEdit] {
+    fn code_action(action: &CodeActionOrCommand) -> &CodeAction {
         let CodeActionOrCommand::CodeAction(action) = action else {
             panic!("expected code action");
         };
+        action
+    }
+
+    fn edits(action: &CodeActionOrCommand) -> &[TextEdit] {
+        let action = code_action(action);
         let changes = action.edit.as_ref().unwrap().changes.as_ref().unwrap();
         changes.get(&uri()).unwrap()
     }
 
     fn action_title(action: &CodeActionOrCommand) -> &str {
-        let CodeActionOrCommand::CodeAction(action) = action else {
-            panic!("expected code action");
-        };
-        &action.title
+        &code_action(action).title
     }
 
     fn apply_edits(content: &str, edits: &[TextEdit]) -> String {
@@ -656,6 +723,115 @@ mod code_action_tests {
         assert!(updated.starts_with(
             "---\nvariables:\n  branch:\n    command: git branch --show-current\n---\n## D"
         ));
+    }
+
+    #[test]
+    fn scaffold_frontmatter_action_inserts_canonical_block() {
+        let content = "## D\n\n```bash\necho hi\n```\n";
+        let actions = compute_code_actions(&uri(), content, range(0, 0), &BTreeMap::new()).unwrap();
+        let action = actions
+            .iter()
+            .map(code_action)
+            .find(|action| action.title == "Add Peanutbutter frontmatter")
+            .unwrap();
+        assert_eq!(action.kind, Some(CodeActionKind::SOURCE));
+        let changes = action.edit.as_ref().unwrap().changes.as_ref().unwrap();
+        let action_edits = changes.get(&uri()).unwrap();
+        assert_eq!(action_edits.len(), 1);
+        assert_eq!(action_edits[0].range.start, pos(0, 0));
+        assert_eq!(action_edits[0].range.end, pos(0, 0));
+        assert_eq!(action_edits[0].new_text, FRONTMATTER_SCAFFOLD);
+        let updated = apply_edits(content, action_edits);
+        assert_eq!(updated, format!("{FRONTMATTER_SCAFFOLD}{content}"));
+    }
+
+    #[test]
+    fn scaffold_frontmatter_action_inserts_into_empty_document() {
+        let content = "";
+        let actions = compute_code_actions(&uri(), content, range(0, 0), &BTreeMap::new()).unwrap();
+        let action = actions
+            .iter()
+            .find(|action| action_title(action) == "Add Peanutbutter frontmatter")
+            .unwrap();
+        let updated = apply_edits(content, edits(action));
+        assert_eq!(updated, FRONTMATTER_SCAFFOLD);
+    }
+
+    #[test]
+    fn scaffold_frontmatter_action_not_offered_when_frontmatter_exists() {
+        for content in ["---\nname: T\n---\n## D\n", "---\n---\n## D\n"] {
+            let actions = compute_code_actions(&uri(), content, range(3, 0), &BTreeMap::new());
+            assert!(actions.is_none_or(|actions| {
+                actions
+                    .iter()
+                    .all(|action| action_title(action) != "Add Peanutbutter frontmatter")
+            }));
+        }
+    }
+
+    #[test]
+    fn scaffold_frontmatter_action_not_offered_for_malformed_frontmatter_start() {
+        let content = "---\nname: T\n## D\n";
+        let actions = compute_code_actions(&uri(), content, range(2, 0), &BTreeMap::new());
+        assert!(actions.is_none_or(|actions| {
+            actions
+                .iter()
+                .all(|action| action_title(action) != "Add Peanutbutter frontmatter")
+        }));
+    }
+
+    #[test]
+    fn scaffold_frontmatter_action_coexists_with_extract() {
+        let content = "## D\n\n```bash\necho <@branch:git branch --show-current>\n```\n";
+        let actions = compute_code_actions(&uri(), content, range(3, 8), &BTreeMap::new()).unwrap();
+        assert!(action_title(&actions[0]).contains("Extract `<@branch>` to frontmatter"));
+        assert!(
+            actions
+                .iter()
+                .any(|action| action_title(action) == "Add Peanutbutter frontmatter")
+        );
+    }
+
+    #[test]
+    fn code_action_kind_filter_limits_source_and_refactor_actions() {
+        let content = "## D\n\n```bash\necho <@branch:git branch --show-current>\n```\n";
+        let source_actions = compute_code_actions_filtered(
+            &uri(),
+            content,
+            range(3, 8),
+            &BTreeMap::new(),
+            Some(&[CodeActionKind::SOURCE]),
+        )
+        .unwrap();
+        assert!(
+            source_actions
+                .iter()
+                .any(|action| action_title(action) == "Add Peanutbutter frontmatter")
+        );
+        assert!(
+            source_actions
+                .iter()
+                .all(|action| !action_title(action).contains("Extract `<@branch>`"))
+        );
+
+        let refactor_actions = compute_code_actions_filtered(
+            &uri(),
+            content,
+            range(3, 8),
+            &BTreeMap::new(),
+            Some(&[CodeActionKind::REFACTOR]),
+        )
+        .unwrap();
+        assert!(
+            refactor_actions
+                .iter()
+                .any(|action| action_title(action).contains("Extract `<@branch>`"))
+        );
+        assert!(
+            refactor_actions
+                .iter()
+                .all(|action| action_title(action) != "Add Peanutbutter frontmatter")
+        );
     }
 
     #[test]
@@ -761,8 +937,8 @@ mod code_action_tests {
         assert!(
             compute_code_actions(
                 &uri(),
-                "## D\n\n```bash\n<@>\n```\n",
-                range(3, 2),
+                "---\nname: T\n---\n## D\n\n```bash\n<@>\n```\n",
+                range(6, 2),
                 &BTreeMap::new()
             )
             .is_none()
@@ -770,8 +946,8 @@ mod code_action_tests {
         assert!(
             compute_code_actions(
                 &uri(),
-                "## D\n\n```bash\nplain text\n```\n",
-                range(3, 2),
+                "---\nname: T\n---\n## D\n\n```bash\nplain text\n```\n",
+                range(6, 2),
                 &BTreeMap::new()
             )
             .is_none()
@@ -795,7 +971,11 @@ mod code_action_tests {
             end: pos(3, 7),
         };
         assert!(compute_code_actions(&uri(), content, eligible, &BTreeMap::new()).is_some());
-        assert!(compute_code_actions(&uri(), content, range(3, 8), &BTreeMap::new()).is_none());
+
+        let with_frontmatter = "---\nname: T\n---\n## D\n\n```bash\n<@p:?.>\n```\n";
+        assert!(
+            compute_code_actions(&uri(), with_frontmatter, range(6, 8), &BTreeMap::new()).is_none()
+        );
     }
 
     #[test]
