@@ -444,10 +444,7 @@ fn find_marker(path: &Path) -> Option<(PathBuf, PathBuf)> {
                 return Some((dir.to_path_buf(), marker_path));
             }
         }
-        match dir.parent() {
-            Some(parent) => dir = parent,
-            None => return None,
-        }
+        dir = dir.parent()?;
     }
 }
 
