@@ -11,37 +11,43 @@ use super::{
     CODE_TEXT_ONLY_SECTION, FileContext, LintFinding, LintSeverity, finding,
 };
 
-/// Warn when two headings in the same file slugify to the same base slug.
-pub(super) fn lint_duplicate_slugs(path: &Path, content: &str) -> Vec<LintFinding> {
+/// Warn when two executable snippets in the same file slugify to the same base slug.
+pub(super) fn lint_duplicate_slugs(file: &FileContext) -> Vec<LintFinding> {
+    let ranges = parser::snippet_line_ranges(&file.parsed.relative_path, &file.content);
+    debug_assert_eq!(file.parsed.snippets.len(), ranges.len());
+    let lines: Vec<_> = file.content.lines().collect();
     let mut first: HashMap<String, usize> = HashMap::new();
     let mut out = Vec::new();
-    for (idx, line) in content.lines().enumerate() {
-        if let Some(heading) = snippet_heading(line) {
-            let slug = slugify(&heading);
-            if let Some(first_line) = first.get(&slug) {
-                // Byte offsets: skip leading whitespace and the "##" prefix, then
-                // any spaces before the heading text, so editors underline just
-                // the heading rather than the whole line.
-                let leading = line.len() - line.trim_start().len();
-                let after_hashes = leading + 2;
-                let rest = &line[after_hashes..];
-                let col_start = after_hashes + (rest.len() - rest.trim_start().len());
-                let col_end = col_start + heading.len();
-                out.push(
-                    finding(
-                        LintSeverity::Warning,
-                        CODE_DUPLICATE_SLUG,
-                        path.to_path_buf(),
-                        None,
-                        None,
-                        format!("snippet heading duplicates base slug '{slug}'"),
-                        Some(format!("first occurrence is on line {first_line}")),
-                    )
-                    .with_span(idx + 1, col_start, col_end),
-                );
-            } else {
-                first.insert(slug, idx + 1);
-            }
+
+    for (snippet, range) in file.parsed.snippets.iter().zip(ranges) {
+        let line_idx = range.start_line;
+        let Some(line) = lines.get(line_idx) else {
+            continue;
+        };
+        let slug = parser::slugify(&snippet.name);
+        if let Some(first_line) = first.get(&slug) {
+            // Byte offsets: skip leading whitespace and the "##" prefix, then
+            // any spaces before the heading text, so editors underline just
+            // the heading rather than the whole line.
+            let leading = line.len() - line.trim_start().len();
+            let after_hashes = leading + 2;
+            let rest = &line[after_hashes..];
+            let col_start = after_hashes + (rest.len() - rest.trim_start().len());
+            let col_end = col_start + snippet.name.len();
+            out.push(
+                finding(
+                    LintSeverity::Warning,
+                    CODE_DUPLICATE_SLUG,
+                    file.path.clone(),
+                    None,
+                    None,
+                    format!("snippet heading duplicates base slug '{slug}'"),
+                    Some(format!("first occurrence is on line {first_line}")),
+                )
+                .with_span(line_idx + 1, col_start, col_end),
+            );
+        } else {
+            first.insert(slug, line_idx + 1);
         }
     }
     out
@@ -190,38 +196,25 @@ fn is_ignored_body_language(language: Option<&str>) -> bool {
     language.is_some_and(|language| language.eq_ignore_ascii_case("text"))
 }
 
-fn slugify(input: &str) -> String {
-    let mut out = String::with_capacity(input.len());
-    let mut last_dash = true;
-    for c in input.chars() {
-        if c.is_ascii_alphanumeric() {
-            out.push(c.to_ascii_lowercase());
-            last_dash = false;
-        } else if !last_dash {
-            out.push('-');
-            last_dash = true;
-        }
-    }
-    while out.ends_with('-') {
-        out.pop();
-    }
-    if out.is_empty() {
-        "snippet".to_string()
-    } else {
-        out
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::path::Path;
 
+    fn file_context(content: &str) -> FileContext {
+        let path = Path::new("test.md");
+        FileContext {
+            path: path.to_path_buf(),
+            content: content.to_string(),
+            parsed: parser::parse_file(path, Path::new("."), content),
+        }
+    }
+
     #[test]
     fn duplicate_slug_finding_has_column_span() {
         let content =
             "## Deploy App\n\n```bash\necho hi\n```\n\n## Deploy App!\n\n```bash\necho bye\n```\n";
-        let findings = lint_duplicate_slugs(Path::new("test.md"), content);
+        let findings = lint_duplicate_slugs(&file_context(content));
         assert_eq!(findings.len(), 1);
         let f = &findings[0];
         assert_eq!(f.line, Some(7));
@@ -235,11 +228,34 @@ mod tests {
         // Headings shouldn't normally have leading whitespace but the span
         // computation should still be correct if they do.
         let content = "## Foo\n\n```bash\necho a\n```\n\n  ## Foo!\n\n```bash\necho b\n```\n";
-        let findings = lint_duplicate_slugs(Path::new("test.md"), content);
+        let findings = lint_duplicate_slugs(&file_context(content));
         assert_eq!(findings.len(), 1);
         let f = &findings[0];
         // "  ## Foo!" → 2 leading spaces + ## + space = col 5
         assert_eq!(f.col_start, Some(5));
         assert_eq!(f.col_end, Some(5 + "Foo!".len()));
+    }
+
+    #[test]
+    fn duplicate_slug_source_span_does_not_depend_on_unique_snippet_ids() {
+        let content = "## Foo\n\n```bash\na\n```\n\n## Foo\n\n```bash\nb\n```\n\n## Foo-1\n\n```bash\nc\n```\n";
+        let findings = lint_duplicate_slugs(&file_context(content));
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].line, Some(7));
+        assert_eq!(findings[0].col_start, Some(3));
+        assert_eq!(findings[0].col_end, Some(6));
+    }
+
+    #[test]
+    fn duplicate_slug_ignores_non_executable_sections() {
+        let content = "## Deploy\n\nNotes only.\n\n## Deploy!\n\n```bash\necho deploy\n```\n";
+        assert!(lint_duplicate_slugs(&file_context(content)).is_empty());
+    }
+
+    #[test]
+    fn duplicate_slug_ignores_text_only_sections() {
+        let content =
+            "## Deploy\n\n```text\nexample\n```\n\n## Deploy!\n\n```bash\necho deploy\n```\n";
+        assert!(lint_duplicate_slugs(&file_context(content)).is_empty());
     }
 }

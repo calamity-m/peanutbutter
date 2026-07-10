@@ -165,7 +165,7 @@ pub fn run<W: Write>(
             &file.path,
             &file.content,
         ));
-        findings.extend(structure::lint_duplicate_slugs(&file.path, &file.content));
+        findings.extend(structure::lint_duplicate_slugs(file));
         findings.extend(frontmatter::lint_unused_file_variables(file));
         findings.extend(commands::lint_static_inline_commands(file));
         findings.extend(commands::lint_duplicate_inline_commands(file));
@@ -220,7 +220,7 @@ pub fn lint_file(path: &Path, root: &Path, content: &str, config: &AppConfig) ->
     };
     let mut findings = Vec::new();
     findings.extend(frontmatter::lint_frontmatter_source(path, content));
-    findings.extend(structure::lint_duplicate_slugs(path, content));
+    findings.extend(structure::lint_duplicate_slugs(&ctx));
     findings.extend(frontmatter::lint_unused_file_variables(&ctx));
     findings.extend(commands::lint_static_inline_commands(&ctx));
     findings.extend(commands::lint_duplicate_inline_commands(&ctx));

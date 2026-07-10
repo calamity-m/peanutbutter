@@ -203,7 +203,7 @@ pub(super) fn next_slug(
     }
 }
 
-pub(super) fn slugify(input: &str) -> String {
+pub(crate) fn slugify(input: &str) -> String {
     let mut out = String::with_capacity(input.len());
     let mut last_dash = true;
     for c in input.chars() {

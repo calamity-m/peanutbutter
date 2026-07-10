@@ -15,8 +15,7 @@ pub use variables::parse_variables;
 
 #[cfg(test)]
 use crate::domain::{Frontmatter, VariableSource};
-#[cfg(test)]
-use snippets::slugify;
+pub(crate) use snippets::slugify;
 
 #[cfg(test)]
 mod tests;
