@@ -276,6 +276,8 @@ keymap_actions!(
         AcceptOrOpen => "accept_or_open", ["enter"];
         Backspace => "backspace", ["backspace"];
         Complete => "complete", ["tab"];
+        CursorLeft => "cursor_left", ["left"];
+        CursorRight => "cursor_right", ["right"];
         MoveUp => "move_up", ["up"];
         MoveDown => "move_down", ["down"];
         PageUp => "page_up", ["pageup"];

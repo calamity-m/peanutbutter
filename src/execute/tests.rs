@@ -1881,6 +1881,21 @@ fn browse_typing_resets_preview_scroll() {
 }
 
 #[test]
+fn browse_left_and_right_arrows_edit_at_the_cursor() {
+    let mut app = app_with_body("echo hi", vec![], TestProvider::default());
+    app.nav_mode = NavigationMode::Browse;
+    app.browse.set_input("fie".to_string());
+
+    let _ = app.handle_key(press(KeyCode::Left));
+    let _ = app.handle_key(press(KeyCode::Char('l')));
+    assert_eq!(app.browse.input(), "file");
+
+    let _ = app.handle_key(press(KeyCode::Right));
+    let _ = app.handle_key(press(KeyCode::Char('s')));
+    assert_eq!(app.browse.input(), "files");
+}
+
+#[test]
 fn browse_backspace_resets_preview_scroll() {
     let mut app = app_with_body("echo hi", vec![], TestProvider::default());
     app.nav_mode = NavigationMode::Browse;

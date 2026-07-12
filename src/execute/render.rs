@@ -264,14 +264,16 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
             inner,
         );
 
-        if matches!(self.nav_mode, NavigationMode::Fuzzy | NavigationMode::Tags) {
+        {
             let cursor_col = match self.nav_mode {
                 NavigationMode::Fuzzy => self.fuzzy.cursor_col(),
+                NavigationMode::Browse => {
+                    self.browse.path_display().chars().count() + self.browse.cursor_col()
+                }
                 NavigationMode::Tags => self.tags.drill().map_or_else(
                     || self.tags.cursor_col(),
                     |tag| tags_prompt_prefix_len(tag) + self.tags.drill_cursor_col(),
                 ),
-                NavigationMode::Browse => unreachable!(),
             };
             let x = chunks[1].x + 2 + cursor_col as u16;
             frame.set_cursor_position(Position {

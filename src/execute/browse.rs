@@ -157,6 +157,19 @@ impl BrowseState {
         self.picker.type_char(c);
     }
 
+    pub fn cursor_left(&mut self) {
+        self.picker.cursor_left();
+    }
+
+    pub fn cursor_right(&mut self) {
+        self.picker.cursor_right();
+    }
+
+    /// Display-column offset of the cursor after the current path prefix.
+    pub fn cursor_col(&self) -> usize {
+        self.picker.cursor_col()
+    }
+
     /// Backspace behaviour: first delete the typed input character by
     /// character; once input is empty, ascend one level and restore the
     /// cursor onto the directory we descended into. Returns `true` if

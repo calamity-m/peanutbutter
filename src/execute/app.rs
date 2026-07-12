@@ -727,6 +727,8 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
                 self.browse.tab_complete(&self.tree);
                 self.preview_scroll = 0;
             }
+            Some(BrowseAction::CursorLeft) => self.browse.cursor_left(),
+            Some(BrowseAction::CursorRight) => self.browse.cursor_right(),
             Some(BrowseAction::MoveUp) => {
                 self.browse.move_cursor(1, visible.len());
                 self.preview_scroll = 0;
