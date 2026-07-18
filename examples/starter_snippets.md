@@ -14,6 +14,8 @@ variables:
     command: git branch --format='%(refname:short)'
   remote:
     command: git remote
+  path:
+    default_value: .
 ---
 
 # Peanutbutter starter snippets
@@ -63,7 +65,7 @@ variables** (`<#name>`). Each picker narrows the next:
   command references `<#namespace>`.
 - `<@key>` lists only the data keys of the chosen secret, because its command
   references both `<#namespace>` and `<#secret>`.
-- `<@output>` pre-fills a save path using `<#name:raw>` splices of all three
+- `<@output>` ghosts a save path using `<#name:raw>` splices of all three
   upstream values — e.g. `prod.db-creds.password.out`. The decoded value is
   written to that file via `tee` and also printed to the terminal.
 
@@ -85,7 +87,7 @@ echo
 Lists files under `<@path>` modified in the last `<@days>` days. `path` defaults to the current directory; `days` defaults to `7`.
 
 ```bash
-find <@path:?.> -type f -mtime -<@days:?7> -not -path '*/.git/*'
+find <@path> -type f -mtime -<@days:?7> -not -path '*/.git/*'
 ```
 
 ## Open a file in your editor
@@ -119,7 +121,7 @@ This snippet uses a `text` fence as a preview-only example. Peanutbutter shows i
 
 ```text
 <@name>             prompt for a value
-<@name:?default>    prompt with a pre-filled default
+<@name:?default>    prompt with an accepted ghost default
 <@name:command>     prompt with suggestions from a shell command
 
 inside a suggestion command, reference an earlier prompt's value:

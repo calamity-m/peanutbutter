@@ -58,7 +58,7 @@ Frontmatter reminders:
 
 - `name`, `description`, and `tags` help search and display.
 - `variables` defines file-local prompt behavior for placeholders used by snippets in the same file.
-- Variable specs can provide `default`, fixed `suggestions`, or a shell `command` whose stdout lines become suggestions.
+- Variable specs can provide editable `default`, accepted-ghost `default_value`, fixed `suggestions`, or a shell `command` whose stdout lines become suggestions. Use `default` when the user should edit a pre-fill; use `default_value` (or inline `:?`) when Enter should accept a ghost value.
 - Prefer file-local `variables` when several snippets share the same placeholder behavior.
 
 ## Snippet Shape
@@ -98,7 +98,7 @@ cp <@source> <@destination>
 - Sections with only `text` fences are ignored as executable snippets.
 - Placeholder names use ASCII letters, digits, `_`, and `-`.
 - Free-form placeholder: `<@name>`
-- Default value: `<@name:?default>`
+- Accepted ghost default: `<@name:?default>` (use frontmatter/config `default_value` for the reusable equivalent)
 - Suggestion command: `<@name:command>`
 - Use dependent references only when the syntax reference says they are valid for that placeholder source.
 - Optional YAML frontmatter can define file metadata and file-local variable specs.

@@ -19,9 +19,9 @@ Fuzzy search highlights matches across names, tags, paths, and command blocks; `
 
 ### Smarter prompts
 
-Prompts can use suggestions, dependent values, and editable defaults.
+Prompts can use suggestions, dependent values, editable pre-fills, and accepted ghost defaults.
 
-![Peanutbutter demo: suggestions and dependent prompt defaults](assets/imgs/demo-prompts.gif)
+![Peanutbutter demo: suggestions and dependent prompt values](assets/imgs/demo-prompts.gif)
 
 ### Save a command as a snippet
 

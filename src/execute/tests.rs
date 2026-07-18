@@ -1,5 +1,5 @@
 use super::app::Screen;
-use super::prompt::{PromptState, load_prompt_state};
+use super::prompt::{PromptState, handle_prompt_key, load_prompt_state};
 use super::*;
 use crate::domain::{Frontmatter, Snippet, SnippetFile, Variable, VariableSource, VariableSpec};
 use crate::frecency::FrecencyStore;
@@ -1195,6 +1195,7 @@ fn variable_flow_uses_config_defined_inputs() {
         "http_method".to_string(),
         crate::config::VariableInputConfig {
             default: Some("POST".to_string()),
+            default_value: None,
             suggestions: vec!["POST".to_string(), "PUT".to_string()],
             command: None,
             hint: None,
@@ -1224,6 +1225,58 @@ fn variable_flow_uses_config_defined_inputs() {
 }
 
 #[test]
+fn reusable_default_value_ghosts_materializes_and_revives() {
+    let variables = vec![Variable {
+        name: "target".to_string(),
+        source: VariableSource::Free,
+    }];
+    let mut locals = BTreeMap::new();
+    locals.insert(
+        "target".to_string(),
+        VariableSpec {
+            default_value: Some("world".to_string()),
+            ..Default::default()
+        },
+    );
+    let provider = SystemSuggestionProvider::default();
+    let mut prompt = PromptState::new(
+        crate::domain::SnippetId::new("test.md", "ghost"),
+        variables,
+        locals,
+    );
+    load_prompt_state(&mut prompt, &provider, Path::new("."));
+    assert_eq!(prompt.input, "");
+    assert_eq!(prompt.ghost_default.as_deref(), Some("world"));
+    assert_eq!(prompt.current_value(), "world");
+
+    let mut status = None;
+    let index = SnippetIndex::default();
+    let _ = handle_prompt_key(
+        press(KeyCode::Tab),
+        &mut prompt,
+        &provider,
+        Path::new("."),
+        &index,
+        &mut status,
+        &crate::keybinds::ExecuteKeymap::default().prompt,
+    );
+    assert_eq!(prompt.input, "world");
+    for _ in 0..5 {
+        let _ = handle_prompt_key(
+            press(KeyCode::Backspace),
+            &mut prompt,
+            &provider,
+            Path::new("."),
+            &index,
+            &mut status,
+            &crate::keybinds::ExecuteKeymap::default().prompt,
+        );
+    }
+    assert_eq!(prompt.input, "");
+    assert_eq!(prompt.ghost_default.as_deref(), Some("world"));
+}
+
+#[test]
 fn variable_flow_uses_file_local_specs_over_config_by_field() {
     let variables = vec![Variable {
         name: "http_method".to_string(),
@@ -1234,6 +1287,7 @@ fn variable_flow_uses_file_local_specs_over_config_by_field() {
         "http_method".to_string(),
         crate::config::VariableInputConfig {
             default: Some("POST".to_string()),
+            default_value: None,
             suggestions: vec!["POST".to_string(), "PUT".to_string()],
             command: None,
             hint: None,
@@ -1244,6 +1298,7 @@ fn variable_flow_uses_file_local_specs_over_config_by_field() {
         "http_method".to_string(),
         VariableSpec {
             default: Some("GET".to_string()),
+            default_value: None,
             suggestions: vec![],
             command: None,
             hint: None,
@@ -1323,6 +1378,7 @@ fn hint_resolves_from_frontmatter_over_config() {
         "input".to_string(),
         crate::config::VariableInputConfig {
             default: None,
+            default_value: None,
             suggestions: vec![],
             command: None,
             hint: Some("from-config".to_string()),
@@ -1333,6 +1389,7 @@ fn hint_resolves_from_frontmatter_over_config() {
         "input".to_string(),
         VariableSpec {
             default: None,
+            default_value: None,
             suggestions: vec![],
             command: None,
             hint: Some("from-frontmatter".to_string()),
@@ -1368,6 +1425,7 @@ fn inline_hint_takes_precedence_over_spec_hint() {
         "input".to_string(),
         VariableSpec {
             default: None,
+            default_value: None,
             suggestions: vec![],
             command: None,
             hint: Some("from-frontmatter".to_string()),
@@ -1405,6 +1463,7 @@ fn spec_default_prefills_hint_placeholder() {
         "input".to_string(),
         VariableSpec {
             default: Some("hello".to_string()),
+            default_value: None,
             suggestions: vec![],
             command: None,
             hint: Some("type a greeting".to_string()),
@@ -1463,6 +1522,7 @@ fn file_local_suggestions_override_config_suggestions() {
         "namespace".to_string(),
         crate::config::VariableInputConfig {
             default: Some("default".to_string()),
+            default_value: None,
             suggestions: vec!["prod".to_string()],
             command: None,
             hint: None,
@@ -1473,6 +1533,7 @@ fn file_local_suggestions_override_config_suggestions() {
         "namespace".to_string(),
         VariableSpec {
             default: None,
+            default_value: None,
             suggestions: vec!["dev".to_string(), "stage".to_string()],
             command: None,
             hint: None,
@@ -1509,6 +1570,7 @@ fn file_local_suggestions_without_default_leave_input_empty() {
         "http_method".to_string(),
         VariableSpec {
             default: None,
+            default_value: None,
             suggestions: vec!["GET".to_string(), "POST".to_string()],
             command: None,
             hint: None,
@@ -1552,6 +1614,7 @@ fn inline_default_overrides_config_default() {
         "namespace".to_string(),
         crate::config::VariableInputConfig {
             default: Some("config-default".to_string()),
+            default_value: None,
             suggestions: vec![],
             command: None,
             hint: None,
@@ -1576,7 +1639,8 @@ fn inline_default_overrides_config_default() {
     let Screen::Prompt(prompt) = &app.screen else {
         panic!("expected prompt");
     };
-    assert_eq!(prompt.input, "inline-default");
+    assert_eq!(prompt.input, "");
+    assert_eq!(prompt.ghost_default.as_deref(), Some("inline-default"));
 }
 
 #[test]
@@ -1592,6 +1656,7 @@ fn inline_default_overrides_file_local_default() {
         "namespace".to_string(),
         VariableSpec {
             default: Some("frontmatter-default".to_string()),
+            default_value: None,
             suggestions: vec![],
             command: None,
             hint: None,
@@ -1618,7 +1683,8 @@ fn inline_default_overrides_file_local_default() {
     let Screen::Prompt(prompt) = &app.screen else {
         panic!("expected prompt");
     };
-    assert_eq!(prompt.input, "inline-default");
+    assert_eq!(prompt.input, "");
+    assert_eq!(prompt.ghost_default.as_deref(), Some("inline-default"));
 }
 
 #[test]
@@ -1632,6 +1698,7 @@ fn file_local_command_spec_populates_suggestions() {
         "greeting".to_string(),
         VariableSpec {
             default: None,
+            default_value: None,
             suggestions: vec![],
             command: Some("echo hello".to_string()),
             hint: None,
@@ -2110,7 +2177,8 @@ fn inline_default_with_embedded_newline_is_preserved() {
     let Screen::Prompt(prompt) = &app.screen else {
         panic!("expected prompt screen");
     };
-    assert_eq!(prompt.input, "line1\nline2");
+    assert_eq!(prompt.input, "");
+    assert_eq!(prompt.ghost_default.as_deref(), Some("line1\nline2"));
     let outcome = completed(app.handle_key(press(KeyCode::Enter)));
     assert_eq!(outcome.command, "cat <<EOF\nline1\nline2\nEOF");
 }
@@ -2575,7 +2643,7 @@ fn independent_variables_still_each_get_fresh_suggestions() {
 }
 
 #[test]
-fn default_input_still_used_on_first_entry_to_default_variable() {
+fn inline_default_is_ghosted_on_first_entry() {
     let variables = vec![Variable {
         name: "kind".to_string(),
         source: VariableSource::Default(vec![crate::syntax::Fragment::Literal("pod".to_string())]),
@@ -2585,7 +2653,8 @@ fn default_input_still_used_on_first_entry_to_default_variable() {
     let Screen::Prompt(prompt) = &app.screen else {
         panic!("expected prompt");
     };
-    assert_eq!(prompt.input, "pod");
+    assert_eq!(prompt.input, "");
+    assert_eq!(prompt.ghost_default.as_deref(), Some("pod"));
 }
 
 #[test]
@@ -2629,7 +2698,8 @@ fn dependent_default_renders_confirmed_upstreams_on_first_entry() {
         panic!("expected prompt");
     };
     assert_eq!(prompt.current_variable().name, "out");
-    assert_eq!(prompt.input, "ns.sec.key.out");
+    assert_eq!(prompt.input, "");
+    assert_eq!(prompt.ghost_default.as_deref(), Some("ns.sec.key.out"));
 }
 
 #[test]
@@ -2659,7 +2729,8 @@ fn dependent_default_missing_upstream_yields_empty_input() {
     prompt.values.insert("a".to_string(), "up".to_string());
     prompt.index = 1;
     load_prompt_state(&mut prompt, &TestProvider::default(), Path::new("."));
-    assert_eq!(prompt.input, "up.out");
+    assert_eq!(prompt.input, "");
+    assert_eq!(prompt.ghost_default.as_deref(), Some("up.out"));
 }
 
 #[test]
@@ -2686,7 +2757,8 @@ fn dependent_default_quoted_form_matches_command_quoting() {
         .insert("name".to_string(), "O'Brien's".to_string());
     prompt.index = 1;
     load_prompt_state(&mut prompt, &TestProvider::default(), Path::new("."));
-    assert_eq!(prompt.input, "'O'\\''Brien'\\''s'");
+    assert_eq!(prompt.input, "");
+    assert_eq!(prompt.ghost_default.as_deref(), Some("'O'\\''Brien'\\''s'"));
 }
 
 #[test]
@@ -2714,7 +2786,8 @@ fn changing_upstream_dirties_dependent_default_and_preserves_input() {
         let Screen::Prompt(prompt) = &app.screen else {
             panic!("expected prompt");
         };
-        assert_eq!(prompt.input, "A.out");
+        assert_eq!(prompt.input, "");
+        assert_eq!(prompt.ghost_default.as_deref(), Some("A.out"));
     }
     let _ = app.handle_key(press(KeyCode::BackTab));
     let _ = app.handle_key(press(KeyCode::Backspace));

@@ -8,9 +8,92 @@ use crate::config::VariableInputConfig;
 use crate::domain::VariableSpec;
 
 use super::{
-    CODE_BROKEN_FRONTMATTER, CODE_FRONTMATTER_OVERRIDE, CODE_UNUSED_VARIABLE, FileContext,
-    LintFinding, LintSeverity, finding,
+    CODE_BROKEN_FRONTMATTER, CODE_DEFAULT_VALUE_CONFLICT, CODE_FRONTMATTER_OVERRIDE,
+    CODE_UNUSED_VARIABLE, FileContext, LintFinding, LintSeverity, finding,
 };
+
+/// Report `default_value` combinations that would create ambiguous prompt
+/// sources. Runtime has deterministic fallback behavior, but these errors are
+/// the supported author-facing resolution path.
+pub(super) fn lint_default_value_conflicts(
+    file: &FileContext,
+    globals: &BTreeMap<String, VariableInputConfig>,
+) -> Vec<LintFinding> {
+    let mut out = spec_default_value_conflicts(
+        &file.parsed.frontmatter.variables,
+        &file.path,
+        "frontmatter",
+    );
+    for (name, local) in &file.parsed.frontmatter.variables {
+        let Some(global) = globals.get(name) else {
+            continue;
+        };
+        if local.default_value.is_some() && has_composable_source(global) {
+            out.push(default_value_conflict(
+                &file.path,
+                format!(
+                    "frontmatter default_value for variable '{name}' conflicts with its config input source"
+                ),
+            ));
+        }
+        if global.default_value.is_some() && has_composable_source(local) {
+            out.push(default_value_conflict(
+                &file.path,
+                format!(
+                    "config default_value for variable '{name}' conflicts with its frontmatter input source"
+                ),
+            ));
+        }
+    }
+    out
+}
+
+/// Report config-only `default_value` conflicts once per lint run.
+pub(super) fn lint_config_default_value_conflicts(
+    globals: &BTreeMap<String, VariableInputConfig>,
+    config_file: &Path,
+) -> Vec<LintFinding> {
+    spec_default_value_conflicts(globals, config_file, "config")
+}
+
+fn spec_default_value_conflicts(
+    specs: &BTreeMap<String, VariableSpec>,
+    path: &Path,
+    layer: &str,
+) -> Vec<LintFinding> {
+    specs
+        .iter()
+        .filter_map(|(name, spec)| {
+            let conflict = if spec.default_value.is_some() && matches!(name.as_str(), "file" | "directory") {
+                Some(format!("{layer} default_value for builtin variable '{name}' conflicts with its built-in suggestions"))
+            } else if spec.default_value.is_some() && has_composable_source(spec) {
+                Some(format!("{layer} variable '{name}' combines default_value with default, suggestions, command, or hint"))
+            } else {
+                None
+            };
+            conflict.map(|message| default_value_conflict(path, message))
+        })
+        .collect()
+}
+
+fn has_composable_source(spec: &VariableSpec) -> bool {
+    spec.default.is_some()
+        || !spec.suggestions.is_empty()
+        || spec.command.is_some()
+        || spec.hint.is_some()
+}
+
+fn default_value_conflict(path: &Path, message: String) -> LintFinding {
+    finding(
+        LintSeverity::Error,
+        CODE_DEFAULT_VALUE_CONFLICT,
+        path.to_path_buf(),
+        None,
+        None,
+        message,
+        Some("use default for editable pre-fill, or use default_value alone for an accepted ghost value".to_string()),
+    )
+}
 
 /// Check for unterminated frontmatter blocks and malformed key/value lines.
 pub(super) fn lint_frontmatter_source(path: &Path, content: &str) -> Vec<LintFinding> {

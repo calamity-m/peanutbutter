@@ -121,8 +121,8 @@ fn emit_placeholder(line_idx: u32, line: &str, start: usize, end: usize, out: &m
                 );
             }
             // Source region includes the `:` separator. A leading `?` marks a
-            // default and a leading `@` marks a hint (both display/prefill
-            // text, so string); anything else is a suggestion command
+            // accepted ghost default and a leading `@` marks a hint (both
+            // display text, so string); anything else is a suggestion command
             // (function).
             let is_text = matches!(line.as_bytes().get(name_end + 1), Some(&b'?') | Some(&b'@'));
             let base = if is_text { TOK_STRING } else { TOK_FUNCTION };

@@ -24,7 +24,11 @@ pub(super) const FRONTMATTER_KEYS: &[(&str, &str)] = &[
 const VARIABLE_SPEC_KEYS: &[(&str, &str)] = &[
     (
         "default",
-        "Pre-populated value shown in the prompt input box",
+        "Pre-populated editable value shown in the prompt input box",
+    ),
+    (
+        "default_value",
+        "Ghost value accepted by Enter or materialized by Tab while input is empty",
     ),
     (
         "suggestions",
@@ -193,7 +197,10 @@ fn completion_item(label: &str, documentation: &str, kind: CompletionItemKind) -
 pub(super) fn variable_spec_summary(spec: &crate::domain::VariableSpec) -> String {
     let mut parts = Vec::new();
     if let Some(d) = &spec.default {
-        parts.push(format!("default: `{d}`"));
+        parts.push(format!("default (editable pre-fill): `{d}`"));
+    }
+    if let Some(d) = &spec.default_value {
+        parts.push(format!("default_value (accepted ghost): `{d}`"));
     }
     if !spec.suggestions.is_empty() {
         parts.push(format!("suggestions: {}", spec.suggestions.join(", ")));

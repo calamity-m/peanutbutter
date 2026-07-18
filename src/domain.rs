@@ -47,8 +47,11 @@ pub struct Frontmatter {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
 #[serde(default)]
 pub struct VariableSpec {
-    /// Pre-populated value shown in the prompt input box.
+    /// Pre-populated editable value shown in the prompt input box.
     pub default: Option<String>,
+    /// Muted ghost value accepted by Enter or materialized by Tab while input
+    /// is empty. Unlike [`Self::default`], it is not initially editable.
+    pub default_value: Option<String>,
     /// Fixed suggestion values shown in the prompt suggestion list.
     pub suggestions: Vec<String>,
     /// Shell command whose stdout lines are used as suggestions.
@@ -66,7 +69,8 @@ pub enum VariableSource {
     Free,
     /// Run `bash -c <command>` and split stdout into suggestion lines.
     Command(String),
-    /// Pre-populated default value (`<@name:?default>`); can be overridden.
+    /// Accepted ghost default (`<@name:?default>`); Tab materializes it and
+    /// typing overrides it.
     Default(CommandTemplate),
     /// Display-only ghost text (`<@name:@hint>`) shown while the input is
     /// empty; accepting without typing yields an empty value, never the hint.

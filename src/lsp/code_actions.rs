@@ -191,10 +191,15 @@ fn inline_code_action(
     }
     // Inlining removes the whole spec, so only offer it when the spec is a
     // single source that has an inline equivalent.
-    let (kind, value) = match (&spec.default, &spec.command, &spec.hint) {
-        (Some(default), None, None) => (InlineSourceKind::Default, default.as_str()),
-        (None, Some(command), None) => (InlineSourceKind::Command, command.as_str()),
-        (None, None, Some(hint)) => (InlineSourceKind::Hint, hint.as_str()),
+    let (kind, value) = match (
+        &spec.default_value,
+        &spec.command,
+        &spec.hint,
+        &spec.default,
+    ) {
+        (Some(default), None, None, None) => (InlineSourceKind::Default, default.as_str()),
+        (None, Some(command), None, None) => (InlineSourceKind::Command, command.as_str()),
+        (None, None, Some(hint), None) => (InlineSourceKind::Hint, hint.as_str()),
         _ => return None,
     };
     let target = first_placeholder(content, &name)?;
@@ -365,7 +370,11 @@ fn first_placeholder(content: &str, name: &str) -> Option<PlaceholderUse> {
 fn spec_matches_inline(spec: &VariableSpec, inline: &InlinePlaceholder) -> bool {
     match inline.kind {
         InlineSourceKind::Default => {
-            spec.default.as_deref() == Some(inline.value.as_str()) && spec.command.is_none()
+            spec.default_value.as_deref() == Some(inline.value.as_str())
+                && spec.default.is_none()
+                && spec.command.is_none()
+                && spec.hint.is_none()
+                && spec.suggestions.is_empty()
         }
         InlineSourceKind::Command => {
             spec.command.as_deref() == Some(inline.value.as_str()) && spec.default.is_none()
@@ -468,11 +477,14 @@ fn variable_spec_text_preserving(
     inline: &InlinePlaceholder,
 ) -> String {
     let source_key = inline_source_key(inline.kind);
-    // Keys the extracted source supersedes: default and command are mutually
-    // exclusive prefill/suggestion sources, while a hint is orthogonal and
-    // only replaces an existing hint.
+    // `default_value` is a source, not a composable prompt option. Extracting
+    // inline `:?` must remove every mutually-exclusive field, including a
+    // block-form suggestions list.
     let replaced_keys: &[&str] = match inline.kind {
-        InlineSourceKind::Default | InlineSourceKind::Command => &["default", "command"],
+        InlineSourceKind::Default => {
+            &["default_value", "default", "command", "hint", "suggestions"]
+        }
+        InlineSourceKind::Command => &["default", "command"],
         InlineSourceKind::Hint => &["hint"],
     };
     let mut out = format!(
@@ -487,18 +499,21 @@ fn variable_spec_text_preserving(
         let indent = line.len() - trimmed.len();
         if skip_suggestions_list {
             if indent > 4 && trimmed.starts_with('-') {
-                out.push_str(line);
-                out.push('\n');
                 continue;
             }
             skip_suggestions_list = false;
         }
         let key = trimmed.split_once(':').map(|(key, _)| key.trim());
-        if indent == 4 && key.is_some_and(|key| replaced_keys.contains(&key)) {
+        if indent == 4
+            && key == Some("suggestions")
+            && replaced_keys.contains(&"suggestions")
+            && trimmed.ends_with(':')
+        {
+            skip_suggestions_list = true;
             continue;
         }
-        if indent == 4 && key == Some("suggestions") && trimmed.ends_with(':') {
-            skip_suggestions_list = true;
+        if indent == 4 && key.is_some_and(|key| replaced_keys.contains(&key)) {
+            continue;
         }
         out.push_str(line);
         out.push('\n');
@@ -508,7 +523,7 @@ fn variable_spec_text_preserving(
 
 fn inline_source_key(kind: InlineSourceKind) -> &'static str {
     match kind {
-        InlineSourceKind::Default => "default",
+        InlineSourceKind::Default => "default_value",
         InlineSourceKind::Command => "command",
         InlineSourceKind::Hint => "hint",
     }
@@ -711,7 +726,10 @@ mod code_action_tests {
         assert_eq!(actions.len(), 1);
         assert!(action_title(&actions[0]).contains("Extract `<@path>`"));
         let updated = apply_edits(content, edits(&actions[0]));
-        assert!(updated.contains("variables:\n  path:\n    default: \"<#a:raw>.out # keep\"\n---"));
+        assert!(
+            updated
+                .contains("variables:\n  path:\n    default_value: \"<#a:raw>.out # keep\"\n---")
+        );
         assert!(updated.contains("echo <@path>"));
     }
 
@@ -836,7 +854,8 @@ mod code_action_tests {
 
     #[test]
     fn extract_matching_spec_only_simplifies_placeholder() {
-        let content = "---\nvariables:\n  p:\n    default: .\n---\n## D\n\n```bash\n<@p:?.>\n```\n";
+        let content =
+            "---\nvariables:\n  p:\n    default_value: .\n---\n## D\n\n```bash\n<@p:?.>\n```\n";
         let actions = compute_code_actions(&uri(), content, range(8, 2), &BTreeMap::new()).unwrap();
         let action_edits = edits(&actions[0]);
         assert_eq!(action_edits.len(), 1);
@@ -855,7 +874,7 @@ mod code_action_tests {
         assert!(!updated.contains("<@p:?.>"));
         // The differing override keeps its own inline value.
         assert!(updated.contains("<@p:?/tmp>"));
-        assert!(updated.contains("variables:\n  p:\n    default: .\n"));
+        assert!(updated.contains("variables:\n  p:\n    default_value: .\n"));
     }
 
     #[test]
@@ -874,13 +893,15 @@ mod code_action_tests {
     }
 
     #[test]
-    fn extract_default_preserves_existing_hint_key() {
-        let content = "---\nvariables:\n  p:\n    hint: guidance\n    default: old\n---\n## D\n\n```bash\n<@p:?new>\n```\n";
-        let actions = compute_code_actions(&uri(), content, range(9, 2), &BTreeMap::new()).unwrap();
+    fn extract_default_removes_mutually_exclusive_fields() {
+        let content = "---\nvariables:\n  p:\n    hint: guidance\n    default: old\n    suggestions:\n      - old\n---\n## D\n\n```bash\n<@p:?new>\n```\n";
+        let actions =
+            compute_code_actions(&uri(), content, range(11, 2), &BTreeMap::new()).unwrap();
         let updated = apply_edits(content, edits(&actions[0]));
-        assert!(updated.contains("default: new"));
-        assert!(updated.contains("hint: guidance"));
+        assert!(updated.contains("default_value: new"));
+        assert!(!updated.contains("hint: guidance"));
         assert!(!updated.contains("default: old"));
+        assert!(!updated.contains("- old"));
     }
 
     #[test]
@@ -898,14 +919,14 @@ mod code_action_tests {
         assert_eq!(actions.len(), 1);
         assert!(action_title(&actions[0]).contains("overwrite"));
         let updated = apply_edits(content, edits(&actions[0]));
-        assert!(updated.contains("  p:\n    default: new\n"));
+        assert!(updated.contains("  p:\n    default_value: new\n"));
         assert!(!updated.contains("default: old"));
     }
 
     #[test]
     fn inline_default_rewrites_first_plain_usage_and_removes_entry() {
         let content =
-            "---\nvariables:\n  p:\n    default: .\n---\n## D\n\n```bash\n<@p> <@p>\n```\n";
+            "---\nvariables:\n  p:\n    default_value: .\n---\n## D\n\n```bash\n<@p> <@p>\n```\n";
         let actions = compute_code_actions(&uri(), content, range(2, 3), &BTreeMap::new()).unwrap();
         assert!(action_title(&actions[0]).contains("(affects all 2 usages)"));
         let updated = apply_edits(content, edits(&actions[0]));

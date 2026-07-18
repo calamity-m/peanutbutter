@@ -130,6 +130,7 @@ fn parse_variable_block(lines: &[&str]) -> (BTreeMap<String, VariableSpec>, usiz
                 if !fval.is_empty() {
                     match fkey {
                         "default" => spec.default = Some(strip_quotes(fval)),
+                        "default_value" => spec.default_value = Some(strip_quotes(fval)),
                         "suggestions" if fval.starts_with('[') && fval.ends_with(']') => {
                             spec.suggestions = parse_inline_list(fval);
                         }

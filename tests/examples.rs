@@ -71,6 +71,20 @@ fn simple_file_yields_seven_snippets() {
 }
 
 #[test]
+fn bundled_starter_frontmatter_parses_default_value() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let path = root.join("examples/starter_snippets.md");
+    let content = fs::read_to_string(&path).unwrap();
+    let parsed = parse_file(&path, &root, &content);
+    assert_eq!(
+        parsed.frontmatter.variables["path"]
+            .default_value
+            .as_deref(),
+        Some(".")
+    );
+}
+
+#[test]
 fn simple_file_frontmatter_is_parsed() {
     let root = fixtures_root();
     let path = root.join("simple/snippets.md");

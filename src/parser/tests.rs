@@ -92,6 +92,18 @@ variables:
 }
 
 #[test]
+fn parses_frontmatter_default_value_scalars() {
+    let content = "---\nvariables:\n  output:\n    default_value: \"<#name:raw>.out\"\n  empty:\n    default_value: ''\n---\n";
+    let lines: Vec<&str> = content.lines().collect();
+    let (fm, _) = parse_frontmatter(&lines);
+    assert_eq!(
+        fm.variables["output"].default_value.as_deref(),
+        Some("<#name:raw>.out")
+    );
+    assert_eq!(fm.variables["empty"].default_value.as_deref(), Some(""));
+}
+
+#[test]
 fn malformed_frontmatter_is_ignored() {
     let content = "---\nvariables: [\n---\n\n## Demo\n\n```\necho hi\n```\n";
     let parsed = parse_file(Path::new("demo.md"), Path::new("."), content);

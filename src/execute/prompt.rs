@@ -38,6 +38,9 @@ pub(crate) struct PromptState {
     pub(crate) input: String,
     /// Full suggestion list for the current variable (unfiltered).
     pub(crate) suggestions: Vec<String>,
+    /// Semantic default shown as muted ghost text while input is empty. Enter
+    /// accepts it and Tab materializes it, unlike a display-only hint.
+    pub(crate) ghost_default: Option<String>,
     /// Ghost text for the current variable, shown in the preview while the
     /// input buffer is empty. Display-only: never stored as the value.
     pub(crate) hint: Option<String>,
@@ -86,6 +89,7 @@ impl PromptState {
             values: BTreeMap::new(),
             input: String::new(),
             suggestions: Vec::new(),
+            ghost_default: None,
             hint: None,
             error: None,
             selection: None,
@@ -110,9 +114,33 @@ impl PromptState {
         if !self.input.is_empty() {
             return self.input.clone();
         }
+        if let Some(default) = &self.ghost_default {
+            return default.clone();
+        }
         self.selected_visible_suggestion()
             .cloned()
             .unwrap_or_default()
+    }
+
+    /// Value that should be rendered as editable input, excluding a semantic
+    /// ghost default so it remains muted and the cursor stays at its start.
+    pub(crate) fn overlay_value(&self) -> Option<String> {
+        if !self.input.is_empty() {
+            Some(self.input.clone())
+        } else if self.ghost_default.is_none() {
+            self.selected_visible_suggestion().cloned()
+        } else {
+            None
+        }
+    }
+
+    /// The single ghost display slot: defaults take precedence over hints.
+    pub(crate) fn ghost_text(&self) -> Option<&str> {
+        if self.input.is_empty() {
+            self.ghost_default.as_deref().or(self.hint.as_deref())
+        } else {
+            None
+        }
     }
 
     pub(crate) fn visible_suggestions(&self) -> Vec<&String> {
@@ -230,6 +258,13 @@ pub(crate) fn handle_prompt_key<P: SuggestionProvider>(
             PromptTransition::Stay
         }
         Some(PromptAction::CompleteOrNext) => {
+            if let Some(default) = prompt.ghost_default.clone()
+                && prompt.input.is_empty()
+            {
+                prompt.input = default;
+                prompt.reset_selection();
+                return PromptTransition::Stay;
+            }
             if let Some(selected) = prompt.selected_visible_suggestion().cloned()
                 && prompt.input != selected
             {
@@ -350,6 +385,11 @@ fn dependent_refs_for_variable<P: SuggestionProvider>(
     if let Some(template) = parsed_command_template(provider, variable, local_variables) {
         refs.extend(referenced_names(&template));
     }
+    if let Some(source) = provider.default_value_source(variable, local_variables)
+        && let Ok(template) = parse_command_template(&source)
+    {
+        refs.extend(referenced_names(&template));
+    }
     refs
 }
 
@@ -384,13 +424,29 @@ pub(crate) fn load_prompt_state<P: SuggestionProvider>(
     // Input-buffer preservation rule: restore the previously-entered text
     // (confirmed or dirty) if present — including "confirmed empty". Only
     // fall back to default_input on first entry to a never-touched variable.
+    prompt.ghost_default = None;
     prompt.input = if let Some(value) = prompt.values.get(&variable.name).cloned() {
         value
     } else {
         let confirmed = confirmed_upstream(prompt);
-        default_input(&variable, &confirmed)
-            .or_else(|| provider.default_input(&variable, &prompt.local_variables, &confirmed))
-            .unwrap_or_default()
+        let ghost = match &variable.source {
+            crate::domain::VariableSource::Default(template) => render(template, &confirmed).ok(),
+            crate::domain::VariableSource::Free => {
+                provider.default_value(&variable, &prompt.local_variables, &confirmed)
+            }
+            crate::domain::VariableSource::Command(_) | crate::domain::VariableSource::Hint(_) => {
+                None
+            }
+        }
+        .filter(|value| !value.is_empty());
+        if let Some(ghost) = ghost {
+            prompt.ghost_default = Some(ghost);
+            String::new()
+        } else {
+            provider
+                .default_input(&variable, &prompt.local_variables, &confirmed)
+                .unwrap_or_default()
+        }
     };
     prompt.hint = provider.hint(&variable, &prompt.local_variables);
     prompt.error = None;
@@ -417,6 +473,9 @@ pub(crate) fn load_prompt_state<P: SuggestionProvider>(
         {
             // Cache hit — reuse and preserve transient suggestion state.
             prompt.suggestions = cached.suggestions.clone();
+            if !prompt.suggestions.is_empty() {
+                prompt.ghost_default = None;
+            }
             return;
         }
         // Cache miss — fetch, store on success, reset transient state.
@@ -437,6 +496,9 @@ pub(crate) fn load_prompt_state<P: SuggestionProvider>(
                 // Do not cache failed commands — let revisit retry.
             }
         }
+        if !prompt.suggestions.is_empty() {
+            prompt.ghost_default = None;
+        }
         prompt.reset_selection();
         return;
     }
@@ -450,6 +512,9 @@ pub(crate) fn load_prompt_state<P: SuggestionProvider>(
                 Vec::new()
             }
         };
+    if !prompt.suggestions.is_empty() {
+        prompt.ghost_default = None;
+    }
     prompt.reset_selection();
 }
 
@@ -626,16 +691,6 @@ pub(crate) fn confirmed_upstream(prompt: &PromptState) -> BTreeMap<String, Strin
         }
     }
     out
-}
-
-fn default_input(variable: &Variable, confirmed: &BTreeMap<String, String>) -> Option<String> {
-    match variable {
-        Variable {
-            source: crate::domain::VariableSource::Default(template),
-            ..
-        } => render(template, confirmed).ok(),
-        _ => None,
-    }
 }
 
 pub(crate) fn cursor_in_template(

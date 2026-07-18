@@ -57,7 +57,10 @@ fn hover_dependent_ref(
         .or_else(|| config_vars.get(&name));
     if let Some(spec) = spec {
         if let Some(d) = &spec.default {
-            md.push_str(&format!("- **default**: `{d}`\n"));
+            md.push_str(&format!("- **default** (editable pre-fill): `{d}`\n"));
+        }
+        if let Some(d) = &spec.default_value {
+            md.push_str(&format!("- **default_value** (accepted ghost): `{d}`\n"));
         }
         if !spec.suggestions.is_empty() {
             md.push_str(&format!(
@@ -114,7 +117,10 @@ fn hover_variable_placeholder(
         .or_else(|| config_vars.get(&name))?;
     let mut md = format!("**`<@{name}>`**\n\n");
     if let Some(d) = &spec.default {
-        md.push_str(&format!("- **default**: `{d}`\n"));
+        md.push_str(&format!("- **default** (editable pre-fill): `{d}`\n"));
+    }
+    if let Some(d) = &spec.default_value {
+        md.push_str(&format!("- **default_value** (accepted ghost): `{d}`\n"));
     }
     if !spec.suggestions.is_empty() {
         md.push_str(&format!(

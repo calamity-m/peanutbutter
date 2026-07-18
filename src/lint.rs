@@ -48,6 +48,8 @@ pub const CODE_INVALID_DEPENDENT_REFERENCE: &str = "lint/invalid-dependent-refer
 pub const CODE_RAW_DEFAULT_UNTRUSTED_UPSTREAM: &str = "lint/raw-default-untrusted-upstream";
 /// The same variable name and command appear inline in multiple snippets in the same file.
 pub const CODE_DUPLICATE_INLINE_COMMAND: &str = "lint/duplicate-inline-command";
+/// `default_value` is combined with a mutually exclusive input source.
+pub const CODE_DEFAULT_VALUE_CONFLICT: &str = "lint/default-value-conflict";
 
 /// Runtime options for [`run`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -160,7 +162,15 @@ pub fn run<W: Write>(
         }
     }
 
+    findings.extend(frontmatter::lint_config_default_value_conflicts(
+        &config.variables,
+        &config.paths.config_file,
+    ));
     for file in &files {
+        findings.extend(frontmatter::lint_default_value_conflicts(
+            file,
+            &config.variables,
+        ));
         findings.extend(frontmatter::lint_frontmatter_source(
             &file.path,
             &file.content,
@@ -220,6 +230,14 @@ pub fn lint_file(path: &Path, root: &Path, content: &str, config: &AppConfig) ->
     };
     let mut findings = Vec::new();
     findings.extend(frontmatter::lint_frontmatter_source(path, content));
+    findings.extend(frontmatter::lint_default_value_conflicts(
+        &ctx,
+        &config.variables,
+    ));
+    findings.extend(frontmatter::lint_config_default_value_conflicts(
+        &config.variables,
+        &config.paths.config_file,
+    ));
     findings.extend(structure::lint_duplicate_slugs(&ctx));
     findings.extend(frontmatter::lint_unused_file_variables(&ctx));
     findings.extend(commands::lint_static_inline_commands(&ctx));
@@ -426,6 +444,48 @@ mod tests {
         assert!(!result.findings.iter().any(|finding| {
             finding.code == CODE_UNUSED_VARIABLE && finding.message.contains("'used'")
         }));
+    }
+
+    #[test]
+    fn default_value_conflicts_are_errors_in_specs_and_layers() {
+        let root = temp_dir("default-value-conflicts");
+        fs::write(
+            root.join("snippets.md"),
+            "---\nvariables:\n  local:\n    default_value: x\n    suggestions: [x]\n  mixed:\n    default_value: x\n---\n\n## Demo\n\n```bash\necho <@local> <@mixed> <@file>\n```\n",
+        )
+        .unwrap();
+        let mut cfg = config(root);
+        cfg.variables.insert(
+            "mixed".to_string(),
+            crate::domain::VariableSpec {
+                hint: Some("guidance".to_string()),
+                ..Default::default()
+            },
+        );
+        cfg.variables.insert(
+            "file".to_string(),
+            crate::domain::VariableSpec {
+                default_value: Some("bad".to_string()),
+                ..Default::default()
+            },
+        );
+        let result = run(
+            &cfg,
+            LintOptions {
+                strict: false,
+                json: false,
+            },
+            &mut Vec::new(),
+        )
+        .unwrap();
+        assert_eq!(
+            result
+                .findings
+                .iter()
+                .filter(|finding| finding.code == CODE_DEFAULT_VALUE_CONFLICT)
+                .count(),
+            3
+        );
     }
 
     #[test]

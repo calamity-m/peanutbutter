@@ -336,8 +336,7 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
             .get(&prompt.snippet_id)
             .map(|snippet| {
                 let mut values = prompt.values.clone();
-                let value = prompt.current_value();
-                if !value.is_empty() {
+                if let Some(value) = prompt.overlay_value() {
                     values.insert(prompt.current_variable().name.clone(), value);
                 }
                 cursor_in_template(snippet.body(), &values, &prompt.current_variable().name)
@@ -406,8 +405,7 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
         };
 
         let mut values = prompt.values.clone();
-        let value = prompt.current_value();
-        if !value.is_empty() {
+        if let Some(value) = prompt.overlay_value() {
             values.insert(prompt.current_variable().name.clone(), value);
         }
 
@@ -415,7 +413,7 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
             snippet.body(),
             &values,
             Some(prompt.current_variable().name.as_str()),
-            prompt.hint.as_deref(),
+            prompt.ghost_text(),
             &self.theme,
         )
     }

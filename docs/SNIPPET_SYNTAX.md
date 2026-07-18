@@ -55,7 +55,8 @@ variables:
 
 Each variable spec may include:
 
-- `default` — pre-populates the prompt input.
+- `default` — pre-populates editable prompt input.
+- `default_value` — muted ghost value accepted by Enter or materialized by Tab.
 - `suggestions` — fixed suggestion values.
 - `command` — shell command whose stdout lines become suggestions.
 - `hint` — ghost text shown while the prompt input is empty; display-only,
@@ -189,7 +190,7 @@ The source variants at a glance:
 | ------------------- | ------------------ | -------------------------------------------- |
 | `<@name>`           | free-form input    | empty value                                  |
 | `<@name:@hint>`     | ghost hint         | empty value; hint is display-only            |
-| `<@name:?default>`  | editable pre-fill  | the default becomes the value                |
+| `<@name:?default>`  | accepted ghost default | the default becomes the value             |
 | `<@name:command>`   | suggestion command | selected suggestion (or empty with none)     |
 
 Inside defaults and suggestion commands, `<#name>` and `<#name:raw>` reference
@@ -247,8 +248,10 @@ are not suggestions and never appear as selectable suggestion rows.
 <@name:?default>
 ```
 
-Pre-populates the prompt with `default`. The user can accept it or type a
-different value. Defaults may include dependent references (`<#name>` and
+Shows `default` as muted ghost text while input is empty. Enter accepts it;
+Tab materializes it into editable input; typing visually replaces it. Clearing
+materialized input revives the ghost, so an empty value cannot be accepted while
+it is active. Inline defaults may include dependent references (`<#name>` and
 `<#name:raw>`) using the same grammar, ordering rules, and lint checks as
 suggestion commands; see [Dependent Variables](#dependent-variables).
 
@@ -308,11 +311,17 @@ Some free-form variable names have built-in suggestions:
 - `<@file>` — files in the current working directory.
 - `<@directory>` — directories in the current working directory.
 
-Config-defined variables can also provide defaults or suggestions for
-free-form placeholders such as `<@http_method>`.
+Config-defined variables can also provide editable `default` values, ghost
+`default_value` values, or suggestions for free-form placeholders such as
+`<@http_method>`. Frontmatter-defined variables provide the same options for
+free-form placeholders in the same file. `default_value` has the same accepted-
+ghost behavior and dependent-reference grammar as inline `:?`.
 
-Frontmatter-defined variables can also provide defaults or suggestions for
-free-form placeholders in the same file. Resolution order is:
+A `default_value` is mutually exclusive with `default`, `suggestions`,
+`command`, and `hint`; it is also invalid for the built-in `file` and
+`directory` names. `pb lint` reports these invalid combinations.
+
+Resolution order is:
 
 1. Inline placeholder source (`<@target:?world>`, `<@target:@hint>`, or
    `<@target:command>`).
@@ -335,7 +344,7 @@ instead of config suggestions or command.
 A suggestion command or default value may reference values the user has already
 confirmed for earlier variables, using `<#name>` (shell-quoted) or
 `<#name:raw>` (literal splice) tokens inside the command/default source. This
-lets one variable's suggestion list or pre-filled default depend on another.
+lets one variable's suggestion list or ghost default depend on another.
 
 Worked example — pick a Kubernetes secret, then pick a key from that secret:
 
@@ -347,7 +356,7 @@ When the user confirms `secret`, the `key` variable's command is re-evaluated
 with `<#secret>` substituted, so its suggestions are the data keys of the
 chosen secret.
 
-Worked default example — pre-fill an output path from earlier confirmed picks:
+Worked default example — ghost an output path from earlier confirmed picks:
 
 ```sh
 kubectl get secret <@secret> -o jsonpath='{.data.<@key>}' | tee <@output:?<#namespace:raw>.<#secret:raw>.<#key:raw>.out>
@@ -387,7 +396,7 @@ errors.
 **Confirmed values only.** Only values the user has confirmed (moved past with
 Enter or Tab) are substituted. The in-flight input buffer is not visible to
 downstream commands or defaults. If a default references an upstream that is
-not currently confirmed, no dependent pre-fill is offered and the input buffer
+not currently confirmed, no dependent ghost is offered and the input buffer
 is left empty. If the user revisits an upstream variable and changes its value,
 dependent descendants become *dirty*: their text is preserved for editing, but
 they are not treated as confirmed for later substitutions until the user
@@ -402,8 +411,8 @@ commands compound.
 **Security caveat for `:raw`.** Because `<#name:raw>` does not quote, a value
 containing shell metacharacters can change the semantics of the suggestion
 command — including arbitrary command execution if the upstream value comes
-from untrusted input. In defaults, `:raw` lands in the editable input buffer;
-if the user accepts it, the raw text reaches the shell. Restrict `:raw`
+from untrusted input. In defaults, `:raw` becomes the accepted ghost value; if the user accepts it,
+the raw text reaches the shell. Restrict `:raw`
 consumption to variables whose upstream values come from a trusted or
 constrained source (defaults, suggestion lists, or commands you control), not
 free-form user input.
@@ -429,7 +438,7 @@ cached — revisiting the variable retries them.
 
 Existing command-based workarounds such as `<@name:echo <#a:raw>>` still work,
 but `<@name:?<#a:raw>>` is preferred for defaults: it avoids spawning a
-sub-shell and reads as a pre-fill rather than a suggestion command.
+sub-shell and reads as an accepted ghost default rather than a suggestion command.
 
 ### Multi-line Values
 

@@ -965,6 +965,19 @@ suggestions = ["GET", "POST"]
     }
 
     #[test]
+    fn variable_input_default_value_deserializes() {
+        let raw = r#"
+[variables.http_method]
+default_value = "GET"
+"#;
+        let parsed: FileConfig = toml::from_str(raw).unwrap();
+        assert_eq!(
+            parsed.variables["http_method"].default_value.as_deref(),
+            Some("GET")
+        );
+    }
+
+    #[test]
     fn variable_input_hint_deserializes() {
         let raw = r#"
 [variables.input]

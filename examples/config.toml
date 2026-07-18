@@ -279,8 +279,12 @@ error_fg = "red"
 #   <@target:?world>
 
 [variables.http_method]
-# Optional default value pre-filled into the prompt.
+# Optional editable value pre-filled into the prompt.
 default = "GET"
+
+# Optional ghost value: Enter accepts it and Tab materializes it. It cannot be
+# combined with default, suggestions, command, or hint.
+# default_value = "GET"
 
 # Static suggestion list shown to the user.
 suggestions = ["GET", "POST", "PUT", "PATCH", "DELETE"]

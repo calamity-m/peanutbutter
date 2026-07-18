@@ -211,6 +211,27 @@ pub trait SuggestionProvider {
         local_variables: &std::collections::BTreeMap<String, VariableSpec>,
         confirmed: &BTreeMap<String, String>,
     ) -> Option<String>;
+    /// Return a reusable ghost default for a plain free-form variable.
+    ///
+    /// The default implementation preserves compatibility for custom
+    /// suggestion providers that do not support `default_value`.
+    fn default_value(
+        &self,
+        _variable: &Variable,
+        _local_variables: &std::collections::BTreeMap<String, VariableSpec>,
+        _confirmed: &BTreeMap<String, String>,
+    ) -> Option<String> {
+        None
+    }
+    /// Return the unrendered reusable ghost-default template, if any. This
+    /// lets prompt dirty tracking include dependent `default_value` fields.
+    fn default_value_source(
+        &self,
+        _variable: &Variable,
+        _local_variables: &std::collections::BTreeMap<String, VariableSpec>,
+    ) -> Option<String> {
+        None
+    }
     /// Return the ghost text to show while the input buffer is empty, if any,
     /// resolving inline `<@name:@hint>` first, then file-local and config
     /// variable specs. Hints are display-only and never become the value.
@@ -347,11 +368,10 @@ impl SuggestionProvider for SystemSuggestionProvider {
         &self,
         variable: &Variable,
         local_variables: &std::collections::BTreeMap<String, VariableSpec>,
-        confirmed: &BTreeMap<String, String>,
+        _confirmed: &BTreeMap<String, String>,
     ) -> Option<String> {
         match &variable.source {
-            VariableSource::Default(template) => command_template::render(template, confirmed).ok(),
-            VariableSource::Command(_) => None,
+            VariableSource::Default(_) | VariableSource::Command(_) => None,
             // A reusable-spec default still pre-fills a hint placeholder; the
             // hint only shows once the buffer is cleared.
             VariableSource::Free | VariableSource::Hint(_) => local_variables
@@ -363,6 +383,41 @@ impl SuggestionProvider for SystemSuggestionProvider {
                         .and_then(|config| config.default.clone())
                 }),
         }
+    }
+
+    fn default_value(
+        &self,
+        variable: &Variable,
+        local_variables: &std::collections::BTreeMap<String, VariableSpec>,
+        confirmed: &BTreeMap<String, String>,
+    ) -> Option<String> {
+        let source = self.default_value_source(variable, local_variables)?;
+        match command_template::parse_command_template(&source) {
+            Ok(template) => command_template::render(&template, confirmed).ok(),
+            // Match inline `:?` parsing: invalid dependent syntax remains
+            // usable literal text while lint reports it to the author.
+            Err(_) => Some(source),
+        }
+    }
+
+    fn default_value_source(
+        &self,
+        variable: &Variable,
+        local_variables: &std::collections::BTreeMap<String, VariableSpec>,
+    ) -> Option<String> {
+        if !matches!(variable.source, VariableSource::Free) {
+            return None;
+        }
+        // A local definition is a complete layer for this source: an invalid
+        // cross-layer mix remains deterministic rather than field-merged.
+        local_variables
+            .get(&variable.name)
+            .map(|spec| spec.default_value.clone())
+            .unwrap_or_else(|| {
+                self.variable_inputs
+                    .get(&variable.name)
+                    .and_then(|spec| spec.default_value.clone())
+            })
     }
 }
 

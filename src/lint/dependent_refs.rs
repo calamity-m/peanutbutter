@@ -1,6 +1,6 @@
 //! Dependent variable reference lint rules — unknown, forward, self, and
 //! raw-default-untrusted-upstream checks for `<#name>` references inside
-//! suggestion commands and inline defaults.
+//! suggestion commands, inline defaults, and reusable `default_value` fields.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -80,7 +80,9 @@ pub(super) fn lint_dependent_references(
                 ),
             }
         }
-        for (owner, default) in default_sources(snippet) {
+        for (owner, default) in
+            default_sources(snippet, &file.parsed.frontmatter.variables, globals)
+        {
             match parse_command_template(&default) {
                 Ok(template) => templates.push((owner, default, template, true)),
                 Err(err) => out.push(
@@ -240,7 +242,11 @@ fn find_dependent_ref_spans(content: &str) -> Vec<(String, usize, usize, usize)>
     out
 }
 
-fn default_sources(snippet: &Snippet) -> Vec<(String, String)> {
+fn default_sources(
+    snippet: &Snippet,
+    locals: &BTreeMap<String, VariableSpec>,
+    globals: &BTreeMap<String, VariableInputConfig>,
+) -> Vec<(String, String)> {
     let mut out = Vec::new();
     let mut seen = HashSet::new();
     let body = snippet.body.as_str();
@@ -264,6 +270,29 @@ fn default_sources(snippet: &Snippet) -> Vec<(String, String)> {
             }
         }
         i += 1;
+    }
+    // A reusable ghost default is source-like: a file-local spec decides the
+    // entire layer, so config is consulted only when no local spec exists.
+    for variable in &snippet.variables {
+        if !seen.insert(variable.name.clone())
+            || !matches!(
+                variable.source,
+                VariableSource::Free | VariableSource::Hint(_)
+            )
+        {
+            continue;
+        }
+        let default = locals
+            .get(&variable.name)
+            .map(|spec| spec.default_value.clone())
+            .unwrap_or_else(|| {
+                globals
+                    .get(&variable.name)
+                    .and_then(|spec| spec.default_value.clone())
+            });
+        if let Some(default) = default {
+            out.push((variable.name.clone(), default));
+        }
     }
     out
 }
@@ -298,11 +327,17 @@ fn is_free_form_upstream(
 }
 
 fn variable_spec_constrains(spec: &VariableSpec) -> bool {
-    spec.default.is_some() || !spec.suggestions.is_empty() || spec.command.is_some()
+    spec.default.is_some()
+        || spec.default_value.is_some()
+        || !spec.suggestions.is_empty()
+        || spec.command.is_some()
 }
 
 fn variable_input_constrains(spec: &VariableInputConfig) -> bool {
-    spec.default.is_some() || !spec.suggestions.is_empty() || spec.command.is_some()
+    spec.default.is_some()
+        || spec.default_value.is_some()
+        || !spec.suggestions.is_empty()
+        || spec.command.is_some()
 }
 
 fn command_sources(
