@@ -339,13 +339,19 @@ extern "{BINARY_NAME} docs" [topic?: string@__pb_complete_docs]
 alias {BASH_ALIAS_NAME} = {BINARY_NAME}
 
 $env.config = ($env.config? | default {{}})
-$env.config = ($env.config | upsert keybindings (($env.config.keybindings? | default []) | append {{
-  name: pb_insert
-  modifier: control
-  keycode: {keycode}
-  mode: [emacs vi_insert vi_normal]
-  event: {{ send: executehostcommand cmd: "__pb_insert_command" }}
-}}))
+let __pb_keybindings = (
+  $env.config.keybindings?
+  | default []
+  | where {{|binding| ($binding.name? | default '') != 'pb_insert' }}
+  | append {{
+      name: pb_insert
+      modifier: control
+      keycode: {keycode}
+      mode: [emacs vi_insert vi_normal]
+      event: {{ send: executehostcommand cmd: "__pb_insert_command" }}
+    }}
+)
+$env.config = ($env.config | upsert keybindings $__pb_keybindings)
 "#
     ))
 }
@@ -691,14 +697,18 @@ mod tests {
         assert!(script.contains("const __pb_exe = r#'/tmp/peanut butter'#"));
         assert!(script.contains("PEANUTBUTTER_BUFFER: (commandline)"));
         assert!(script.contains("run-external $__pb_exe execute"));
-        assert!(script.contains(&format!(
-            "if $result.exit_code == {REPLACE_BUFFER_EXIT_CODE}"
-        )));
-        assert!(script.contains("commandline edit --replace $command"));
         assert!(script.contains("commandline edit --insert $command"));
         assert!(script.contains("modifier: control"));
         assert!(script.contains("keycode: char_b"));
         assert!(script.contains("cmd: \"__pb_insert_command\""));
+    }
+
+    #[test]
+    fn nu_script_replaces_the_whole_buffer_for_the_replace_exit_code() {
+        let script = nu_integration_script("C+b", Path::new("/tmp/peanutbutter")).unwrap();
+        assert!(script.contains(&format!(
+            "if $result.exit_code == {REPLACE_BUFFER_EXIT_CODE} {{\n    commandline edit --replace $command\n  }} else if $result.exit_code == 0"
+        )));
     }
 
     #[test]
@@ -710,7 +720,14 @@ mod tests {
         assert!(script.contains("run-external $__pb_exe complete-theme ''"));
         assert!(script.contains("[bash zsh fish nu powershell]"));
         assert!(script.contains("[syntax config]"));
-        assert!(script.contains("$env.config.keybindings? | default []"));
+    }
+
+    #[test]
+    fn nu_script_replaces_its_existing_named_keybinding_when_resourced() {
+        let script = nu_integration_script("C+b", Path::new("/tmp/peanutbutter")).unwrap();
+        assert!(script.contains("$env.config.keybindings?"));
+        assert!(script.contains("where {|binding| ($binding.name? | default '') != 'pb_insert' }"));
+        assert!(script.contains("upsert keybindings $__pb_keybindings"));
     }
 
     #[test]

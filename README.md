@@ -82,7 +82,9 @@ source peanutbutter.nu
 ```
 
 This requires Nushell 0.100 or newer. The generated script adds the `Ctrl+b` keybinding,
-the `pb` alias, and completions without replacing existing `$env.config.keybindings`.
+the `pb` alias, and completions without replacing existing `$env.config.keybindings`;
+re-sourcing updates its existing `pb_insert` binding instead of adding a duplicate.
+The integration is currently tested on Unix only; Windows Nushell is not yet supported.
 
 **PowerShell** — add to `$PROFILE`:
 
