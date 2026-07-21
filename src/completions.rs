@@ -1,7 +1,7 @@
-//! Shell integration scripts for bash, zsh, fish, and PowerShell.
+//! Shell integration scripts for bash, zsh, fish, Nushell, and PowerShell.
 //!
 //! Each public function emits a shell script intended to be eval'd (bash/zsh),
-//! sourced (fish), or added to the user's PowerShell profile. The script installs a
+//! sourced (fish/Nushell), or added to the user's PowerShell profile. The script installs a
 //! key binding that runs the peanutbutter TUI and injects the selected command
 //! into the shell's readline buffer, plus tab-completion for `peanutbutter edit`.
 
@@ -23,7 +23,7 @@ const TOP_LEVEL_COMMANDS: &[&str] = &[
     "lsp",
     "docs",
 ];
-const SHELL_TARGETS: &[&str] = &["bash", "zsh", "fish", "powershell"];
+const SHELL_TARGETS: &[&str] = &["bash", "zsh", "fish", "nu", "powershell"];
 const DOC_TOPICS: &[&str] = &["syntax", "config"];
 const GLOBAL_OPTIONS: &[&str] = &["--theme"];
 
@@ -36,6 +36,8 @@ pub enum Shell {
     Zsh,
     /// Emit fish integration code.
     Fish,
+    /// Emit Nushell integration code.
+    Nu,
     /// Emit PowerShell integration code.
     Powershell,
 }
@@ -268,6 +270,92 @@ complete -c {BASH_ALIAS_NAME} -w {BINARY_NAME}
     ))
 }
 
+/// Emit the Nushell integration script using the path of the currently running
+/// executable. The caller should source the generated file from `config.nu`.
+pub fn nu_integration_for_current_exe(binding: &str) -> io::Result<String> {
+    let exe = env::current_exe()?;
+    nu_integration_script(binding, &exe)
+}
+
+/// Build the Nushell integration script for a given `executable` path and
+/// control-letter `binding` (e.g. `"C+b"`). Separated from
+/// [`nu_integration_for_current_exe`] so tests can supply a controlled path.
+pub fn nu_integration_script(binding: &str, executable: &Path) -> io::Result<String> {
+    let keycode =
+        nu_keycode(binding).map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err))?;
+    let executable = nu_quote(&executable.to_string_lossy());
+    let replace_code = REPLACE_BUFFER_EXIT_CODE;
+    let top_level_commands = shell_words(TOP_LEVEL_COMMANDS);
+    let shell_targets = shell_words(SHELL_TARGETS);
+    let doc_topics = shell_words(DOC_TOPICS);
+
+    Ok(format!(
+        r#"const __pb_exe = {executable}
+
+def --env __pb_insert_command [] {{
+  let result = (
+    with-env {{ PEANUTBUTTER_BUFFER: (commandline) }} {{
+      run-external $__pb_exe execute
+    }} | complete
+  )
+  if ($result.stderr | is-not-empty) {{
+    print --stderr --no-newline $result.stderr
+  }}
+  let command = ($result.stdout | str trim --right --char (char newline))
+  if $result.exit_code == {replace_code} {{
+    commandline edit --replace $command
+  }} else if $result.exit_code == 0 and ($command | is-not-empty) {{
+    commandline edit --insert $command
+  }}
+}}
+
+def __pb_complete_commands [] {{
+  [{top_level_commands}]
+}}
+
+def __pb_complete_edit [] {{
+  run-external $__pb_exe complete-edit '' | lines
+}}
+
+def __pb_complete_theme [] {{
+  run-external $__pb_exe complete-theme '' | lines
+}}
+
+def __pb_complete_shells [] {{
+  [{shell_targets}]
+}}
+
+def __pb_complete_docs [] {{
+  [{doc_topics}]
+}}
+
+extern {BINARY_NAME} [
+  --theme: string@__pb_complete_theme
+  command?: string@__pb_complete_commands
+]
+extern "{BINARY_NAME} edit" [path?: string@__pb_complete_edit]
+extern "{BINARY_NAME} completions" [shell?: string@__pb_complete_shells binding?: string]
+extern "{BINARY_NAME} docs" [topic?: string@__pb_complete_docs]
+alias {BASH_ALIAS_NAME} = {BINARY_NAME}
+
+$env.config = ($env.config? | default {{}})
+let __pb_keybindings = (
+  $env.config.keybindings?
+  | default []
+  | where {{|binding| ($binding.name? | default '') != 'pb_insert' }}
+  | append {{
+      name: pb_insert
+      modifier: control
+      keycode: {keycode}
+      mode: [emacs vi_insert vi_normal]
+      event: {{ send: executehostcommand cmd: "__pb_insert_command" }}
+    }}
+)
+$env.config = ($env.config | upsert keybindings $__pb_keybindings)
+"#
+    ))
+}
+
 /// Emit the PowerShell integration script using the path of the currently running
 /// executable. Intended for `peanutbutter completions powershell`; the caller should add the
 /// output to their PowerShell profile.
@@ -360,6 +448,14 @@ fn powershell_binding(binding: &str) -> Result<String, String> {
     parse_ctrl_key(binding).map(|ch| format!("Ctrl+{}", ch.to_ascii_lowercase()))
 }
 
+fn nu_keycode(binding: &str) -> Result<String, String> {
+    let ch = parse_ctrl_key(binding)?;
+    if !ch.is_ascii_alphabetic() {
+        return Err("Nushell bindings must use a control letter like C+b".to_string());
+    }
+    Ok(format!("char_{}", ch.to_ascii_lowercase()))
+}
+
 fn shell_words(words: &[&str]) -> String {
     words.join(" ")
 }
@@ -389,6 +485,14 @@ fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }
 
+fn nu_quote(value: &str) -> String {
+    let mut hashes = "#".to_string();
+    while value.contains(&format!("'{hashes}")) {
+        hashes.push('#');
+    }
+    format!("r{hashes}'{value}'{hashes}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -398,10 +502,10 @@ mod tests {
     fn word_formatters_render_shared_lists_for_shells_and_powershell() {
         assert_eq!(shell_words(DOC_TOPICS), "syntax config");
         assert_eq!(powershell_words(DOC_TOPICS), "'syntax','config'");
-        assert_eq!(shell_words(SHELL_TARGETS), "bash zsh fish powershell");
+        assert_eq!(shell_words(SHELL_TARGETS), "bash zsh fish nu powershell");
         assert_eq!(
             powershell_words(SHELL_TARGETS),
-            "'bash','zsh','fish','powershell'"
+            "'bash','zsh','fish','nu','powershell'"
         );
         assert_eq!(
             powershell_words_with_suffix(DOC_TOPICS, GLOBAL_OPTIONS),
@@ -450,7 +554,7 @@ mod tests {
                 "--theme execute init edit new completions lint gc stats settings lsp docs"
             )
         );
-        assert!(script.contains("compgen -W \"bash zsh fish powershell\""));
+        assert!(script.contains("compgen -W \"bash zsh fish nu powershell\""));
         assert!(script.contains("compgen -W \"syntax config\""));
         assert!(script.contains("complete-theme \"$cur\""));
         assert!(script.contains("--theme"));
@@ -588,6 +692,63 @@ mod tests {
     }
 
     #[test]
+    fn nu_script_registers_keybinding_and_commandline_insert() {
+        let script = nu_integration_script("C+b", Path::new("/tmp/peanut butter")).unwrap();
+        assert!(script.contains("const __pb_exe = r#'/tmp/peanut butter'#"));
+        assert!(script.contains("PEANUTBUTTER_BUFFER: (commandline)"));
+        assert!(script.contains("run-external $__pb_exe execute"));
+        assert!(script.contains("commandline edit --insert $command"));
+        assert!(script.contains("modifier: control"));
+        assert!(script.contains("keycode: char_b"));
+        assert!(script.contains("cmd: \"__pb_insert_command\""));
+    }
+
+    #[test]
+    fn nu_script_replaces_the_whole_buffer_for_the_replace_exit_code() {
+        let script = nu_integration_script("C+b", Path::new("/tmp/peanutbutter")).unwrap();
+        assert!(script.contains(&format!(
+            "if $result.exit_code == {REPLACE_BUFFER_EXIT_CODE} {{\n    commandline edit --replace $command\n  }} else if $result.exit_code == 0"
+        )));
+    }
+
+    #[test]
+    fn nu_script_emits_pb_alias_and_completions() {
+        let script = nu_integration_script("C+b", Path::new("/tmp/peanutbutter")).unwrap();
+        assert!(script.contains("alias pb = peanutbutter"));
+        assert!(script.contains("extern \"peanutbutter edit\""));
+        assert!(script.contains("run-external $__pb_exe complete-edit ''"));
+        assert!(script.contains("run-external $__pb_exe complete-theme ''"));
+        assert!(script.contains("[bash zsh fish nu powershell]"));
+        assert!(script.contains("[syntax config]"));
+    }
+
+    #[test]
+    fn nu_script_replaces_its_existing_named_keybinding_when_resourced() {
+        let script = nu_integration_script("C+b", Path::new("/tmp/peanutbutter")).unwrap();
+        assert!(script.contains("$env.config.keybindings?"));
+        assert!(script.contains("where {|binding| ($binding.name? | default '') != 'pb_insert' }"));
+        assert!(script.contains("upsert keybindings $__pb_keybindings"));
+    }
+
+    #[test]
+    fn nu_script_uses_requested_binding() {
+        let script = nu_integration_script("C+f", Path::new("/tmp/peanutbutter")).unwrap();
+        assert!(script.contains("keycode: char_f"));
+    }
+
+    #[test]
+    fn nu_script_rejects_invalid_binding() {
+        assert!(nu_integration_script("notabinding", Path::new("/tmp/pb")).is_err());
+        assert!(nu_integration_script("C+1", Path::new("/tmp/pb")).is_err());
+    }
+
+    #[test]
+    fn nu_quote_selects_a_raw_string_delimiter_not_present_in_the_path() {
+        assert_eq!(nu_quote("/tmp/it's fine"), "r#'/tmp/it's fine'#");
+        assert_eq!(nu_quote("/tmp/'# tricky"), "r##'/tmp/'# tricky'##");
+    }
+
+    #[test]
     fn powershell_script_registers_psreadline_insert_handler() {
         let script =
             powershell_integration_script("C+b", Path::new("C:/Tools/peanutbutter.exe")).unwrap();
@@ -608,7 +769,7 @@ mod tests {
         assert!(script.contains("complete-edit $wordToComplete"));
         assert!(script.contains("complete-theme $wordToComplete"));
         assert!(script.contains("'execute','init','edit','new','completions','lint','gc','stats','settings','lsp','docs','--theme'"));
-        assert!(script.contains("'bash','zsh','fish','powershell'"));
+        assert!(script.contains("'bash','zsh','fish','nu','powershell'"));
         assert!(script.contains("'syntax','config'"));
     }
 
