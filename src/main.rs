@@ -143,6 +143,7 @@ fn main() {
                 completions::Shell::Bash => completions::bash_integration_for_current_exe(&binding),
                 completions::Shell::Zsh => completions::zsh_integration_for_current_exe(&binding),
                 completions::Shell::Fish => completions::fish_integration_for_current_exe(&binding),
+                completions::Shell::Nu => completions::nu_integration_for_current_exe(&binding),
                 completions::Shell::Powershell => {
                     completions::powershell_integration_for_current_exe(&binding)
                 }

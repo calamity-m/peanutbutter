@@ -73,6 +73,17 @@ eval "$(peanutbutter completions zsh)"
 peanutbutter completions fish | source
 ```
 
+**Nushell** — generate the integration once, then source it from `config.nu`:
+
+```nu
+peanutbutter completions nu | save --force ($nu.default-config-dir | path join peanutbutter.nu)
+# Add this line to config.nu:
+source peanutbutter.nu
+```
+
+This requires Nushell 0.100 or newer. The generated script adds the `Ctrl+b` keybinding,
+the `pb` alias, and completions without replacing existing `$env.config.keybindings`.
+
 **PowerShell** — add to `$PROFILE`:
 
 ```powershell
