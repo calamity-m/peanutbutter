@@ -7,3 +7,5 @@
 .pi
 .agents
 tarpaulin-report.html
+editors/vscode/node_modules/
+editors/vscode/*.vsix

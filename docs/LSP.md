@@ -176,3 +176,35 @@ the accepted marker filenames.
    warning should appear.
 4. Type `<@` inside a fenced code block and trigger completions — declared
    variable names should appear.
+
+## VS Code Setup
+
+A minimal extension lives in [`editors/vscode`](/editors/vscode). It does not
+bundle the CLI — install `peanutbutter` and keep it on your `PATH`, then
+install the extension (from the marketplace, or build the `.vsix` locally):
+
+```bash
+cd editors/vscode
+npm install
+npx @vscode/vsce package
+code --install-extension peanutbutter-*.vsix
+```
+
+The extension activates only when the workspace contains a marker file (see
+[Activation scope](#activation-scope)), then starts `peanutbutter lsp` for
+Markdown files; as everywhere else, the server only responds for `.md` files
+under a marker. Files opened without a workspace folder do not get LSP
+features, matching the Neovim `workspace_required` behavior.
+
+If VS Code does not inherit your shell's `PATH` (Nix, custom builds, Windows
+install locations), point the `peanutbutter.path` setting at the executable.
+
+### Verifying the VS Code setup
+
+1. Open a folder that contains a marker file.
+2. Open a snippet `.md` file and check the `Peanutbutter` entry in the Output
+   panel for the running client.
+3. Introduce a lint error, such as an unused `variables:` entry — a warning
+   squiggle should appear.
+4. Type `<@` inside a fenced code block and trigger completions — declared
+   variable names should appear.

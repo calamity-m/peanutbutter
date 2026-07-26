@@ -1,0 +1,43 @@
+{
+  "name": "peanutbutter",
+  "displayName": "Peanutbutter",
+  "description": "Language server client for Peanutbutter snippet repositories",
+  "version": "0.1.0",
+  "publisher": "calamity-m",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/calamity-m/peanutbutter",
+    "directory": "editors/vscode"
+  },
+  "engines": {
+    "vscode": "^1.82.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "main": "./extension.js",
+  "activationEvents": [
+    "workspaceContains:**/.peanutbutter.toml",
+    "workspaceContains:**/peanutbutter.toml",
+    "workspaceContains:**/_peanutbutter.toml"
+  ],
+  "contributes": {
+    "configuration": {
+      "title": "Peanutbutter",
+      "properties": {
+        "peanutbutter.path": {
+          "type": "string",
+          "default": "peanutbutter",
+          "description": "Path to the Peanutbutter executable"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "package": "vsce package"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  }
+}

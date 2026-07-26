@@ -3,6 +3,7 @@ name = "peanutbutter"
 version = "0.26.0"
 edition = "2024"
 default-run = "peanutbutter"
+exclude = ["editors"]
 
 [[bin]]
 name = "peanutbutter"
