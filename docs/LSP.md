@@ -185,8 +185,10 @@ the accepted marker filenames.
 ## VS Code Setup
 
 A minimal extension lives in [`editors/vscode`](/editors/vscode). It does not
-bundle the CLI — install `peanutbutter` and keep it on your `PATH`, then
-install the extension (from the marketplace, or build the `.vsix` locally):
+bundle the CLI — install `peanutbutter` and keep it on your `PATH` first.
+
+The extension is not published to the Visual Studio Marketplace or Open VSX, so
+build the `.vsix` and install it locally:
 
 ```bash
 cd editors/vscode
@@ -194,6 +196,10 @@ npm install
 npx @vscode/vsce package
 code --install-extension peanutbutter-*.vsix
 ```
+
+Reload VS Code afterwards. Re-run the last two commands to pick up changes,
+adding `--force` to the install — the version number does not change between
+local builds, so VS Code otherwise skips the update instead of failing.
 
 The extension activates only when the workspace contains a marker file (see
 [Activation scope](#activation-scope)), then starts `peanutbutter lsp` for

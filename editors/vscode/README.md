@@ -10,10 +10,27 @@ The extension does not bundle or download the CLI. Install `peanutbutter` first
 and make sure it is on your `PATH` (see the
 [main README](https://github.com/calamity-m/peanutbutter#quick-start)).
 
+## Install
+
+This extension is not published to the Visual Studio Marketplace or Open VSX.
+Build the `.vsix` and install it yourself:
+
+```bash
+cd editors/vscode
+npm install
+npx @vscode/vsce package
+code --install-extension peanutbutter-*.vsix
+```
+
+Reload VS Code afterwards. Repeat the last two commands to pick up changes;
+`npm install` is only needed the first time or after dependency bumps. Add
+`--force` when reinstalling — without it VS Code sees the same version number
+already installed and skips the update instead of failing.
+
 ## Usage
 
 1. Install the CLI.
-2. Install this extension.
+2. Install this extension (above).
 3. Open a folder containing a peanutbutter marker file (`.peanutbutter.toml`,
    `peanutbutter.toml`, or `_peanutbutter.toml`).
 4. Done — Markdown snippet files get diagnostics, completions, hover,
@@ -47,19 +64,10 @@ directly against a snippet repo:
 code --extensionDevelopmentPath="$PWD/editors/vscode" /path/to/snippet-repo
 ```
 
-## Packaging and publishing
+## Publishing
 
-Publishing is manual and infrequent. From `editors/vscode`:
-
-```bash
-npm version patch
-
-npx @vscode/vsce package
-
-npx @vscode/vsce publish
-
-npx ovsx publish peanutbutter-<version>.vsix
-```
-
-This produces a `.vsix` and publishes the same extension to the Visual Studio
-Marketplace and Open VSX.
+There is no published release, and distribution is the locally built `.vsix`
+described in [Install](#install). Marketplace and Open VSX publishing needs
+publisher credentials that are not set up; if that ever changes, the flow is
+`npm version patch`, then `npx @vscode/vsce publish` and
+`npx ovsx publish peanutbutter-<version>.vsix`.
