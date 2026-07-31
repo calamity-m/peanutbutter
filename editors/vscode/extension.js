@@ -1,8 +1,5 @@
 const vscode = require("vscode");
-const {
-  LanguageClient,
-  TransportKind,
-} = require("vscode-languageclient/node");
+const { LanguageClient } = require("vscode-languageclient/node");
 
 let client;
 
@@ -10,10 +7,14 @@ function activate() {
   const config = vscode.workspace.getConfiguration("peanutbutter");
   const command = config.get("path", "peanutbutter");
 
+  // Deliberately no `transport: TransportKind.stdio`. For a command executable
+  // the client appends a literal `--stdio` argument for that transport, which
+  // `peanutbutter lsp` rejects as an unknown argument and exits before the
+  // handshake. Omitting transport still spawns over stdio pipes, just without
+  // the extra flag.
   const serverOptions = {
     command,
     args: ["lsp"],
-    transport: TransportKind.stdio,
   };
 
   // The server only responds for .md files under a peanutbutter marker file,
