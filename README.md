@@ -126,7 +126,7 @@ I personally hate having to interact with snippet/cheatsheet tools, I want the e
 
 ## LSP
 
-Peanutbutter provides a bundled LSP to make life easier - [LSP](/docs/LSP.md) - setup for neovim is first-class, and at somepoint a shitty vscode extension may be created.
+Peanutbutter provides a bundled LSP to make life easier - [LSP](/docs/LSP.md) - setup for neovim is first-class, and a shitty vscode extension lives in [editors/vscode](/editors/vscode).
 
 Preview (personal neovim setup):
 

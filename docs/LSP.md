@@ -3,6 +3,11 @@
 `peanutbutter lsp` starts a Language Server Protocol server over stdio that
 gives editors a rich authoring experience for `.md` snippet files.
 
+Stdio is the only transport. A trailing `--stdio` argument is accepted and
+ignored, so client configurations that name the transport explicitly work
+unchanged; `--socket`, `--pipe`, and `--node-ipc` are rejected rather than
+silently ignored, because the server cannot honour them.
+
 ## Features
 
 | Feature | Trigger |
@@ -174,5 +179,43 @@ the accepted marker filenames.
 2. Open a `.md` file under a directory that contains a marker file.
 3. Introduce a lint error, such as an unused `variables:` entry, and save — a
    warning should appear.
+4. Type `<@` inside a fenced code block and trigger completions — declared
+   variable names should appear.
+
+## VS Code Setup
+
+A minimal extension lives in [`editors/vscode`](/editors/vscode). It does not
+bundle the CLI — install `peanutbutter` and keep it on your `PATH` first.
+
+The extension is not published to the Visual Studio Marketplace or Open VSX, so
+build the `.vsix` and install it locally:
+
+```bash
+cd editors/vscode
+npm install
+npx @vscode/vsce package
+code --install-extension peanutbutter-*.vsix
+```
+
+Reload VS Code afterwards. Re-run the last two commands to pick up changes,
+adding `--force` to the install — the version number does not change between
+local builds, so VS Code otherwise skips the update instead of failing.
+
+The extension activates only when the workspace contains a marker file (see
+[Activation scope](#activation-scope)), then starts `peanutbutter lsp` for
+Markdown files; as everywhere else, the server only responds for `.md` files
+under a marker. Files opened without a workspace folder do not get LSP
+features, matching the Neovim `workspace_required` behavior.
+
+If VS Code does not inherit your shell's `PATH` (Nix, custom builds, Windows
+install locations), point the `peanutbutter.path` setting at the executable.
+
+### Verifying the VS Code setup
+
+1. Open a folder that contains a marker file.
+2. Open a snippet `.md` file and check the `Peanutbutter` entry in the Output
+   panel for the running client.
+3. Introduce a lint error, such as an unused `variables:` entry — a warning
+   squiggle should appear.
 4. Type `<@` inside a fenced code block and trigger completions — declared
    variable names should appear.

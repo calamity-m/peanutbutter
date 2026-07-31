@@ -110,7 +110,21 @@ pub enum Command {
     #[command(hide = true)]
     CompleteTheme { current: Option<String> },
     /// Start a Language Server Protocol server over stdio for snippet authoring.
-    Lsp,
+    Lsp {
+        /// Accepted for compatibility with LSP clients that name the stdio
+        /// transport explicitly.
+        ///
+        /// `vscode-languageclient` appends `--stdio` whenever a command
+        /// executable declares `TransportKind.stdio`, mirroring how
+        /// `vscode-languageserver` picks a transport from argv. This server
+        /// only ever speaks stdio, so the flag is a no-op rather than a
+        /// selector. Transport flags that would move the connection elsewhere
+        /// (`--socket`, `--pipe`, `--node-ipc`) are deliberately still
+        /// rejected by clap: silently ignoring those would leave the server
+        /// talking on a channel the client is not listening to.
+        #[arg(long, hide = true)]
+        stdio: bool,
+    },
     /// Print embedded reference documentation verbatim to stdout.
     Docs {
         /// Which reference document to print. Omit to list available topics.
@@ -491,6 +505,12 @@ mod tests {
             Some(Command::Repo)
         );
         assert_eq!(
+            Cli::try_parse_from(["peanutbutter", "lsp"])
+                .unwrap()
+                .command,
+            Some(Command::Lsp { stdio: false })
+        );
+        assert_eq!(
             Cli::try_parse_from(["peanutbutter", "docs"])
                 .unwrap()
                 .command,
@@ -512,6 +532,34 @@ mod tests {
                 topic: Some(crate::docs::Topic::Config)
             })
         );
+    }
+
+    /// `vscode-languageclient` appends `--stdio` for a command executable
+    /// declaring `TransportKind.stdio`; rejecting it kills the server before
+    /// the LSP handshake.
+    #[test]
+    fn lsp_accepts_stdio_transport_flag() {
+        assert_eq!(
+            Cli::try_parse_from(["peanutbutter", "lsp", "--stdio"])
+                .unwrap()
+                .command,
+            Some(Command::Lsp { stdio: true })
+        );
+    }
+
+    /// Unlike `--stdio`, these name a transport this server does not speak.
+    /// Accepting them would strand the client on a channel nothing writes to,
+    /// so a loud argument error is the correct outcome.
+    #[test]
+    fn lsp_rejects_other_transport_flags() {
+        for flag in ["--socket=1234", "--pipe=/tmp/pipe", "--node-ipc"] {
+            let err = Cli::try_parse_from(["peanutbutter", "lsp", flag]).unwrap_err();
+            assert_eq!(
+                err.kind(),
+                clap::error::ErrorKind::UnknownArgument,
+                "expected {flag} to be rejected"
+            );
+        }
     }
 
     #[test]
