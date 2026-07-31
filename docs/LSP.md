@@ -3,6 +3,11 @@
 `peanutbutter lsp` starts a Language Server Protocol server over stdio that
 gives editors a rich authoring experience for `.md` snippet files.
 
+Stdio is the only transport. A trailing `--stdio` argument is accepted and
+ignored, so client configurations that name the transport explicitly work
+unchanged; `--socket`, `--pipe`, and `--node-ipc` are rejected rather than
+silently ignored, because the server cannot honour them.
+
 ## Features
 
 | Feature | Trigger |

@@ -243,7 +243,8 @@ fn main() {
             }
             Err(err) => Err(err),
         },
-        cli::Command::Lsp => {
+        // `stdio` is a compatibility no-op; stdio is the only transport.
+        cli::Command::Lsp { stdio: _ } => {
             peanutbutter::lsp::run_lsp_server();
             Ok(())
         }
