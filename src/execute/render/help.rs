@@ -23,10 +23,15 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
         let cycle = select.hint(SelectAction::CycleMode);
         let cancel = select.hint(SelectAction::CancelOrBack);
         let edit = select.hint(SelectAction::Edit);
+        // `selected_is_dir` reflects browse state even in the other modes, so
+        // the delete hint is placed per-branch alongside `edit` rather than
+        // gated on it here.
+        let delete = select.hint(SelectAction::Delete);
         let items: Vec<(Option<String>, &str)> = match self.nav_mode {
             NavigationMode::Fuzzy => vec![
                 (self.keymap.fuzzy.hint(FuzzyAction::Accept), "accept"),
                 (edit, "edit"),
+                (delete, "delete"),
                 (preview, "preview"),
                 (cycle, "browse"),
                 (cancel, "cancel"),
@@ -47,6 +52,7 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
                         (complete, "complete"),
                         (accept, "accept"),
                         (edit, "edit"),
+                        (delete, "delete"),
                         (preview, "preview"),
                         (cycle, "tags"),
                         (cancel, "cancel"),
@@ -59,6 +65,7 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
                     vec![
                         (Some("type".to_string()), "filter"),
                         (accept, "accept"),
+                        (delete, "delete"),
                         (self.keymap.tags.hint(TagsAction::ReturnToTags), "tags"),
                         (self.keymap.tags.hint(TagsAction::Backspace), "clear/back"),
                         (cycle, "search"),

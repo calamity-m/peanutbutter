@@ -7,6 +7,7 @@ use std::io;
 use std::path::{Component, Path, PathBuf};
 
 pub mod editor;
+pub mod remove;
 
 /// Default snippet file used by `pb init`, `pb edit`, and `pb new`.
 pub(crate) const DEFAULT_EDIT_PATH: &str = "snippets.md";

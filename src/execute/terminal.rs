@@ -1,6 +1,6 @@
 use crate::config;
 use crate::domain::SnippetId;
-use crate::edit::editor;
+use crate::edit::{editor, remove};
 use crate::frecency::FrecencyStore;
 use crate::index::IndexedSnippet;
 use crate::index::SnippetIndex;
@@ -128,6 +128,11 @@ pub fn run_execute_with_provider<P: SuggestionProvider>(
                 viewport_top = None;
                 app.status = Some(edit_status(edit_result, &mut app, &options.snippet_roots));
             }
+            AppEvent::DeleteSnippet(id) => {
+                // Deletion only rewrites a markdown file, so unlike editing it
+                // needs no terminal suspend; the picker stays on screen.
+                app.status = Some(delete_status(&id, &mut app, &options.snippet_roots));
+            }
             AppEvent::Cancelled => break None,
             AppEvent::Completed(outcome) => break Some(outcome),
         }
@@ -172,20 +177,51 @@ fn reload_after_edit<P: SuggestionProvider>(
     snippet_roots: &[std::path::PathBuf],
     name: String,
 ) -> String {
+    reload_index(app, snippet_roots, &format!("edited {name}"))
+}
+
+/// Remove the snippet's `##` section from disk and reload, reporting both
+/// halves in one status line.
+///
+/// Frecency events for `id` are intentionally left in the store; they become
+/// orphans for `pb gc` to reattach or purge, which is the same path a snippet
+/// deleted by hand in an editor already takes.
+fn delete_status<P: SuggestionProvider>(
+    id: &SnippetId,
+    app: &mut ExecutionApp<P>,
+    snippet_roots: &[std::path::PathBuf],
+) -> String {
+    let Some(snippet) = app.index.get(id).cloned() else {
+        return format!("snippet no longer exists: {id}");
+    };
+    let name = snippet.name().to_string();
+    match remove::remove_snippet(&snippet) {
+        Ok(()) => reload_index(app, snippet_roots, &format!("deleted {name}")),
+        Err(err) => format!("delete failed: {err}"),
+    }
+}
+
+/// Rebuild the index from `snippet_roots` after the files on disk changed,
+/// restoring the previous selection when that snippet still exists.
+fn reload_index<P: SuggestionProvider>(
+    app: &mut ExecutionApp<P>,
+    snippet_roots: &[std::path::PathBuf],
+    prefix: &str,
+) -> String {
     let previous_id = app.selected_snippet().map(|snippet| snippet.id().clone());
     if snippet_roots.is_empty() {
-        return format!("edited {name}; reload skipped");
+        return format!("{prefix}; reload skipped");
     }
     match crate::index::load_from_roots(snippet_roots) {
         Ok(index) => {
             let previous_found = app.replace_index(index, previous_id.as_ref());
             if previous_found {
-                format!("edited {name}; reloaded")
+                format!("{prefix}; reloaded")
             } else {
-                format!("edited {name}; reloaded, previous snippet not found")
+                format!("{prefix}; reloaded, previous snippet not found")
             }
         }
-        Err(err) => format!("edited {name}; reload failed: {err}"),
+        Err(err) => format!("{prefix}; reload failed: {err}"),
     }
 }
 
@@ -268,6 +304,61 @@ mod tests {
             app.selected_snippet().map(|snippet| snippet.body()),
             Some("echo old")
         );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn delete_status_removes_the_section_and_reloads() {
+        let root = temp_dir("delete-success");
+        let path = root.join("snippets.md");
+        fs::write(
+            &path,
+            "## Demo\n\n```\necho demo\n```\n\n## Keeper\n\n```\necho keeper\n```\n",
+        )
+        .unwrap();
+        let mut app = test_app_with_file(crate::parser::parse_file(
+            &path,
+            &root,
+            &fs::read_to_string(&path).unwrap(),
+        ));
+        let id = SnippetId::new("snippets.md", "demo");
+
+        let status = delete_status(&id, &mut app, std::slice::from_ref(&root));
+
+        assert!(status.starts_with("deleted Demo; reloaded"), "{status}");
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            "## Keeper\n\n```\necho keeper\n```\n"
+        );
+        assert_eq!(app.index.len(), 1);
+        assert!(app.index.get(&id).is_none(), "deleted id must be gone");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn delete_status_reports_a_missing_snippet_without_touching_disk() {
+        let mut app = test_app();
+        let id = SnippetId::new("snippets.md", "demo");
+
+        assert_eq!(
+            delete_status(&id, &mut app, &[]),
+            "snippet no longer exists: snippets.md#demo"
+        );
+    }
+
+    #[test]
+    fn delete_status_reports_a_failed_removal() {
+        // The indexed snippet points at a file that no longer exists, so
+        // removal fails before any rewrite is attempted.
+        let root = temp_dir("delete-failure");
+        let path = root.join("snippets.md");
+        let mut app = test_app_with_file(snippet_file(&path, "echo demo"));
+        let id = SnippetId::new("snippets.md", "demo");
+
+        let status = delete_status(&id, &mut app, std::slice::from_ref(&root));
+
+        assert!(status.starts_with("delete failed:"), "{status}");
+        assert_eq!(app.index.len(), 1, "index must be left intact");
         let _ = fs::remove_dir_all(root);
     }
 

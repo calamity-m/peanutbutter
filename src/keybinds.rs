@@ -251,6 +251,7 @@ keymap_actions!(
         CancelOrBack => "cancel_or_back", ["esc"];
         CycleMode => "cycle_mode", ["ctrl+t", "f2"];
         Edit => "edit", ["ctrl+e"];
+        Delete => "delete", ["ctrl+x"];
         PreviewDown => "preview_down", ["ctrl+j", "ctrl+down"];
         PreviewUp => "preview_up", ["ctrl+k", "ctrl+up"];
     }

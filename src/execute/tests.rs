@@ -198,6 +198,9 @@ fn completed(event: AppEvent) -> ExecutionOutcome {
         AppEvent::Continue => panic!("expected completed event, got continue"),
         AppEvent::EditSnippet(id) => panic!("expected completed event, got edit request for {id}"),
         AppEvent::Cancelled => panic!("expected completed event, got cancelled"),
+        AppEvent::DeleteSnippet(id) => {
+            panic!("expected completed event, got delete request for {id}")
+        }
     }
 }
 
@@ -207,6 +210,17 @@ fn edit_requested(event: AppEvent) -> crate::domain::SnippetId {
         AppEvent::Continue => panic!("expected edit request, got continue"),
         AppEvent::Cancelled => panic!("expected edit request, got cancelled"),
         AppEvent::Completed(_) => panic!("expected edit request, got completed"),
+        AppEvent::DeleteSnippet(id) => panic!("expected edit request, got delete request for {id}"),
+    }
+}
+
+fn delete_requested(event: AppEvent) -> crate::domain::SnippetId {
+    match event {
+        AppEvent::DeleteSnippet(id) => id,
+        AppEvent::Continue => panic!("expected delete request, got continue"),
+        AppEvent::Cancelled => panic!("expected delete request, got cancelled"),
+        AppEvent::EditSnippet(_) => panic!("expected delete request, got edit request"),
+        AppEvent::Completed(_) => panic!("expected delete request, got completed"),
     }
 }
 
@@ -406,6 +420,78 @@ fn ctrl_e_from_browse_requests_edit_for_selected_snippet() {
 
     let id =
         edit_requested(app.handle_key(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL)));
+    assert_eq!(id.as_str(), "x.md#slug");
+}
+
+#[test]
+fn delete_key_arms_a_confirmation_instead_of_deleting() {
+    let mut app = app_with_body("echo hi", vec![], TestProvider::default());
+    assert!(matches!(app.handle_key(ctrl('x')), AppEvent::Continue));
+    let pending = app.pending_delete.as_ref().expect("delete should be armed");
+    assert_eq!(pending.name, "Demo");
+    assert_eq!(pending.id.as_str(), "x.md#slug");
+    assert_eq!(pending.relative_display, "x.md");
+}
+
+#[test]
+fn pressing_the_delete_key_twice_confirms() {
+    let mut app = app_with_body("echo hi", vec![], TestProvider::default());
+    app.handle_key(ctrl('x'));
+    let id = delete_requested(app.handle_key(ctrl('x')));
+    assert_eq!(id.as_str(), "x.md#slug");
+    assert!(app.pending_delete.is_none(), "confirmation should clear");
+}
+
+#[test]
+fn esc_cancels_an_armed_delete_without_leaving_the_picker() {
+    let mut app = app_with_body("echo hi", vec![], TestProvider::default());
+    app.handle_key(ctrl('x'));
+    // Esc is `cancel_or_back`; while a delete is armed it must dismiss the
+    // confirmation rather than fall through and exit the picker.
+    assert!(matches!(
+        app.handle_key(press(KeyCode::Esc)),
+        AppEvent::Continue
+    ));
+    assert!(app.pending_delete.is_none());
+    assert_eq!(app.status.as_deref(), Some("delete cancelled: Demo"));
+}
+
+#[test]
+fn any_other_key_cancels_an_armed_delete_and_is_swallowed() {
+    let mut app = app_with_body("echo hi", vec![], TestProvider::default());
+    app.handle_key(ctrl('x'));
+    // Enter would normally accept the snippet; it must not both dismiss the
+    // confirmation and act.
+    assert!(matches!(
+        app.handle_key(press(KeyCode::Enter)),
+        AppEvent::Continue
+    ));
+    assert!(app.pending_delete.is_none());
+    assert_eq!(app.fuzzy.query, "", "the key must not reach the filter");
+}
+
+#[test]
+fn delete_key_on_a_directory_in_browse_mode_is_a_no_op() {
+    let mut app = app_with_body("echo hi", vec![], TestProvider::default());
+    app.nav_mode = NavigationMode::Browse;
+    app.browse.set_selection(Some(0));
+
+    assert!(matches!(app.handle_key(ctrl('x')), AppEvent::Continue));
+    assert!(
+        app.pending_delete.is_none(),
+        "directories have no snippet to delete"
+    );
+}
+
+#[test]
+fn delete_key_from_browse_arms_the_selected_snippet() {
+    let mut app = app_with_body("echo hi", vec![], TestProvider::default());
+    app.nav_mode = NavigationMode::Browse;
+    app.browse.set_path(vec!["x.md".to_string()]);
+    app.browse.set_selection(Some(0));
+
+    app.handle_key(ctrl('x'));
+    let id = delete_requested(app.handle_key(ctrl('x')));
     assert_eq!(id.as_str(), "x.md#slug");
 }
 
@@ -732,6 +818,71 @@ fn select_render_uses_shared_chrome_title_and_footer() {
 
     assert!(rendered.contains("pb execute — pick a snippet"));
     assert!(rendered.contains("enter accept"));
+}
+
+#[test]
+fn select_render_shows_the_delete_confirmation_banner_and_footer() {
+    let mut app = app_with_body("echo hi", vec![], TestProvider::default());
+    app.handle_key(ctrl('x'));
+    let backend = TestBackend::new(80, 20);
+    let mut terminal = Terminal::new(backend).expect("terminal");
+
+    terminal.draw(|frame| app.render(frame)).expect("draw");
+    let rendered: String = terminal
+        .backend()
+        .buffer()
+        .content()
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect();
+
+    assert!(
+        rendered.contains("delete \"Demo\" from disk?"),
+        "{rendered}"
+    );
+    assert!(rendered.contains("ctrl+x confirm"), "{rendered}");
+    assert!(rendered.contains("any other key cancels"), "{rendered}");
+    assert!(rendered.contains("this cannot be undone"), "{rendered}");
+}
+
+#[test]
+fn select_footer_offers_delete_for_a_selected_snippet() {
+    let mut app = app_with_body("echo hi", vec![], TestProvider::default());
+    // Wide enough that the full fuzzy-mode footer fits without truncation.
+    let backend = TestBackend::new(140, 20);
+    let mut terminal = Terminal::new(backend).expect("terminal");
+
+    terminal.draw(|frame| app.render(frame)).expect("draw");
+    let rendered: String = terminal
+        .backend()
+        .buffer()
+        .content()
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect();
+
+    assert!(rendered.contains("ctrl+x delete"), "{rendered}");
+}
+
+#[test]
+fn browse_footer_omits_delete_while_a_directory_is_selected() {
+    let mut app = app_with_body("echo hi", vec![], TestProvider::default());
+    app.nav_mode = NavigationMode::Browse;
+    app.browse.set_selection(Some(0));
+    let backend = TestBackend::new(140, 20);
+    let mut terminal = Terminal::new(backend).expect("terminal");
+
+    terminal.draw(|frame| app.render(frame)).expect("draw");
+    let rendered: String = terminal
+        .backend()
+        .buffer()
+        .content()
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect();
+
+    assert!(rendered.contains("enter open"), "{rendered}");
+    assert!(!rendered.contains("delete"), "{rendered}");
 }
 
 #[test]

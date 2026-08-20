@@ -7,7 +7,7 @@ mod snippets;
 mod variables;
 
 use frontmatter::parse_frontmatter;
-use ranges::parse_snippet_line_ranges;
+use ranges::{parse_snippet_line_ranges, section_end};
 use snippets::parse_snippets;
 
 pub(crate) use variables::find_placeholder_end;
@@ -56,4 +56,28 @@ pub fn snippet_line_ranges(relative_path: &Path, content: &str) -> Vec<SnippetLi
     let lines: Vec<&str> = content.lines().collect();
     let (_, body_start) = parse_frontmatter(&lines);
     parse_snippet_line_ranges(&lines[body_start..], relative_path, body_start)
+}
+
+/// Return the line range covering a snippet's entire `##` section: the heading
+/// through the last line before the next top-level `##` heading (or end of
+/// file), rather than stopping at the body's closing fence.
+///
+/// Returns `None` when `id` is not a parseable snippet in `content` — notably
+/// when its code fence is unterminated, which leaves the parser with no range
+/// at all. Callers that rewrite the file must treat that as "refuse", not as
+/// "delete nothing".
+pub fn snippet_section_range(
+    relative_path: &Path,
+    content: &str,
+    id: &SnippetId,
+) -> Option<SnippetLineRange> {
+    let lines: Vec<&str> = content.lines().collect();
+    let (_, body_start) = parse_frontmatter(&lines);
+    let range = parse_snippet_line_ranges(&lines[body_start..], relative_path, body_start)
+        .into_iter()
+        .find(|range| range.id == *id)?;
+    Some(SnippetLineRange {
+        end_line: section_end(&lines, range.end_line),
+        ..range
+    })
 }

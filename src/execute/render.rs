@@ -23,7 +23,9 @@ use crate::index::IndexedSnippet;
 use crate::search;
 use crate::tui::Chrome;
 
-use super::app::{ExecutionApp, NavigationMode, Screen, SuggestionProvider, tag_label};
+use super::app::{
+    ExecutionApp, NavigationMode, PendingDelete, Screen, SuggestionProvider, tag_label,
+};
 use super::browse::{BrowseEntry, DirNode};
 use super::prompt::{PromptState, cursor_in_template, render_command_text};
 
@@ -62,7 +64,9 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
         let browse_visible = self.browse.visible(&self.tree);
         let tags_visible = self.visible_tags();
         let tag_snippets = self.visible_tag_snippets();
-        let help = if let Some(status) = &self.status {
+        let help = if let Some(pending) = &self.pending_delete {
+            self.delete_confirm_help(pending)
+        } else if let Some(status) = &self.status {
             status.clone()
         } else {
             let selected_is_dir = browse_visible
@@ -78,6 +82,10 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
             footer: &help,
         }
         .render(outer, frame.buffer_mut());
+        // A pending delete takes a banner row off the top of the content area.
+        // The split below is horizontal, so the border patch further down still
+        // lands on the right column.
+        let area = self.render_delete_banner(frame, area);
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([Constraint::Min(1), Constraint::Length(2)])
@@ -628,6 +636,51 @@ fn fuzzy_snippet_row_spans(
     }
     spans.push(Span::styled("]".to_string(), base));
     spans
+}
+
+impl<P: SuggestionProvider> ExecutionApp<P> {
+    /// Draw the destructive-action banner for a pending delete and return the
+    /// content area minus the row it consumed.
+    ///
+    /// The banner uses `theme.error` rather than the dim `theme.chrome` the
+    /// footer gets: this is the only irreversible action in the picker, so it
+    /// must not read as ordinary status text.
+    fn render_delete_banner(&self, frame: &mut Frame<'_>, area: Rect) -> Rect {
+        let Some(pending) = &self.pending_delete else {
+            return area;
+        };
+        if area.height == 0 {
+            return area;
+        }
+        let banner = Rect { height: 1, ..area };
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                format!("delete \"{}\" from disk?", pending.name),
+                self.theme.error,
+            ))),
+            banner,
+        );
+        Rect {
+            y: area.y + 1,
+            height: area.height.saturating_sub(1),
+            ..area
+        }
+    }
+
+    /// Footer text shown while a delete is armed, naming the chord that
+    /// confirms it so a remapped key is what the UI teaches.
+    fn delete_confirm_help(&self, pending: &PendingDelete) -> String {
+        let confirm = self
+            .keymap
+            .select
+            .hint(crate::keybinds::SelectAction::Delete)
+            .map(|chord| format!("{chord} confirm"))
+            .unwrap_or_else(|| "delete unbound".to_string());
+        format!(
+            "{confirm}  any other key cancels  ({} · this cannot be undone)",
+            pending.relative_display
+        )
+    }
 }
 
 #[cfg(test)]

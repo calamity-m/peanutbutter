@@ -463,6 +463,23 @@ pub struct ExecutionApp<P = SystemSuggestionProvider> {
     /// Resolved keybinds for this session. Ctrl+C cancel is handled before
     /// this keymap and is not remappable.
     pub(crate) keymap: ExecuteKeymap,
+    /// Armed-but-unconfirmed delete, rendered as a confirmation bar over the
+    /// picker. `None` whenever no delete is pending.
+    pub(crate) pending_delete: Option<PendingDelete>,
+}
+
+/// A delete the user has armed but not yet confirmed.
+///
+/// Deleting rewrites the snippet's markdown file and cannot be undone, so the
+/// picker always requires a second keypress. `name` is captured up front so the
+/// confirmation names the snippet even if the selection moves underneath it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PendingDelete {
+    pub(crate) id: SnippetId,
+    pub(crate) name: String,
+    /// Root-relative file the section will be cut from, shown in the
+    /// confirmation so the user can tell near-identical snippets apart.
+    pub(crate) relative_display: String,
 }
 
 /// Outcome returned by [`ExecutionApp::handle_key`] after processing one key event.
@@ -471,6 +488,9 @@ pub enum AppEvent {
     Continue,
     /// The user requested to edit the currently selected snippet.
     EditSnippet(SnippetId),
+    /// The user confirmed deletion of this snippet; the TUI should remove it
+    /// from its source file and reload the index.
+    DeleteSnippet(SnippetId),
     /// The user pressed Esc or Ctrl+C; the TUI should exit without a result.
     Cancelled,
     /// The user confirmed a fully filled-in snippet; the TUI should exit with
@@ -510,6 +530,7 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
             theme,
             initial_buffer: None,
             keymap: ExecuteKeymap::default(),
+            pending_delete: None,
         }
     }
 
@@ -658,6 +679,17 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
     /// Select-level actions are resolved before mode-specific ones, matching
     /// the documented context precedence (`execute.select` first).
     fn handle_select_key(&mut self, key: KeyEvent) -> AppEvent {
+        if let Some(pending) = self.pending_delete.take() {
+            // Press-again-to-confirm: only the delete chord itself commits, and
+            // every other key is swallowed as a dismissal so a stray keystroke
+            // can neither delete a snippet nor fall through to another action.
+            if self.keymap.select.action_for(&key) == Some(SelectAction::Delete) {
+                self.status = None;
+                return AppEvent::DeleteSnippet(pending.id);
+            }
+            self.status = Some(format!("delete cancelled: {}", pending.name));
+            return AppEvent::Continue;
+        }
         match self.keymap.select.action_for(&key) {
             Some(SelectAction::CancelOrBack) => {
                 if matches!(self.nav_mode, NavigationMode::Tags) && self.tags.drill().is_some() {
@@ -691,6 +723,19 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
                 if let Some(id) = self.selected_snippet_id() {
                     self.status = None;
                     return AppEvent::EditSnippet(id);
+                }
+                return AppEvent::Continue;
+            }
+            Some(SelectAction::Delete) => {
+                match self.selected_snippet().map(|snippet| PendingDelete {
+                    id: snippet.id().clone(),
+                    name: snippet.name().to_string(),
+                    relative_display: snippet.relative_path.display().to_string(),
+                }) {
+                    // Directories in browse mode and tag rows have no snippet
+                    // to delete, so the chord is a no-op there.
+                    Some(pending) => self.pending_delete = Some(pending),
+                    None => self.status = Some("nothing selected to delete".to_string()),
                 }
                 return AppEvent::Continue;
             }

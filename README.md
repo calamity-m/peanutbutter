@@ -120,6 +120,7 @@ In all modes, the basic concept of being able to backout is maintained - cycle w
 I personally hate having to interact with snippet/cheatsheet tools, I want the easiest and lowest cost way to edit, delete, add, or whatever, my snippets. I consider this curating them.
 
 - In the picker, `Ctrl+E` opens the selected snippet in `$VISUAL` or `$EDITOR` at its heading line. When the editor exits, peanutbutter reloads snippets and returns to the picker.
+- In the picker, `Ctrl+X` deletes the selected snippet. Press it again to confirm (any other key cancels), and peanutbutter cuts that `##` section out of its markdown file and reloads. The file itself is kept even if it ends up with no snippets left, and the deleted snippet's usage history is left for `pb gc` to reattach or purge.
 - You can add snippets via the cli - `pb edit <tab-complete>`.
 - After running a command you want to save, run `pb new [name]` — it harvests the last 50 entries from the shell's in-memory history, lets you pick one, suggests which arguments should become variables, and appends a snippet to `<first-root>/snippets.md`.
 - If your snippets live in git repositories, `pb repo` opens a manager TUI listing every repo discovered under your snippet roots. From there `s` syncs (commit, pull --rebase, push), `p` pushes, `u` pulls, and `Enter` jumps into the repo with `$VISUAL`/`$EDITOR`. A snippet root with no git repository on or above it still appears so you can `Enter` to jump into it; sync/push/pull are disabled for it.
