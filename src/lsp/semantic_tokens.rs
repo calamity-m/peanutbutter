@@ -236,7 +236,11 @@ fn convert_line_tokens_to_utf16(line: &str, tokens: &mut [RawToken]) {
         let start = byte_column_to_utf16(line, start_byte);
         let end = byte_column_to_utf16(line, end_byte);
         token.start = start;
-        token.len = end - start;
+        // `byte_column_to_utf16` clamps a non-boundary index backwards, so a
+        // span that ever split a scalar would invert this subtraction. Scanned
+        // spans are boundary-aligned today; saturate so a future tokenizer
+        // change degrades to a zero-length token instead of a panic.
+        token.len = end.saturating_sub(start);
     }
 }
 

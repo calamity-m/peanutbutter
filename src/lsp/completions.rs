@@ -53,7 +53,6 @@ pub(super) fn compute_completions(
     let lines: Vec<&str> = content.lines().collect();
     let line_idx = pos.line as usize;
     let current_line = lines.get(line_idx).copied().unwrap_or("");
-    let char_idx = utf16_column_to_byte_clamped(current_line, pos.character)?;
 
     // Detect context
     let fm_end = frontmatter_end_line(&lines);
@@ -97,7 +96,11 @@ pub(super) fn compute_completions(
         return Some(CompletionResponse::Array(items));
     }
 
-    let before_cursor = &current_line[..char_idx.min(current_line.len())];
+    // Frontmatter completion above is line-based, so the column is only needed
+    // from here on. The clamped form keeps completion's tolerance for requests
+    // that race ahead of the server's full-sync content.
+    let char_idx = utf16_column_to_byte_clamped(current_line, pos.character)?;
+    let before_cursor = &current_line[..char_idx];
 
     // Offer `<#variable>` dependent-ref completions when user typed `<#`.
     // These are valid inside a suggestion command source (which we cannot

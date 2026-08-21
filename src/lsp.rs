@@ -1082,6 +1082,22 @@ mod dependent_lsp_tests {
     }
 
     #[test]
+    fn frontmatter_completion_ignores_the_request_column() {
+        // Frontmatter key completion is line-based, so it must not depend on a
+        // convertible column. On `name: \u{1f600}` the emoji spans UTF-16
+        // columns 6..8, so column 7 is inside the surrogate pair and has no
+        // byte offset at all.
+        let content = "---\nname: \u{1f600}\ndesc\n---\n## D\n\n```bash\na\n```\n";
+        let response =
+            compute_completions(content, pos(1, 7), &empty_config_vars()).expect("completions");
+        let CompletionResponse::Array(items) = response else {
+            panic!("expected array");
+        };
+
+        assert!(items.iter().any(|item| item.label == "name"), "{items:?}");
+    }
+
+    #[test]
     fn completion_after_unicode_scalar_does_not_panic() {
         let content = "## D\n\n```bash\ncafé\n```\n";
 
