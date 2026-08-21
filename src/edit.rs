@@ -1,15 +1,63 @@
-//! Snippet file target resolution and command handling for `pb edit`.
+//! Snippet file editing, target resolution, and safe on-disk rewrites.
 
 use crate::config::Paths;
 use crate::edit::editor::EditorTarget;
 use std::fs;
 use std::io;
 use std::path::{Component, Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 pub mod editor;
+pub mod remove;
 
 /// Default snippet file used by `pb init`, `pb edit`, and `pb new`.
 pub(crate) const DEFAULT_EDIT_PATH: &str = "snippets.md";
+
+/// Atomically replace a file through its canonical target, preserving existing
+/// permissions and leaving symlinks intact.
+pub(crate) fn write_atomically(path: &Path, contents: &str) -> io::Result<()> {
+    let target = match fs::canonicalize(path) {
+        Ok(target) => target,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => path.to_path_buf(),
+        Err(err) => return Err(err),
+    };
+    let permissions = match fs::metadata(&target) {
+        Ok(metadata) => Some(metadata.permissions()),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => None,
+        Err(err) => return Err(err),
+    };
+    let parent = target
+        .parent()
+        .ok_or_else(|| io::Error::other(format!("{} has no parent directory", target.display())))?;
+    let file_name = target
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(DEFAULT_EDIT_PATH);
+    let tmp = parent.join(format!(
+        ".{file_name}.tmp-{}-{}",
+        std::process::id(),
+        unique_tmp_suffix()
+    ));
+
+    let result = (|| {
+        fs::write(&tmp, contents)?;
+        if let Some(permissions) = permissions {
+            fs::set_permissions(&tmp, permissions)?;
+        }
+        fs::rename(&tmp, &target)
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&tmp);
+    }
+    result
+}
+
+fn unique_tmp_suffix() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or_default()
+}
 
 /// Resolve the target snippet file and open it in `$EDITOR` / `$VISUAL`.
 /// Creates the file (and any parent directories) if it doesn't exist yet.

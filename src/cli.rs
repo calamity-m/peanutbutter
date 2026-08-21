@@ -225,27 +225,8 @@ fn write_starter_snippets(paths: &Paths, force: bool) -> io::Result<InitOutcome>
         return Ok(InitOutcome::Skipped(display_path(&target)));
     }
 
-    let tmp = paths.xdg_snippets_dir.join(format!(
-        ".{}.tmp-{}-{}",
-        crate::edit::DEFAULT_EDIT_PATH,
-        std::process::id(),
-        unique_tmp_suffix()
-    ));
-    fs::write(&tmp, STARTER_SNIPPETS_MD)?;
-    match fs::rename(&tmp, &target) {
-        Ok(()) => Ok(InitOutcome::Written(display_path(&target))),
-        Err(err) => {
-            let _ = fs::remove_file(&tmp);
-            Err(err)
-        }
-    }
-}
-
-fn unique_tmp_suffix() -> u128 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_nanos())
-        .unwrap_or_default()
+    crate::edit::write_atomically(&target, STARTER_SNIPPETS_MD)?;
+    Ok(InitOutcome::Written(display_path(&target)))
 }
 
 fn display_path(path: &Path) -> PathBuf {

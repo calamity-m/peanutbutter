@@ -159,6 +159,7 @@ error_fg = "red"
 # cancel_or_back = ["esc"]       # cancel, or back out of browse/tag drill
 # cycle_mode = ["ctrl+t", "f2"]  # fuzzy -> browse -> tags -> fuzzy
 # edit = ["ctrl+e"]              # open the selected snippet in $EDITOR
+# delete = ["ctrl+x"]            # delete the selected snippet (press again to confirm)
 # preview_down = ["ctrl+j", "ctrl+down"]
 # preview_up = ["ctrl+k", "ctrl+up"]
 #
