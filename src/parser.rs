@@ -59,8 +59,8 @@ pub fn snippet_line_ranges(relative_path: &Path, content: &str) -> Vec<SnippetLi
 }
 
 /// Return the line range covering a snippet's entire `##` section: the heading
-/// through the last line before the next top-level `##` heading (or end of
-/// file), rather than stopping at the body's closing fence.
+/// through the last line before the next level-one or level-two ATX heading (or
+/// end of file), rather than stopping at the body's closing fence.
 ///
 /// Returns `None` when `id` is not a parseable snippet in `content` — notably
 /// when its code fence is unterminated, which leaves the parser with no range

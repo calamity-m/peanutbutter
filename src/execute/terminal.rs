@@ -177,7 +177,13 @@ fn reload_after_edit<P: SuggestionProvider>(
     snippet_roots: &[std::path::PathBuf],
     name: String,
 ) -> String {
-    reload_index(app, snippet_roots, &format!("edited {name}"))
+    let previous_id = app.selected_snippet().map(|snippet| snippet.id().clone());
+    reload_index(
+        app,
+        snippet_roots,
+        &format!("edited {name}"),
+        previous_id.as_ref(),
+    )
 }
 
 /// Remove the snippet's `##` section from disk and reload, reporting both
@@ -196,29 +202,29 @@ fn delete_status<P: SuggestionProvider>(
     };
     let name = snippet.name().to_string();
     match remove::remove_snippet(&snippet) {
-        Ok(()) => reload_index(app, snippet_roots, &format!("deleted {name}")),
+        Ok(()) => reload_index(app, snippet_roots, &format!("deleted {name}"), None),
         Err(err) => format!("delete failed: {err}"),
     }
 }
 
 /// Rebuild the index from `snippet_roots` after the files on disk changed,
-/// restoring the previous selection when that snippet still exists.
+/// restoring `preferred_id` when it still exists.
 fn reload_index<P: SuggestionProvider>(
     app: &mut ExecutionApp<P>,
     snippet_roots: &[std::path::PathBuf],
     prefix: &str,
+    preferred_id: Option<&SnippetId>,
 ) -> String {
-    let previous_id = app.selected_snippet().map(|snippet| snippet.id().clone());
     if snippet_roots.is_empty() {
         return format!("{prefix}; reload skipped");
     }
     match crate::index::load_from_roots(snippet_roots) {
         Ok(index) => {
-            let previous_found = app.replace_index(index, previous_id.as_ref());
-            if previous_found {
-                format!("{prefix}; reloaded")
-            } else {
+            let preferred_found = app.replace_index(index, preferred_id);
+            if preferred_id.is_some() && !preferred_found {
                 format!("{prefix}; reloaded, previous snippet not found")
+            } else {
+                format!("{prefix}; reloaded")
             }
         }
         Err(err) => format!("{prefix}; reload failed: {err}"),
@@ -325,7 +331,7 @@ mod tests {
 
         let status = delete_status(&id, &mut app, std::slice::from_ref(&root));
 
-        assert!(status.starts_with("deleted Demo; reloaded"), "{status}");
+        assert_eq!(status, "deleted Demo; reloaded");
         assert_eq!(
             fs::read_to_string(&path).unwrap(),
             "## Keeper\n\n```\necho keeper\n```\n"

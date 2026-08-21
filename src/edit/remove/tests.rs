@@ -2,14 +2,17 @@ use super::*;
 use crate::domain::SnippetId;
 use crate::index::SnippetIndex;
 use crate::parser::parse_file;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 fn temp_dir(label: &str) -> PathBuf {
+    static NEXT: AtomicU64 = AtomicU64::new(1);
     let dir = std::env::temp_dir().join(format!(
         "pb-remove-{label}-{}-{}",
         std::process::id(),
-        unique_suffix()
+        NEXT.fetch_add(1, Ordering::Relaxed)
     ));
+    let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(&dir).expect("create temp dir");
     dir
 }
@@ -80,6 +83,57 @@ fn removes_prose_and_extra_fences_written_after_the_body() {
 }
 
 #[test]
+fn never_removes_a_later_snippet_after_an_unterminated_stray_fence() {
+    let (root, index) = indexed(
+        "stray-fence",
+        "## Alpha\n\n```\necho alpha\n```\n\n```text\nstray unterminated fence\n\n## Beta\n\n```\necho beta\n```\n",
+    );
+
+    remove_by_slug(&index, "alpha").expect("remove");
+
+    assert_eq!(read(&root), "## Beta\n\n```\necho beta\n```\n");
+}
+
+#[test]
+fn keeps_a_non_snippet_section_after_an_unterminated_stray_fence() {
+    let (root, index) = indexed(
+        "stray-fence-before-notes",
+        "## Alpha\n\n```\necho alpha\n```\n\n```text\nstray unterminated fence\n\n## Reference\n\nKeep this prose.\n",
+    );
+
+    remove_by_slug(&index, "alpha").expect("remove");
+
+    assert_eq!(read(&root), "## Reference\n\nKeep this prose.\n");
+}
+
+#[test]
+fn keeps_a_following_h1_section_and_later_snippet() {
+    let (root, index) = indexed(
+        "h1-boundary",
+        "# Title\n\n## Alpha\n\n```\necho alpha\n```\n\n# Second Document\n\nNotes that do not belong to Alpha.\n\n## Beta\n\n```\necho beta\n```\n",
+    );
+
+    remove_by_slug(&index, "alpha").expect("remove");
+
+    assert_eq!(
+        read(&root),
+        "# Title\n\n# Second Document\n\nNotes that do not belong to Alpha.\n\n## Beta\n\n```\necho beta\n```\n"
+    );
+}
+
+#[test]
+fn does_not_treat_an_indented_h1_as_a_section_boundary() {
+    let (root, index) = indexed(
+        "indented-h1",
+        "## Alpha\n\n```\necho alpha\n```\n\nExample config:\n\n    # comment\n    key = value\n\nMore about Alpha.\n\n## Beta\n\n```\necho beta\n```\n",
+    );
+
+    remove_by_slug(&index, "alpha").expect("remove");
+
+    assert_eq!(read(&root), "## Beta\n\n```\necho beta\n```\n");
+}
+
+#[test]
 fn keeps_frontmatter_when_removing_a_snippet_below_it() {
     let (root, index) = indexed(
         "frontmatter",
@@ -130,6 +184,22 @@ fn refuses_when_the_snippet_is_no_longer_in_the_file() {
 }
 
 #[test]
+fn refuses_when_duplicate_slug_renumbering_points_at_a_different_snippet() {
+    let original = "## Alpha\n\n```\nfirst\n```\n\n## Alpha\n\n```\nsecond\n```\n\n## Alpha\n\n```\nthird\n```\n";
+    let (root, index) = indexed("renumbered", original);
+    let stale = index
+        .get(&SnippetId::new("snippets.md", "alpha-1"))
+        .expect("second snippet")
+        .clone();
+    let changed = "## Alpha\n\n```\nsecond\n```\n\n## Alpha\n\n```\nthird\n```\n";
+    fs::write(root.join("snippets.md"), changed).expect("remove first duplicate");
+
+    remove_snippet(&stale).expect_err("renumbered id must not remove another snippet");
+
+    assert_eq!(read(&root), changed, "file must be left untouched");
+}
+
+#[test]
 fn refuses_when_the_code_fence_is_unterminated() {
     // An unterminated fence yields no parsed range at all; refusing is the only
     // safe answer, since any guessed span could eat the rest of the file.
@@ -141,6 +211,92 @@ fn refuses_when_the_code_fence_is_unterminated() {
 
     remove_snippet(&snippet).expect_err("unterminated fence should not be removed");
     assert_eq!(read(&root), broken, "file must be left untouched");
+}
+
+#[test]
+fn preserves_crlf_line_endings() {
+    let (root, index) = indexed(
+        "crlf",
+        "## Alpha\r\n\r\n```sh\r\nalpha\r\n```\r\n\r\n## Beta\r\n\r\n```sh\r\nbeta\r\n```\r\n",
+    );
+
+    remove_by_slug(&index, "alpha").expect("remove");
+
+    assert_eq!(read(&root), "## Beta\r\n\r\n```sh\r\nbeta\r\n```\r\n");
+}
+
+#[test]
+fn preserves_mixed_line_endings_outside_the_removed_section() {
+    let (root, index) = indexed(
+        "mixed-endings",
+        "# Title\r\n\r\n## Alpha\n\n```sh\r\nalpha\n```\r\n\r\n## Beta\r\n\r\n```sh\nbeta\n```\r\n",
+    );
+
+    remove_by_slug(&index, "alpha").expect("remove");
+
+    assert_eq!(
+        read(&root),
+        "# Title\r\n\r\n## Beta\r\n\r\n```sh\nbeta\n```\r\n"
+    );
+}
+
+#[test]
+fn preserves_a_missing_trailing_newline() {
+    let (root, index) = indexed(
+        "no-trailing-newline",
+        "## Alpha\n\n```\nalpha\n```\n\n## Beta\n\n```\nbeta\n```",
+    );
+
+    remove_by_slug(&index, "alpha").expect("remove");
+
+    assert_eq!(read(&root), "## Beta\n\n```\nbeta\n```");
+}
+
+#[cfg(unix)]
+#[test]
+fn preserves_existing_file_permissions() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let (root, index) = indexed(
+        "permissions",
+        "## Alpha\n\n```sh\nalpha\n```\n\n## Beta\n\n```sh\nbeta\n```\n",
+    );
+    let path = root.join("snippets.md");
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).expect("restrict fixture");
+
+    remove_by_slug(&index, "alpha").expect("remove");
+
+    assert_eq!(
+        fs::metadata(path).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn follows_symlink_without_replacing_it() {
+    use std::os::unix::fs::symlink;
+
+    let root = temp_dir("symlink");
+    let target = root.join("real.md");
+    let path = root.join("snippets.md");
+    let content = "## Alpha\n\n```sh\nalpha\n```\n\n## Beta\n\n```sh\nbeta\n```\n";
+    fs::write(&target, content).expect("write target");
+    symlink(&target, &path).expect("create symlink");
+    let index = SnippetIndex::from_files([parse_file(&path, &root, content)]);
+
+    remove_by_slug(&index, "alpha").expect("remove");
+
+    assert!(
+        fs::symlink_metadata(&path)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    assert_eq!(
+        fs::read_to_string(target).unwrap(),
+        "## Beta\n\n```sh\nbeta\n```\n"
+    );
 }
 
 #[test]
