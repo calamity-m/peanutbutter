@@ -30,6 +30,7 @@ mod code_actions;
 mod completions;
 mod hover;
 mod navigation;
+mod position;
 mod semantic_tokens;
 
 /// Run the LSP server over stdio until the client disconnects.
@@ -71,6 +72,9 @@ struct Backend {
 
 fn server_capabilities() -> ServerCapabilities {
     ServerCapabilities {
+        // LSP columns are UTF-16 code units. Advertising the default explicitly
+        // keeps every handler on the one encoding converted by `position`.
+        position_encoding: Some(PositionEncodingKind::UTF16),
         text_document_sync: Some(TextDocumentSyncCapability::Kind(TextDocumentSyncKind::FULL)),
         completion_provider: Some(CompletionOptions {
             trigger_characters: Some(vec![
@@ -293,29 +297,10 @@ fn uri_to_path(uri: &Url) -> PathBuf {
 /// Line numbers in findings are 1-based; LSP positions are 0-based.
 fn lint_finding_to_diagnostic(finding: &lint::LintFinding, content: &str) -> Diagnostic {
     let line = finding.line.unwrap_or(1).saturating_sub(1) as u32;
-    let line_len = content
-        .lines()
-        .nth(line as usize)
-        .map(|l| l.len() as u32)
-        .unwrap_or(0);
+    let source_line = content.lines().nth(line as usize).unwrap_or("");
     let range = match (finding.col_start, finding.col_end) {
-        (Some(c0), Some(c1)) => Range {
-            start: Position {
-                line,
-                character: c0 as u32,
-            },
-            end: Position {
-                line,
-                character: c1 as u32,
-            },
-        },
-        _ => Range {
-            start: Position { line, character: 0 },
-            end: Position {
-                line,
-                character: line_len,
-            },
-        },
+        (Some(c0), Some(c1)) => position::byte_span_to_range(line, source_line, c0, c1),
+        _ => position::byte_span_to_range(line, source_line, 0, source_line.len()),
     };
     let severity = match finding.severity {
         lint::LintSeverity::Error => DiagnosticSeverity::ERROR,
@@ -559,12 +544,12 @@ pub(super) fn dependent_ref_at(
     while i < bytes.len().saturating_sub(1) {
         if bytes[i] == b'<' && bytes[i + 1] == b'#' {
             let start = i;
-            let end = match bytes[start..].iter().position(|&b| b == b'>') {
-                Some(rel) => start + rel + 1,
-                None => bytes.len(),
+            let (end, inner_end) = match bytes[start..].iter().position(|&b| b == b'>') {
+                Some(rel) => (start + rel + 1, start + rel),
+                None => (bytes.len(), bytes.len()),
             };
             if char_idx >= start && char_idx <= end {
-                let inner = &line[start + 2..end.min(bytes.len()).saturating_sub(1)];
+                let inner = &line[start + 2..inner_end];
                 let (name_part, raw) = match inner.split_once(':') {
                     Some((n, m)) => (n, m == "raw"),
                     None => (inner, false),
@@ -592,14 +577,13 @@ pub(super) fn placeholder_at(line: &str, char_idx: usize) -> Option<(String, usi
     while i < bytes.len().saturating_sub(1) {
         if bytes[i] == b'<' && bytes[i + 1] == b'@' {
             let start = i;
-            // Find closing `>`
-            let end = match bytes[start..].iter().position(|&b| b == b'>') {
-                Some(rel) => start + rel + 1,
-                None => bytes.len(),
+            let (end, inner_end) = match bytes[start..].iter().position(|&b| b == b'>') {
+                Some(rel) => (start + rel + 1, start + rel),
+                None => (bytes.len(), bytes.len()),
             };
             if char_idx >= start && char_idx <= end {
                 // Extract name: everything between `<@` and the first `:` or `>`
-                let inner = &line[start + 2..end.min(bytes.len()) - 1];
+                let inner = &line[start + 2..inner_end];
                 let name = inner.split(':').next().unwrap_or(inner).to_string();
                 return Some((name, start, end));
             }
@@ -609,20 +593,6 @@ pub(super) fn placeholder_at(line: &str, char_idx: usize) -> Option<(String, usi
         }
     }
     None
-}
-
-/// Build a single-line [`Range`] from 0-based line + character column bounds.
-pub(super) fn line_range(line: u32, start_char: u32, end_char: u32) -> Range {
-    Range {
-        start: Position {
-            line,
-            character: start_char,
-        },
-        end: Position {
-            line,
-            character: end_char,
-        },
-    }
 }
 
 #[cfg(test)]
@@ -854,6 +824,30 @@ echo hi
         );
         fs::remove_dir_all(&root).unwrap();
     }
+
+    #[test]
+    fn server_advertises_utf16_positions() {
+        assert_eq!(
+            server_capabilities().position_encoding,
+            Some(PositionEncodingKind::UTF16)
+        );
+    }
+
+    #[test]
+    fn diagnostic_byte_spans_are_converted_to_utf16() {
+        let content = "## Démo\n\n```bash\na\n```\n\n## Démo!\n\n```bash\nb\n```\n";
+        let config = empty_app_config();
+        let findings = lint::lint_file(Path::new("snippets.md"), Path::new("."), content, &config);
+        let finding = findings
+            .iter()
+            .find(|finding| finding.code == lint::CODE_DUPLICATE_SLUG)
+            .expect("duplicate slug finding");
+
+        let diagnostic = lint_finding_to_diagnostic(finding, content);
+
+        assert_eq!(diagnostic.range.start, Position::new(6, 3));
+        assert_eq!(diagnostic.range.end, Position::new(6, 8));
+    }
 }
 
 #[cfg(test)]
@@ -916,6 +910,21 @@ mod dependent_lsp_tests {
     fn dependent_ref_at_returns_none_outside() {
         let line = "echo hi";
         assert!(dependent_ref_at(line, 2).is_none());
+    }
+
+    #[test]
+    fn unterminated_tokens_ending_in_unicode_are_safe() {
+        let dependent = "echo <#é";
+        let placeholder = "echo <@é";
+
+        assert_eq!(
+            dependent_ref_at(dependent, dependent.len()).map(|(name, ..)| name),
+            Some("é".to_string())
+        );
+        assert_eq!(
+            placeholder_at(placeholder, placeholder.len()).map(|(name, ..)| name),
+            Some("é".to_string())
+        );
     }
 
     #[test]
@@ -1057,5 +1066,84 @@ mod dependent_lsp_tests {
         assert!(labels.contains(&"a"), "got {labels:?}");
         assert!(!labels.contains(&"out"), "got {labels:?}");
         assert!(!labels.contains(&"later"), "got {labels:?}");
+    }
+
+    #[test]
+    fn completion_uses_utf16_columns_after_unicode() {
+        let content =
+            "---\nvariables:\n  name:\n    suggestions: [alice]\n---\n## D\n\n```bash\né <@\n```\n";
+        let response =
+            compute_completions(content, pos(8, 4), &empty_config_vars()).expect("completions");
+        let CompletionResponse::Array(items) = response else {
+            panic!("expected array");
+        };
+
+        assert!(items.iter().any(|item| item.label == "name"));
+    }
+
+    #[test]
+    fn frontmatter_completion_ignores_the_request_column() {
+        // Frontmatter key completion is line-based, so it must not depend on a
+        // convertible column. On `name: \u{1f600}` the emoji spans UTF-16
+        // columns 6..8, so column 7 is inside the surrogate pair and has no
+        // byte offset at all.
+        let content = "---\nname: \u{1f600}\ndesc\n---\n## D\n\n```bash\na\n```\n";
+        let response =
+            compute_completions(content, pos(1, 7), &empty_config_vars()).expect("completions");
+        let CompletionResponse::Array(items) = response else {
+            panic!("expected array");
+        };
+
+        assert!(items.iter().any(|item| item.label == "name"), "{items:?}");
+    }
+
+    #[test]
+    fn completion_after_unicode_scalar_does_not_panic() {
+        let content = "## D\n\n```bash\ncafé\n```\n";
+
+        assert!(compute_completions(content, pos(3, 4), &empty_config_vars()).is_none());
+    }
+
+    #[test]
+    fn hover_definition_and_references_use_utf16_ranges() {
+        let content = "---\nvariables:\n  bucket:\n    suggestions: [a]\n---\n## D\n\n```bash\né <@bucket> <@key:ls <#bucket>>\n```\n";
+        let uri = Url::parse("file:///x.md").unwrap();
+        let line_idx = 8;
+        let line = content.lines().nth(line_idx).unwrap();
+        let hash_start = line.find("<#bucket").unwrap();
+        let cursor = position::byte_column_to_utf16(line, hash_start + 2);
+
+        let hover =
+            compute_hover(content, pos(line_idx as u32, cursor), &empty_config_vars()).unwrap();
+        let hover_range = hover.range.unwrap();
+        assert_eq!(
+            hover_range.start.character,
+            position::byte_column_to_utf16(line, hash_start)
+        );
+        assert_eq!(
+            hover_range.end.character,
+            position::byte_column_to_utf16(line, hash_start + "<#bucket>".len())
+        );
+
+        let definition = compute_definition(
+            &uri,
+            content,
+            pos(line_idx as u32, cursor),
+            &empty_app_config(),
+        )
+        .unwrap();
+        let GotoDefinitionResponse::Scalar(location) = definition else {
+            panic!("expected scalar");
+        };
+        assert_eq!(location.range.start.line, 2);
+
+        let references = compute_references(&uri, content, pos(line_idx as u32, cursor)).unwrap();
+        let first_placeholder = references
+            .iter()
+            .find(|location| {
+                location.range.start.line == line_idx as u32 && location.range.start.character == 2
+            })
+            .expect("reference after unicode prefix");
+        assert_eq!(first_placeholder.range.end.character, 10);
     }
 }

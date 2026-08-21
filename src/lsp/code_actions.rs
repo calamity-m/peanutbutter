@@ -3,7 +3,8 @@ use crate::parser;
 use std::collections::{BTreeMap, HashMap};
 use tower_lsp::lsp_types::*;
 
-use super::{find_variable_declaration_line, frontmatter_end_line, line_range};
+use super::position::{byte_span_to_range, utf16_column_to_byte};
+use super::{find_variable_declaration_line, frontmatter_end_line};
 
 // ---------------------------------------------------------------------------
 // Code actions
@@ -133,13 +134,17 @@ fn extract_code_action(
     // is only consistent if all identical duplicates lose their redundant source.
     let mut edits: Vec<TextEdit> = matching_inline_placeholders(content, inline)
         .into_iter()
-        .map(|placeholder| TextEdit {
-            range: line_range(
-                placeholder.line,
-                placeholder.start as u32,
-                placeholder.end as u32,
-            ),
-            new_text: format!("<@{}>", placeholder.name),
+        .map(|placeholder| {
+            let line = lines.get(placeholder.line as usize).copied().unwrap_or("");
+            TextEdit {
+                range: byte_span_to_range(
+                    placeholder.line,
+                    line,
+                    placeholder.start,
+                    placeholder.end,
+                ),
+                new_text: format!("<@{}>", placeholder.name),
+            }
         })
         .collect();
     let occurrences = edits.len();
@@ -216,6 +221,7 @@ fn inline_code_action(
     if usages > 1 {
         title.push_str(&format!(" (affects all {usages} usages)"));
     }
+    let target_line = lines.get(target.line as usize).copied()?;
     Some(CodeAction {
         title,
         kind: Some(CodeActionKind::REFACTOR_INLINE),
@@ -223,7 +229,7 @@ fn inline_code_action(
             uri,
             vec![
                 TextEdit {
-                    range: line_range(target.line, target.start as u32, target.end as u32),
+                    range: byte_span_to_range(target.line, target_line, target.start, target.end),
                     new_text: inline_text,
                 },
                 remove_variable_spec_edit(&lines, &name)?,
@@ -243,7 +249,7 @@ fn workspace_edit(uri: &Url, edits: Vec<TextEdit>) -> WorkspaceEdit {
 
 fn inline_placeholder_at(content: &str, pos: Position) -> Option<InlinePlaceholder> {
     let line = content.lines().nth(pos.line as usize)?;
-    let char_idx = pos.character as usize;
+    let char_idx = utf16_column_to_byte(line, pos.character)?;
     let bytes = line.as_bytes();
     let mut i = 0;
     while i + 1 < bytes.len() {
@@ -669,17 +675,18 @@ mod code_action_tests {
     }
 
     fn apply_edits(content: &str, edits: &[TextEdit]) -> String {
-        let mut line_offsets = Vec::new();
-        let mut offset = 0;
-        for line in content.split_inclusive('\n') {
-            line_offsets.push(offset);
-            offset += line.len();
+        let mut line_offsets = vec![0];
+        for (byte_index, byte) in content.bytes().enumerate() {
+            if byte == b'\n' {
+                line_offsets.push(byte_index + 1);
+            }
         }
-        if line_offsets.is_empty() || !content.ends_with('\n') {
-            line_offsets.push(offset);
-        }
-        let to_offset =
-            |p: Position| -> usize { line_offsets[p.line as usize] + p.character as usize };
+        let lines: Vec<&str> = content.split('\n').collect();
+        let to_offset = |p: Position| -> usize {
+            line_offsets[p.line as usize]
+                + super::super::position::utf16_column_to_byte(lines[p.line as usize], p.character)
+                    .expect("generated LSP position must be valid")
+        };
         let mut ordered = edits.to_vec();
         ordered.sort_by_key(|edit| std::cmp::Reverse(to_offset(edit.range.start)));
         let mut out = content.to_string();
@@ -997,6 +1004,21 @@ mod code_action_tests {
         assert!(
             compute_code_actions(&uri(), with_frontmatter, range(6, 8), &BTreeMap::new()).is_none()
         );
+    }
+
+    #[test]
+    fn extract_uses_utf16_ranges_after_unicode_text() {
+        let content = "## D\n\n```bash\né <@p:?.>\n```\n";
+        let actions = compute_code_actions(&uri(), content, range(3, 4), &BTreeMap::new()).unwrap();
+        let replacement = edits(&actions[0])
+            .iter()
+            .find(|edit| edit.new_text == "<@p>")
+            .unwrap();
+
+        assert_eq!(replacement.range.start, pos(3, 2));
+        assert_eq!(replacement.range.end, pos(3, 9));
+        let updated = apply_edits(content, edits(&actions[0]));
+        assert!(updated.contains("é <@p>"), "{updated}");
     }
 
     #[test]
