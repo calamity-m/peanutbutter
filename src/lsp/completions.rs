@@ -3,6 +3,7 @@ use crate::parser;
 use std::collections::BTreeMap;
 use tower_lsp::lsp_types::*;
 
+use super::position::utf16_column_to_byte_clamped;
 use super::{enclosing_placeholder_owner, frontmatter_end_line, snippet_at_line};
 
 // ---------------------------------------------------------------------------
@@ -51,8 +52,8 @@ pub(super) fn compute_completions(
 ) -> Option<CompletionResponse> {
     let lines: Vec<&str> = content.lines().collect();
     let line_idx = pos.line as usize;
-    let char_idx = pos.character as usize;
     let current_line = lines.get(line_idx).copied().unwrap_or("");
+    let char_idx = utf16_column_to_byte_clamped(current_line, pos.character)?;
 
     // Detect context
     let fm_end = frontmatter_end_line(&lines);

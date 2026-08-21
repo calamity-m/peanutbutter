@@ -3,9 +3,9 @@ use crate::parser;
 use std::path::Path;
 use tower_lsp::lsp_types::*;
 
+use super::position::{byte_span_to_range, utf16_column_to_byte};
 use super::{
-    dependent_ref_at, find_variable_declaration_line, frontmatter_end_line, line_range,
-    placeholder_at,
+    dependent_ref_at, find_variable_declaration_line, frontmatter_end_line, placeholder_at,
 };
 
 // ---------------------------------------------------------------------------
@@ -20,8 +20,8 @@ pub(super) fn compute_definition(
 ) -> Option<GotoDefinitionResponse> {
     let lines: Vec<&str> = content.lines().collect();
     let line_idx = pos.line as usize;
-    let char_idx = pos.character as usize;
     let current_line = lines.get(line_idx).copied()?;
+    let char_idx = utf16_column_to_byte(current_line, pos.character)?;
 
     // Cursor may be on either `<@name>` or `<#name>`. Prefer the inner
     // `<#name>` token because `placeholder_at` will match an enclosing
@@ -32,7 +32,8 @@ pub(super) fn compute_definition(
 
     // Prefer frontmatter declaration in the current file.
     if let Some(def_line) = find_variable_declaration_line(&lines, &name) {
-        let target_range = line_range(def_line as u32, 0, lines[def_line].len() as u32);
+        let target_range =
+            byte_span_to_range(def_line as u32, lines[def_line], 0, lines[def_line].len());
         return Some(GotoDefinitionResponse::Scalar(Location {
             uri: uri.clone(),
             range: target_range,
@@ -53,12 +54,12 @@ pub(super) fn compute_definition(
 fn find_config_variable_location(config_file: &Path, name: &str) -> Option<Location> {
     let content = std::fs::read_to_string(config_file).ok()?;
     let target = format!("[variables.{name}]");
-    let (line_idx, _) = content
+    let (line_idx, line) = content
         .lines()
         .enumerate()
         .find(|(_, line)| line.trim() == target)?;
     let uri = Url::from_file_path(config_file).ok()?;
-    let range = line_range(line_idx as u32, 0, target.len() as u32);
+    let range = byte_span_to_range(line_idx as u32, line, 0, target.len());
     Some(Location { uri, range })
 }
 
@@ -89,7 +90,7 @@ pub(super) fn compute_references(uri: &Url, content: &str, pos: Position) -> Opt
     } else {
         // Cursor might be on a `<#name>` ref or a `<@name>` placeholder.
         // Prefer the inner `<#name>` so nested refs inside `<@key:...>` work.
-        let char_idx = pos.character as usize;
+        let char_idx = utf16_column_to_byte(current_line, pos.character)?;
         var_name = dependent_ref_at(current_line, char_idx)
             .map(|(n, ..)| n)
             .or_else(|| placeholder_at(current_line, char_idx).map(|(n, ..)| n))?;
@@ -112,7 +113,7 @@ pub(super) fn compute_references(uri: &Url, content: &str, pos: Position) -> Opt
                 if matches!(next, Some('>') | Some(':')) {
                     locations.push(Location {
                         uri: uri.clone(),
-                        range: line_range(i as u32, abs_col as u32, end_col as u32),
+                        range: byte_span_to_range(i as u32, line, abs_col, end_col),
                     });
                 }
                 search_from = abs_col + 1;

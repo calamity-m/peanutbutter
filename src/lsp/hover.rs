@@ -4,7 +4,8 @@ use std::collections::BTreeMap;
 use tower_lsp::lsp_types::*;
 
 use super::completions::FRONTMATTER_KEYS;
-use super::{dependent_ref_at, frontmatter_end_line, line_range, placeholder_at};
+use super::position::{byte_span_to_range, utf16_column_to_byte};
+use super::{dependent_ref_at, frontmatter_end_line, placeholder_at};
 
 // ---------------------------------------------------------------------------
 // Hover
@@ -17,8 +18,8 @@ pub(super) fn compute_hover(
 ) -> Option<Hover> {
     let lines: Vec<&str> = content.lines().collect();
     let line_idx = pos.line as usize;
-    let char_idx = pos.character as usize;
     let current_line = lines.get(line_idx).copied()?;
+    let char_idx = utf16_column_to_byte(current_line, pos.character)?;
 
     let fm_end = frontmatter_end_line(&lines);
     let in_frontmatter = fm_end
@@ -82,7 +83,7 @@ fn hover_dependent_ref(
             kind: MarkupKind::Markdown,
             value: md,
         }),
-        range: Some(line_range(pos.line, start as u32, end as u32)),
+        range: Some(byte_span_to_range(pos.line, line, start, end)),
     })
 }
 
@@ -97,7 +98,7 @@ fn hover_frontmatter_key(line: &str, pos: Position) -> Option<Hover> {
             kind: MarkupKind::Markdown,
             value: format!("**`{key}`** — {doc}"),
         }),
-        range: Some(line_range(pos.line, 0, key.len() as u32)),
+        range: Some(byte_span_to_range(pos.line, line, 0, key.len())),
     })
 }
 
@@ -139,6 +140,6 @@ fn hover_variable_placeholder(
             kind: MarkupKind::Markdown,
             value: md,
         }),
-        range: Some(line_range(pos.line, start as u32, end as u32)),
+        range: Some(byte_span_to_range(pos.line, line, start, end)),
     })
 }

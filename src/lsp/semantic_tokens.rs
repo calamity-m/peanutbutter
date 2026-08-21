@@ -6,10 +6,12 @@
 //! relying on the surrounding code-fence grammar, which has no knowledge of the
 //! placeholder DSL.
 //!
-//! Columns follow the same byte-offset-as-character convention used elsewhere in
-//! the LSP module (snippet bodies are effectively ASCII).
+//! Placeholder scanning uses UTF-8 byte offsets internally; emitted columns and
+//! lengths are converted to the UTF-16 code units required by LSP.
 
 use tower_lsp::lsp_types::*;
+
+use super::position::byte_column_to_utf16;
 
 /// Token types reported to the client, in legend order. Indices into this slice
 /// are used as `token_type` values in the encoded stream.
@@ -41,7 +43,9 @@ struct RawToken {
 pub(super) fn compute_semantic_tokens(content: &str) -> Option<SemanticTokensResult> {
     let mut raw = Vec::new();
     for (line_idx, line) in content.lines().enumerate() {
+        let first_line_token = raw.len();
         tokenize_line(line_idx as u32, line, &mut raw);
+        convert_line_tokens_to_utf16(line, &mut raw[first_line_token..]);
     }
     Some(SemanticTokensResult::Tokens(SemanticTokens {
         result_id: None,
@@ -224,6 +228,18 @@ fn push(out: &mut Vec<RawToken>, line: u32, start: usize, len: u32, token_type: 
     });
 }
 
+/// Convert one scanned line's byte-based token spans to LSP UTF-16 units.
+fn convert_line_tokens_to_utf16(line: &str, tokens: &mut [RawToken]) {
+    for token in tokens {
+        let start_byte = token.start as usize;
+        let end_byte = start_byte + token.len as usize;
+        let start = byte_column_to_utf16(line, start_byte);
+        let end = byte_column_to_utf16(line, end_byte);
+        token.start = start;
+        token.len = end - start;
+    }
+}
+
 /// Delta-encode raw tokens into the LSP wire format. Tokens are sorted by
 /// position; each is encoded relative to the previous one.
 fn encode(mut raw: Vec<RawToken>) -> Vec<SemanticToken> {
@@ -348,5 +364,15 @@ mod tests {
         assert!(toks.contains(&(0, 0, 2, TOK_OPERATOR)));
         assert!(toks.contains(&(1, 0, 2, TOK_OPERATOR)));
         assert!(toks.contains(&(1, 2, 1, TOK_VARIABLE)));
+    }
+
+    #[test]
+    fn unicode_prefix_and_source_use_utf16_starts_and_lengths() {
+        let toks = absolute("é <@name:?😀>");
+
+        assert!(toks.contains(&(0, 2, 2, TOK_OPERATOR))); // `<@`
+        assert!(toks.contains(&(0, 4, 4, TOK_VARIABLE))); // `name`
+        assert!(toks.contains(&(0, 8, 4, TOK_STRING))); // `:?😀`
+        assert!(toks.contains(&(0, 12, 1, TOK_OPERATOR))); // `>`
     }
 }
