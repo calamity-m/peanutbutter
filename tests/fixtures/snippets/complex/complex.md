@@ -6,8 +6,6 @@ tags:
 variables:
   http_method:
     suggestions: [GET, POST, PUT, PATCH, DELETE]
-  database_url:
-    hint: postgres://user:pass@host:5432/db
 ---
 
 # Scripts

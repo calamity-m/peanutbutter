@@ -2,6 +2,7 @@
 
 mod commands;
 mod dependent_refs;
+mod deprecated;
 mod frontmatter;
 mod gc;
 mod output;
@@ -50,6 +51,8 @@ pub const CODE_RAW_DEFAULT_UNTRUSTED_UPSTREAM: &str = "lint/raw-default-untruste
 pub const CODE_DUPLICATE_INLINE_COMMAND: &str = "lint/duplicate-inline-command";
 /// `default_value` is combined with a mutually exclusive input source.
 pub const CODE_DEFAULT_VALUE_CONFLICT: &str = "lint/default-value-conflict";
+/// A snippet or reusable variable spec uses the deprecated hint source.
+pub const CODE_DEPRECATED_HINT: &str = "lint/deprecated-hint";
 
 /// Runtime options for [`run`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -166,11 +169,16 @@ pub fn run<W: Write>(
         &config.variables,
         &config.paths.config_file,
     ));
+    findings.extend(deprecated::lint_config_hints(
+        &config.variables,
+        &config.paths.config_file,
+    ));
     for file in &files {
         findings.extend(frontmatter::lint_default_value_conflicts(
             file,
             &config.variables,
         ));
+        findings.extend(deprecated::lint_file_hints(file));
         findings.extend(frontmatter::lint_frontmatter_source(
             &file.path,
             &file.content,
@@ -234,6 +242,9 @@ pub fn lint_file(path: &Path, root: &Path, content: &str, config: &AppConfig) ->
         &ctx,
         &config.variables,
     ));
+    findings.extend(deprecated::lint_file_hints(&ctx));
+    // Config hint deprecations are emitted only by `run`: the LSP cannot place
+    // a config-file finding accurately inside the open Markdown document.
     findings.extend(frontmatter::lint_config_default_value_conflicts(
         &config.variables,
         &config.paths.config_file,
@@ -485,6 +496,123 @@ mod tests {
                 .filter(|finding| finding.code == CODE_DEFAULT_VALUE_CONFLICT)
                 .count(),
             3
+        );
+    }
+
+    #[test]
+    fn deprecated_hints_are_reported_for_inline_frontmatter_and_config() {
+        let root = temp_dir("deprecated-hints");
+        let snippet_path = root.join("snippets.md");
+        fs::write(
+            &snippet_path,
+            "---\nvariables:\n  local:\n    hint: guidance\n---\n\n## Demo\n\n```bash\necho <@local> <@inline:@guidance> <@global>\n```\n",
+        )
+        .unwrap();
+        let mut cfg = config(root);
+        let config_path = cfg.paths.config_file.clone();
+        cfg.variables.insert(
+            "global".to_string(),
+            crate::domain::VariableSpec {
+                hint: Some("guidance".to_string()),
+                ..Default::default()
+            },
+        );
+
+        let result = run(
+            &cfg,
+            LintOptions {
+                strict: false,
+                json: false,
+            },
+            &mut Vec::new(),
+        )
+        .unwrap();
+        let deprecated: Vec<_> = result
+            .findings
+            .iter()
+            .filter(|finding| finding.code == CODE_DEPRECATED_HINT)
+            .collect();
+
+        assert_eq!(deprecated.len(), 3, "got {:?}", result.findings);
+        let frontmatter = deprecated
+            .iter()
+            .find(|finding| finding.message.starts_with("frontmatter"))
+            .unwrap();
+        assert_eq!(frontmatter.path, snippet_path);
+        assert_eq!(frontmatter.line, Some(4));
+        let inline = deprecated
+            .iter()
+            .find(|finding| finding.message.starts_with("inline"))
+            .unwrap();
+        assert_eq!(inline.path, snippet_path);
+        assert_eq!(inline.line, Some(10));
+        assert_eq!((inline.col_start, inline.col_end), (Some(14), Some(33)));
+        assert!(inline.snippet_id.is_some());
+        let config = deprecated
+            .iter()
+            .find(|finding| finding.message.starts_with("config"))
+            .unwrap();
+        assert_eq!(config.path, config_path);
+        assert_eq!(config.line, None);
+        assert!(
+            deprecated
+                .iter()
+                .all(|finding| finding.severity == LintSeverity::Warning)
+        );
+        assert!(
+            deprecated
+                .iter()
+                .all(|finding| finding.detail.as_deref().is_some_and(|detail| {
+                    detail.contains("default_value") && detail.contains("free-form")
+                }))
+        );
+
+        cfg.lint.insert(
+            "deprecated-hint".to_string(),
+            LintRuleConfig {
+                disable: true,
+                ..Default::default()
+            },
+        );
+        let suppressed = run(
+            &cfg,
+            LintOptions {
+                strict: false,
+                json: false,
+            },
+            &mut Vec::new(),
+        )
+        .unwrap();
+        assert!(
+            suppressed
+                .findings
+                .iter()
+                .all(|finding| finding.code != CODE_DEPRECATED_HINT)
+        );
+    }
+
+    #[test]
+    fn lint_file_reports_hints_without_flagging_supported_sources() {
+        let root = temp_dir("deprecated-hints-lsp");
+        let path = root.join("snippets.md");
+        let cfg = config(root.clone());
+        let deprecated = "---\nvariables:\n  local:\n    hint: guidance\n---\n## Demo\n\n```bash\necho <@local> <@inline:@guidance>\n```\n";
+        let findings = lint_file(&path, &root, deprecated, &cfg);
+        assert_eq!(
+            findings
+                .iter()
+                .filter(|finding| finding.code == CODE_DEPRECATED_HINT)
+                .count(),
+            2
+        );
+
+        let supported = "---\nvariables:\n  ghost:\n    default_value: value\n---\n## Demo\n\n```bash\necho <@free> <@ghost> <@default:?value> <@command:git branch --show-current>\n```\n";
+        let findings = lint_file(&path, &root, supported, &cfg);
+        assert!(
+            findings
+                .iter()
+                .all(|finding| finding.code != CODE_DEPRECATED_HINT),
+            "got {findings:?}"
         );
     }
 

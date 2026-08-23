@@ -73,7 +73,7 @@ fn hover_dependent_ref(
             md.push_str(&format!("- **command**: `{cmd}`\n"));
         }
         if let Some(hint) = &spec.hint {
-            md.push_str(&format!("- **hint**: `{hint}`\n"));
+            md.push_str(&format!("- **hint** (deprecated): `{hint}`\n"));
         }
     } else {
         md.push_str("_no variable spec; declared inline_\n");
@@ -133,7 +133,7 @@ fn hover_variable_placeholder(
         md.push_str(&format!("- **command**: `{cmd}`\n"));
     }
     if let Some(hint) = &spec.hint {
-        md.push_str(&format!("- **hint**: `{hint}`\n"));
+        md.push_str(&format!("- **hint** (deprecated): `{hint}`\n"));
     }
     Some(Hover {
         contents: HoverContents::Markup(MarkupContent {

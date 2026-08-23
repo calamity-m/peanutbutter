@@ -56,8 +56,8 @@ pub struct VariableSpec {
     pub suggestions: Vec<String>,
     /// Shell command whose stdout lines are used as suggestions.
     pub command: Option<String>,
-    /// Ghost text shown while the prompt input is empty. Unlike `default`, a
-    /// hint is display-only guidance and never becomes the variable's value.
+    /// Deprecated display-only ghost text retained for snippet compatibility.
+    /// Use [`Self::default_value`] for an accepted ghost value.
     pub hint: Option<String>,
 }
 
@@ -72,8 +72,8 @@ pub enum VariableSource {
     /// Accepted ghost default (`<@name:?default>`); Tab materializes it and
     /// typing overrides it.
     Default(CommandTemplate),
-    /// Display-only ghost text (`<@name:@hint>`) shown while the input is
-    /// empty; accepting without typing yields an empty value, never the hint.
+    /// Deprecated display-only ghost text (`<@name:@hint>`) retained for
+    /// compatibility; accepting without typing yields an empty value.
     Hint(String),
 }
 

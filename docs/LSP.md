@@ -13,13 +13,17 @@ silently ignored, because the server cannot honour them.
 | Feature | Trigger |
 |---|---|
 | Diagnostics | Inline squiggles on open/save — lint findings from `pb lint` |
-| Completions | Frontmatter keys (`name`, `description`, `tags`, `variables`); variable spec sub-keys (`default`, `default_value`, `suggestions`, `command`, `hint`); `<@variable>` placeholders in code blocks |
+| Completions | Frontmatter keys (`name`, `description`, `tags`, `variables`); variable spec sub-keys (`default`, `default_value`, `suggestions`, `command`); `<@variable>` placeholders in code blocks |
 | Hover | `<@name>` shows the resolved variable spec; frontmatter keys show brief docs |
 | Go-to-definition | `<@name>` in a code block → `variables.name:` in frontmatter |
 | Find references | Frontmatter variable declaration → every `<@name>` in the file |
 | Code actions | `Add Peanutbutter frontmatter` for files with no frontmatter; extract inline sourced placeholders to frontmatter or inline simple frontmatter variables |
 
 Inline `:?` extraction writes `default_value` (the accepted ghost value), while `default` remains an editable pre-fill and is never inlined as `:?`.
+
+Deprecated `hint` specs and inline `:@` hints remain recognized. Existing
+specs are marked deprecated in hover information, diagnostics recommend
+migration, and completions/code actions no longer generate hints.
 
 The `Add Peanutbutter frontmatter` code action inserts a starter block with
 `name`, `description`, `tags`, and an empty `variables:` block at the top of the

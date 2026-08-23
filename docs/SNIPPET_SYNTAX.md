@@ -59,8 +59,9 @@ Each variable spec may include:
 - `default_value` — muted ghost value accepted by Enter or materialized by Tab.
 - `suggestions` — fixed suggestion values.
 - `command` — shell command whose stdout lines become suggestions.
-- `hint` — ghost text shown while the prompt input is empty; display-only,
-  never part of the value.
+- `hint` — **deprecated** display-only ghost text retained for compatibility.
+  Use `default_value` for an accepted ghost value or omit the field for
+  free-form input.
 
 These specs apply only to snippets in the same markdown file. They do not
 apply to other files. The peanutbutter LSP can refactor between inline
@@ -189,7 +190,7 @@ The source variants at a glance:
 | Form                | Meaning            | Behavior when accepted without typing        |
 | ------------------- | ------------------ | -------------------------------------------- |
 | `<@name>`           | free-form input    | empty value                                  |
-| `<@name:@hint>`     | ghost hint         | empty value; hint is display-only            |
+| `<@name:@hint>`     | deprecated ghost hint | empty value; hint is display-only         |
 | `<@name:?default>`  | accepted ghost default | the default becomes the value             |
 | `<@name:command>`   | suggestion command | selected suggestion (or empty with none)     |
 
@@ -213,17 +214,33 @@ Example:
 echo <@input>
 ```
 
-### Hint
+### Hint (Deprecated)
 
 ```text
 <@name:@hint>
 ```
 
-Shows `hint` as ghost text in the prompt while the input is empty. The hint is
-guidance only: as soon as the user types, the typed input replaces it, and
-clearing the input back to empty shows it again. Accepting the prompt without
-typing substitutes an **empty** value — the hint never reaches the rendered
-command.
+Hint syntax and reusable `hint` specs are deprecated. Existing hints continue
+to work during the compatibility period, but `pb lint` reports
+`lint/deprecated-hint` and the LSP no longer completes or generates them. Use
+`<@name:?value>` or `default_value` when Enter should accept the displayed
+value; otherwise use a plain `<@name>` placeholder.
+
+During migration, the warning can be disabled globally; snippet-file warnings
+can instead be limited with an `ignore_file` pattern using the normal lint
+configuration:
+
+```toml
+[lint.deprecated-hint]
+disable = true
+# ignore_file = ["legacy/**"]
+```
+
+A retained hint shows `hint` as ghost text in the prompt while the input is
+empty. The hint is guidance only: as soon as the user types, the typed input
+replaces it, and clearing the input back to empty shows it again. Accepting the
+prompt without typing substitutes an **empty** value — the hint never reaches
+the rendered command.
 
 Example:
 
@@ -235,11 +252,12 @@ Accepting `input` without typing renders `echo " world"`. Compare with the
 default form below, where accepting `<@input:?hello>` renders
 `echo "hello world"`.
 
-Hints can also come from a reusable spec (`variables.<name>.hint` in
-frontmatter or `[variables.<name>] hint = "..."` in config) for free-form
-placeholders. An inline hint takes precedence over reusable specs. `hint` is
-independent from `default`: if both are configured, the default pre-fills the
-editable buffer and the hint only becomes visible if the user clears it. Hints
+For compatibility, retained hints can also come from a reusable spec
+(`variables.<name>.hint` in frontmatter or `[variables.<name>] hint = "..."` in
+config) for free-form placeholders. An inline hint takes precedence over
+reusable specs. `hint` is independent from `default`: if both are configured,
+the default pre-fills the editable buffer and the hint only becomes visible if
+the user clears it. Hints
 are not suggestions and never appear as selectable suggestion rows.
 
 ### Default Value
@@ -318,20 +336,20 @@ free-form placeholders in the same file. `default_value` has the same accepted-
 ghost behavior and dependent-reference grammar as inline `:?`.
 
 A `default_value` is mutually exclusive with `default`, `suggestions`,
-`command`, and `hint`; it is also invalid for the built-in `file` and
-`directory` names. `pb lint` reports these invalid combinations.
+`command`, and the deprecated `hint`; it is also invalid for the built-in
+`file` and `directory` names. `pb lint` reports these invalid combinations.
 
 Resolution order is:
 
-1. Inline placeholder source (`<@target:?world>`, `<@target:@hint>`, or
-   `<@target:command>`).
+1. Inline placeholder source (`<@target:?world>`, deprecated
+   `<@target:@hint>`, or `<@target:command>`).
 2. File-local frontmatter spec for that variable.
 3. Config-defined variable spec.
 4. Built-in suggestions for `file` and `directory`.
 
-An inline hint only supplies the ghost text; suggestions and defaults for that
-placeholder still resolve through the frontmatter/config/built-in chain as if
-it were free-form.
+For compatibility, a deprecated inline hint only supplies ghost text;
+suggestions and defaults for that placeholder still resolve through the
+frontmatter/config/built-in chain as if it were free-form.
 
 File-local specs overlay config-defined specs by field. For example, if
 frontmatter defines only `default` and config defines `suggestions`, the prompt

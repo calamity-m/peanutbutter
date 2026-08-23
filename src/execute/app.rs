@@ -232,9 +232,9 @@ pub trait SuggestionProvider {
     ) -> Option<String> {
         None
     }
-    /// Return the ghost text to show while the input buffer is empty, if any,
+    /// Return a deprecated display-only hint retained for compatibility,
     /// resolving inline `<@name:@hint>` first, then file-local and config
-    /// variable specs. Hints are display-only and never become the value.
+    /// variable specs. Hints never become the value.
     fn hint(
         &self,
         variable: &Variable,

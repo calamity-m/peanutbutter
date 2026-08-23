@@ -41,8 +41,7 @@ pub(crate) struct PromptState {
     /// Semantic default shown as muted ghost text while input is empty. Enter
     /// accepts it and Tab materializes it, unlike a display-only hint.
     pub(crate) ghost_default: Option<String>,
-    /// Ghost text for the current variable, shown in the preview while the
-    /// input buffer is empty. Display-only: never stored as the value.
+    /// Deprecated display-only hint retained for runtime compatibility.
     pub(crate) hint: Option<String>,
     /// Non-fatal error from the last suggestion provider call, shown in the UI.
     pub(crate) error: Option<String>,

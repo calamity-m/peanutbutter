@@ -1082,6 +1082,34 @@ mod dependent_lsp_tests {
     }
 
     #[test]
+    fn frontmatter_completion_does_not_offer_deprecated_hint() {
+        let content = "---\nvariables:\n  input:\n    h\n---\n## D\n\n```bash\na\n```\n";
+        let response =
+            compute_completions(content, pos(3, 5), &empty_config_vars()).expect("completions");
+        let CompletionResponse::Array(items) = response else {
+            panic!("expected array");
+        };
+
+        assert!(!items.iter().any(|item| item.label == "hint"), "{items:?}");
+    }
+
+    #[test]
+    fn hover_marks_existing_hint_specs_as_deprecated() {
+        let content =
+            "---\nvariables:\n  input:\n    hint: guidance\n---\n## D\n\n```bash\n<@input>\n```\n";
+        let hover = compute_hover(content, pos(8, 3), &empty_config_vars()).unwrap();
+        let HoverContents::Markup(markup) = hover.contents else {
+            panic!("expected markup");
+        };
+
+        assert!(
+            markup.value.contains("hint** (deprecated)"),
+            "{}",
+            markup.value
+        );
+    }
+
+    #[test]
     fn frontmatter_completion_ignores_the_request_column() {
         // Frontmatter key completion is line-based, so it must not depend on a
         // convertible column. On `name: \u{1f600}` the emoji spans UTF-16

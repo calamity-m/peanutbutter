@@ -68,8 +68,8 @@ fn parse_variable_inner(inner: &str) -> Option<Variable> {
                     });
                 VariableSource::Default(template)
             } else if let Some(hint) = rest.strip_prefix('@') {
-                // Checked before the command fallback so `<@name:@hint>` is a
-                // hint, not a suggestion command named `@hint`.
+                // Deprecated hints must remain reserved during the compatibility
+                // period rather than falling through to executable commands.
                 VariableSource::Hint(hint.to_string())
             } else {
                 VariableSource::Command(rest.to_string())

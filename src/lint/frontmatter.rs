@@ -67,7 +67,7 @@ fn spec_default_value_conflicts(
             let conflict = if spec.default_value.is_some() && matches!(name.as_str(), "file" | "directory") {
                 Some(format!("{layer} default_value for builtin variable '{name}' conflicts with its built-in suggestions"))
             } else if spec.default_value.is_some() && has_composable_source(spec) {
-                Some(format!("{layer} variable '{name}' combines default_value with default, suggestions, command, or hint"))
+                Some(format!("{layer} variable '{name}' combines default_value with default, suggestions, command, or deprecated hint"))
             } else {
                 None
             };
@@ -264,7 +264,7 @@ fn referenced_variables(file: &FileContext) -> HashSet<String> {
         .collect()
 }
 
-fn frontmatter_variable_lines(content: &str) -> HashMap<String, usize> {
+pub(super) fn frontmatter_variable_lines(content: &str) -> HashMap<String, usize> {
     let lines: Vec<&str> = content.lines().collect();
     if lines.first().map(|line| line.trim()) != Some("---") {
         return HashMap::new();

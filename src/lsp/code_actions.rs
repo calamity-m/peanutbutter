@@ -17,7 +17,6 @@ const FRONTMATTER_SCAFFOLD: &str =
 enum InlineSourceKind {
     Default,
     Command,
-    Hint,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -195,16 +194,13 @@ fn inline_code_action(
         return None;
     }
     // Inlining removes the whole spec, so only offer it when the spec is a
-    // single source that has an inline equivalent.
-    let (kind, value) = match (
-        &spec.default_value,
-        &spec.command,
-        &spec.hint,
-        &spec.default,
-    ) {
-        (Some(default), None, None, None) => (InlineSourceKind::Default, default.as_str()),
-        (None, Some(command), None, None) => (InlineSourceKind::Command, command.as_str()),
-        (None, None, Some(hint), None) => (InlineSourceKind::Hint, hint.as_str()),
+    // single non-deprecated source that has an inline equivalent.
+    if spec.hint.is_some() {
+        return None;
+    }
+    let (kind, value) = match (&spec.default_value, &spec.command, &spec.default) {
+        (Some(default), None, None) => (InlineSourceKind::Default, default.as_str()),
+        (None, Some(command), None) => (InlineSourceKind::Command, command.as_str()),
         _ => return None,
     };
     let target = first_placeholder(content, &name)?;
@@ -214,7 +210,6 @@ fn inline_code_action(
     let inline_text = match kind {
         InlineSourceKind::Default => format!("<@{}:?{}>", name, value),
         InlineSourceKind::Command => format!("<@{}:{}>", name, value),
-        InlineSourceKind::Hint => format!("<@{}:@{}>", name, value),
     };
     let mut title = format!("Inline frontmatter variable `{name}`");
     let usages = placeholder_usage_count(content, &name);
@@ -265,8 +260,11 @@ fn inline_placeholder_at(content: &str, pos: Position) -> Option<InlinePlacehold
                 }
                 let (kind, value) = if let Some(default) = rest.strip_prefix('?') {
                     (InlineSourceKind::Default, default)
-                } else if let Some(hint) = rest.strip_prefix('@') {
-                    (InlineSourceKind::Hint, hint)
+                } else if rest.starts_with('@') {
+                    // Deprecated hints remain recognized by the parser, but
+                    // authoring code actions must not generate equivalent specs.
+                    i = end;
+                    continue;
                 } else {
                     (InlineSourceKind::Command, rest)
                 };
@@ -309,8 +307,11 @@ fn matching_inline_placeholders(
                     let name = name.trim();
                     let (kind, value) = if let Some(default) = rest.strip_prefix('?') {
                         (InlineSourceKind::Default, default)
-                    } else if let Some(hint) = rest.strip_prefix('@') {
-                        (InlineSourceKind::Hint, hint)
+                    } else if rest.starts_with('@') {
+                        // Keep deprecated hints reserved rather than treating
+                        // their display text as an executable command source.
+                        i = end;
+                        continue;
                     } else {
                         (InlineSourceKind::Command, rest)
                     };
@@ -385,9 +386,6 @@ fn spec_matches_inline(spec: &VariableSpec, inline: &InlinePlaceholder) -> bool 
         InlineSourceKind::Command => {
             spec.command.as_deref() == Some(inline.value.as_str()) && spec.default.is_none()
         }
-        // A hint is orthogonal to default/command, so only the hint field
-        // decides whether the spec already covers the inline source.
-        InlineSourceKind::Hint => spec.hint.as_deref() == Some(inline.value.as_str()),
     }
 }
 
@@ -490,8 +488,9 @@ fn variable_spec_text_preserving(
         InlineSourceKind::Default => {
             &["default_value", "default", "command", "hint", "suggestions"]
         }
+        // Retained hints can compose with commands, so extraction must not
+        // silently discard their compatibility behavior.
         InlineSourceKind::Command => &["default", "command"],
-        InlineSourceKind::Hint => &["hint"],
     };
     let mut out = format!(
         "{}\n    {}: {}\n",
@@ -531,7 +530,6 @@ fn inline_source_key(kind: InlineSourceKind) -> &'static str {
     match kind {
         InlineSourceKind::Default => "default_value",
         InlineSourceKind::Command => "command",
-        InlineSourceKind::Hint => "hint",
     }
 }
 
@@ -885,18 +883,41 @@ mod code_action_tests {
     }
 
     #[test]
-    fn extract_hint_to_frontmatter_and_inline_round_trip() {
-        let body = "## D\n\n```bash\necho <@input:@hello>\n```\n";
-        let extracted = compute_code_actions(&uri(), body, range(3, 8), &BTreeMap::new()).unwrap();
-        let with_frontmatter = apply_edits(body, edits(&extracted[0]));
-        assert!(with_frontmatter.starts_with("---\nvariables:\n  input:\n    hint: hello\n---\n"));
-        assert!(with_frontmatter.contains("echo <@input>"));
+    fn deprecated_hints_do_not_offer_refactor_actions() {
+        let inline = "## D\n\n```bash\necho <@input:@hello>\n```\n";
+        assert!(
+            compute_code_actions_filtered(
+                &uri(),
+                inline,
+                range(3, 8),
+                &BTreeMap::new(),
+                Some(&[CodeActionKind::REFACTOR]),
+            )
+            .is_none()
+        );
 
-        let inlined =
-            compute_code_actions(&uri(), &with_frontmatter, range(2, 3), &BTreeMap::new()).unwrap();
-        let round_tripped = apply_edits(&with_frontmatter, edits(&inlined[0]));
-        let body_after = round_tripped.split("---\n").last().unwrap();
-        assert_eq!(body_after, body);
+        let adjacent = "## D\n\n```bash\n<@old:@h><@next:?value>\n```\n";
+        let actions = compute_code_actions_filtered(
+            &uri(),
+            adjacent,
+            range(3, 9),
+            &BTreeMap::new(),
+            Some(&[CodeActionKind::REFACTOR]),
+        )
+        .unwrap();
+        assert!(action_title(&actions[0]).contains("`<@next>`"));
+
+        let frontmatter = "---\nvariables:\n  input:\n    hint: hello\n---\n## D\n\n```bash\necho <@input>\n```\n";
+        assert!(
+            compute_code_actions_filtered(
+                &uri(),
+                frontmatter,
+                range(2, 3),
+                &BTreeMap::new(),
+                Some(&[CodeActionKind::REFACTOR]),
+            )
+            .is_none()
+        );
     }
 
     #[test]
