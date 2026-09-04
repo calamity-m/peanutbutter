@@ -63,7 +63,7 @@ fn run_docs(topic: Option<peanutbutter::docs::Topic>) -> i32 {
 fn main() {
     // Load config up front but don't abort yet. Help/version output, the bare
     // `pb` help screen, and `docs` must all work even when the config is
-    // unparseable — that is exactly when someone needs `pb --help` or
+    // unparsable — that is exactly when someone needs `pb --help` or
     // `pb docs config` to recover. The config error is surfaced later, and only
     // for commands that actually need config.
     let raw_theme = raw_theme_arg();
