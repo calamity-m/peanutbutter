@@ -535,7 +535,7 @@ mod tests {
     }
 
     #[test]
-    fn cross_field_scores_accumulate_all_weighted_fields_and_beat_name_only() {
+    fn cross_field_scores_choose_best_weighted_field_for_each_atom() {
         let mut file = make_tagged_file(
             "eza.md",
             "kitchen",
@@ -565,12 +565,6 @@ mod tests {
         let mut scorer = FuzzyScorer::new();
         let mut expected = 0;
         for (query, text, weight) in [
-            ("kitchen", "kitchen", config.fuzzy.name),
-            ("eza", "eza", config.fuzzy.command),
-            ("kitchen", "kitchen", config.fuzzy.description),
-            ("eza", "eza.md", config.fuzzy.path),
-            ("eza", "eza", config.fuzzy.frontmatter_name),
-            ("kitchen", "kitchen", config.fuzzy.description),
             ("kitchen", "kitchen", config.fuzzy.tag),
             ("eza", "eza", config.fuzzy.tag),
         ] {
@@ -583,16 +577,209 @@ mod tests {
         assert_eq!(hits[0].combined, f64::from(expected));
         assert_eq!(hits[1].snippet.id().as_str(), "other.md#name-only");
         assert!(hits[0].fuzzy > hits[1].fuzzy);
+    }
 
-        // A single positive atom must retain the legacy all-field score.
-        for query in ["kitchen", "eza"] {
-            let pattern = build_pattern(query);
-            for hit in rank_with_config(&index, query, &config) {
+    #[test]
+    fn cross_field_default_weights_favor_exact_names_over_scattered_matches() {
+        let compose = make_tagged_file(
+            "docker/compose.md",
+            "compose up",
+            "docker compose up -d && docker ps",
+            "compose-up",
+            &["docker"],
+        );
+        let mut described_compose = compose.clone();
+        described_compose.frontmatter.description = Some("docker ps".into());
+        let mut history = make_tagged_file(
+            "git/history.md",
+            "inspect history",
+            "git status && git log --oneline",
+            "history",
+            &["git", "log"],
+        );
+        history.frontmatter.name = Some("git tools".into());
+        history.frontmatter.description = Some("git log".into());
+        history.snippets[0].description = "Inspect git log history".into();
+        let mut kitchen = make_tagged_file(
+            "files/eza.md",
+            "kitchen sink",
+            "eza --long",
+            "kitchen",
+            &["eza"],
+        );
+        kitchen.snippets[0].description = "kitchen utilities".into();
+        let config = SearchConfig {
+            cross_field_matching: true,
+            ..SearchConfig::default()
+        };
+        for (query, body, other, exact_score, other_score) in [
+            ("docker ps", "docker ps -a", described_compose, 6840, 4190),
+            ("docker ps", "docker ps -a", compose, 6840, 4190),
+            ("git log", "git log --oneline", history, 5280, 3520),
+            ("kitchen eza", "echo ready", kitchen, 8400, 7520),
+        ] {
+            let index =
+                SnippetIndex::from_files([other, make_file("plain.md", query, body, "exact")]);
+            for equal_history in [false, true] {
+                let mut store = FrecencyStore::new();
+                if equal_history {
+                    for entry in index.iter() {
+                        store.record(entry.id().clone(), PathBuf::from("/tmp"), 1000);
+                    }
+                }
+                let hits = rank(&index, query, &store, Path::new("/tmp"), 1000, &config);
+                assert_eq!(hits.len(), 2, "{query}");
+                assert_eq!(hits[0].snippet.id().as_str(), "plain.md#exact", "{query}");
+                assert_eq!(hits[0].fuzzy, Some(exact_score), "{query}");
+                assert_eq!(hits[1].fuzzy, Some(other_score), "{query}");
+                assert_eq!(hits[0].frecency, hits[1].frecency);
+                assert!(hits[0].combined > hits[1].combined, "{query}");
+            }
+        }
+    }
+
+    #[test]
+    fn cross_field_single_atom_uses_best_field_while_legacy_still_accumulates() {
+        let index =
+            SnippetIndex::from_files([make_file("plain.md", "docker ps", "docker ps -a", "exact")]);
+        let mut config = SearchConfig::default();
+        let legacy = rank_with_config(&index, "docker", &config);
+        assert_eq!(legacy[0].fuzzy, Some(6308));
+        config.cross_field_matching = true;
+        let hits = rank_with_config(&index, "docker", &config);
+        assert_eq!(hits[0].fuzzy, Some(4980));
+    }
+
+    #[test]
+    fn cross_field_frecency_can_override_fuzzy_ranking_but_not_exclusions() {
+        let index = SnippetIndex::from_files([
+            make_file("plain.md", "docker ps", "docker ps -a", "exact"),
+            make_tagged_file(
+                "docker/compose.md",
+                "compose up",
+                "docker compose up -d && docker ps",
+                "compose-up",
+                &["docker"],
+            ),
+        ]);
+        let config = SearchConfig {
+            cross_field_matching: true,
+            ..SearchConfig::default()
+        };
+        let mut store = FrecencyStore::new();
+        // One recent use should not erase this fuzzy gap; repeated use should.
+        for uses in 1..=6 {
+            store.record(
+                SnippetId::new("docker/compose.md", "compose-up"),
+                PathBuf::from("/tmp"),
+                1000,
+            );
+            if uses == 1 || uses == 6 {
+                let hits = rank(
+                    &index,
+                    "docker ps",
+                    &store,
+                    Path::new("/tmp"),
+                    1000,
+                    &config,
+                );
                 assert_eq!(
-                    hit.fuzzy,
-                    score_snippet(&mut scorer, &pattern, false, hit.snippet, &config.fuzzy)
+                    hits[0].snippet.name(),
+                    if uses == 1 { "docker ps" } else { "compose up" }
+                );
+                for hit in hits {
+                    assert_eq!(
+                        hit.combined,
+                        f64::from(hit.fuzzy.unwrap()) + hit.frecency * config.frecency_weight
+                    );
+                }
+            }
+        }
+        let stale_now = 1000 + (10.0 * config.frecency.half_life_days * 86400.0) as u64;
+        let stale = rank(
+            &index,
+            "docker ps",
+            &store,
+            Path::new("/tmp"),
+            stale_now,
+            &config,
+        );
+        assert_eq!(stale[0].snippet.name(), "docker ps");
+        let excluded = rank(
+            &index,
+            "docker ps !compose",
+            &store,
+            Path::new("/tmp"),
+            1000,
+            &config,
+        );
+        assert_eq!(excluded.len(), 1);
+        assert_eq!(excluded[0].snippet.name(), "docker ps");
+        let config = SearchConfig {
+            frecency_weight: 0.0,
+            ..config
+        };
+        let fuzzy_only = rank(
+            &index,
+            "docker ps",
+            &store,
+            Path::new("/tmp"),
+            1000,
+            &config,
+        );
+        assert_eq!(fuzzy_only[0].snippet.name(), "docker ps");
+    }
+
+    #[test]
+    fn cross_field_near_tie_can_be_overridden_by_recent_or_old_frequent_use() {
+        let mut kitchen = make_tagged_file(
+            "files/eza.md",
+            "kitchen sink",
+            "eza --long",
+            "kitchen",
+            &["eza"],
+        );
+        kitchen.snippets[0].description = "kitchen utilities".into();
+        let index = SnippetIndex::from_files([
+            make_file("plain.md", "kitchen eza", "echo ready", "exact"),
+            kitchen,
+        ]);
+        let config = SearchConfig {
+            cross_field_matching: true,
+            ..SearchConfig::default()
+        };
+        // A close fuzzy result needs less history to win. The frequency bonus
+        // does not decay, so enough old usage can still outweigh an exact name.
+        for (uses, age_half_lives, expected_name) in [
+            (0, 0, "kitchen eza"),
+            (1, 0, "kitchen eza"),
+            (2, 0, "kitchen sink"),
+            (2, 100, "kitchen eza"),
+            (33, 100, "kitchen sink"),
+        ] {
+            let mut store = FrecencyStore::new();
+            for _ in 0..uses {
+                store.record(
+                    SnippetId::new("files/eza.md", "kitchen"),
+                    PathBuf::from("/tmp"),
+                    1000,
                 );
             }
+            let now = 1000
+                + (f64::from(age_half_lives) * config.frecency.half_life_days * 86400.0) as u64;
+            let hits = rank(
+                &index,
+                "kitchen eza",
+                &store,
+                Path::new("/tmp"),
+                now,
+                &config,
+            );
+            assert_eq!(
+                hits[0].snippet.name(),
+                expected_name,
+                "uses={uses}, age_half_lives={age_half_lives}"
+            );
         }
     }
 

@@ -88,8 +88,12 @@ pub fn score_snippet(
     if matched { Some(total) } else { None }
 }
 
-/// Score positive atoms across all fields; negative atoms must pass every field.
+/// Sum each positive atom's best weighted field score; negatives must pass every field.
 ///
+/// Taking the maximum after weighting prevents repeated metadata from stacking
+/// weaker matches above stronger name matches. Default weights favor names, but
+/// custom weights and the separately added frecency score can change ordering.
+/// Unlike legacy accumulation, even single-atom scores can be lower.
 /// Matching is independent of weight, so zero-weight fields still admit positive
 /// terms and reject excluded terms. Negative-only patterns contribute zero.
 pub fn score_snippet_cross_field(
@@ -101,6 +105,7 @@ pub fn score_snippet_cross_field(
     let mut total = 0_u32;
     for atom in &pattern.atoms {
         let mut matched = false;
+        let mut best = 0;
         let mut excluded = false;
         visit_fields(entry, weights, |text, weight| {
             let raw = scorer.score_atom(atom, text);
@@ -109,12 +114,13 @@ pub fn score_snippet_cross_field(
                 excluded |= raw.is_none();
             } else if let Some(raw) = raw {
                 matched = true;
-                total = total.saturating_add(raw.saturating_mul(weight));
+                best = best.max(raw.saturating_mul(weight));
             }
         });
         if excluded || (!atom.negative && !matched) {
             return None;
         }
+        total = total.saturating_add(best);
     }
     Some(total)
 }
@@ -354,7 +360,7 @@ mod tests {
     }
 
     #[test]
-    fn cross_field_sums_every_field_and_preserves_single_atom_scores() {
+    fn cross_field_uses_best_weighted_field_per_atom() {
         let mut e = entry("needle", "needle", &["needle", "needle"], "needle");
         e.snippet.description = "needle".into();
         e.frontmatter.name = Some("needle".into());
@@ -370,15 +376,61 @@ mod tests {
                 + weights.frontmatter_name
                 + weights.path
                 + 2 * weights.tag);
-        assert_eq!(cross_score("needle", &e, &weights), Some(expected));
+        // Legacy scoring still accumulates every field, even for one atom.
         assert_eq!(
             score_snippet(&mut scorer, &pattern, false, &e, &weights),
             Some(expected)
         );
         assert_eq!(
-            cross_score("needle needle", &e, &weights),
-            Some(2 * expected)
+            cross_score("needle", &e, &weights),
+            Some(raw * weights.name)
         );
+        assert_eq!(
+            cross_score("needle needle", &e, &weights),
+            Some(2 * raw * weights.name)
+        );
+        let weights = FuzzyWeights {
+            command: 100,
+            ..weights
+        };
+        assert_eq!(
+            cross_score("needle", &e, &weights),
+            Some(raw * weights.command)
+        );
+    }
+
+    #[test]
+    fn cross_field_compares_scores_after_weighting() {
+        let weights = FuzzyWeights::default();
+        let mut scorer = FuzzyScorer::new();
+        let pattern = build_pattern("docker");
+        let tag_raw = scorer.score(&pattern, "docker").unwrap();
+        for (name, name_wins) in [("dxxoxxcxxkxxexxr", false), ("d___o___c___k___e___r", true)] {
+            let e = entry(name, "echo", &["docker"], "plain.md");
+            let name_raw = scorer.score(&pattern, name).unwrap();
+            assert!(name_raw < tag_raw);
+            let name_score = name_raw * weights.name;
+            let tag_score = tag_raw * weights.tag;
+            assert_eq!(name_score > tag_score, name_wins);
+            assert_eq!(
+                cross_score("docker", &e, &weights),
+                Some(if name_wins { name_score } else { tag_score })
+            );
+        }
+    }
+
+    #[test]
+    fn cross_field_duplicate_tags_do_not_inflate_scores() {
+        let mut e = entry(
+            "compose up",
+            "docker compose up -d && docker ps",
+            &["docker"],
+            "docker/compose.md",
+        );
+        let weights = FuzzyWeights::default();
+        let before = cross_score("docker ps", &e, &weights).unwrap();
+        e.frontmatter.tags.extend(vec!["docker".to_string(); 100]);
+        assert_eq!(cross_score("docker ps", &e, &weights), Some(before));
     }
 
     #[test]
@@ -406,11 +458,17 @@ mod tests {
             ..FuzzyWeights::default()
         };
         assert_eq!(cross_score("needle needle", &e, &weights), Some(u32::MAX));
+        // Each weighted atom fits, but summing two atoms must saturate too.
+        let raw = FuzzyScorer::new()
+            .score(&build_pattern("needle"), "needle")
+            .unwrap();
         let weights = FuzzyWeights {
-            name: u32::MAX / 100,
-            command: u32::MAX / 100,
+            name: u32::MAX / raw / 2 + 1,
             ..FuzzyWeights::default()
         };
+        let single = cross_score("needle", &e, &weights).unwrap();
+        assert!(single < u32::MAX);
+        assert!(u64::from(single) * 2 > u64::from(u32::MAX));
         assert_eq!(cross_score("needle needle", &e, &weights), Some(u32::MAX));
     }
 
