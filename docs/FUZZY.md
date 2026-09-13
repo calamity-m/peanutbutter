@@ -38,7 +38,7 @@ Scope a term to a specific snippet field. Unrecognised or uppercase prefixes are
 
 | Operator | Field searched |
 |----------|---------------|
-| `name:term` | Snippet heading / name |
+| `name:term` | Snippet heading / name or heading slug |
 | `path:term` | Relative file path |
 | `tag:term` | Frontmatter tags |
 | `command:term` | Executable snippet command block |
@@ -60,6 +60,10 @@ name:deploy path:ops            # heading matches "deploy" AND path contains "op
 tag:docker command:logs         # docker tag AND "logs" in the command block
 ```
 
+**Scoped exclusions apply to every candidate in the selected field**, in both free-text modes. `tag:!docker` rejects a snippet if any tag contains `docker`; `name:!docker` rejects it if either the heading or its slug contains `docker`. Matches outside that field do not exclude it. An untagged snippet passes a negative-only tag query with score zero.
+
+Within one operator value, all positive atoms must still match **the same candidate**. For example, `tag:"deploy service !docker"` requires one tag matching both `deploy` and `service`, and no tag containing `docker`. Unlike `tag:deploy tag:service`, separate tags cannot satisfy those positives.
+
 **Operators combine with free text**, using the free-text matching mode described above:
 
 ```
@@ -79,7 +83,7 @@ These are passed directly to the [nucleo](https://github.com/helix-editor/nucleo
 | `^word` | Prefix match — haystack must start with `word` |
 | `word$` | Suffix match — haystack must end with `word` |
 | `^word$` | Exact match |
-| `!word` | Inverse substring — exclude a contiguous `word` match (snippet-wide for unscoped terms in cross-field mode) |
+| `!word` | Inverse substring — exclude a contiguous `word` match (field-wide for operators; snippet-wide for unscoped terms in cross-field mode) |
 | `!^word` | Inverse prefix |
 | `!word$` | Inverse suffix |
 
@@ -89,6 +93,8 @@ Modifiers work inside field operators too:
 name:'apply                     # name contains exact substring "apply"
 name:^git                       # name starts with "git"
 command:!docker                 # command block does not contain substring "docker"
+tag:!docker                     # no tag contains "docker"; untagged snippets pass
+name:!docker$                   # neither heading nor slug ends with "docker"
 ```
 
 ---
@@ -101,12 +107,12 @@ When the query is non-empty:
 
 - In default mode, each field matching the whole free-text pattern contributes its **weighted** score — name matches rank higher than command-block matches by default.
 - In cross-field mode, each positive atom contributes only its **best weighted field score** (`max(raw_score × field_weight)`), then scores are summed across atoms. Repeating an atom in additional fields or tags does not stack up extra points. Negative atoms add no score; zero-weight fields still count for matching and exclusions.
-- Field operator scores are added to the free-text score, so a query that matches via both free text and an explicit operator ranks higher.
+- Field operators use the best whole-pattern candidate score, weighted by the selected field. Negative-only operators score zero; zero weights do not disable matching or exclusions. Operator scores are added to the free-text score.
 - The final score is `fuzzy_score + frecency_score × frecency_weight`.
 
 Default field weights remain name **30**, tag **20**, frontmatter name **15**, description **10**, path **10**, and command **8**. Best-field scoring prevents repeated metadata from overwhelming a stronger name match merely by appearing in more fields. It does not guarantee exact-name-first ordering for every query, custom weight configuration, or usage history.
 
-**Compatibility:** best-field scoring differs from default-mode accumulation even for single-term queries: `docker` scores **4980** rather than **6308** for a snippet named `docker ps` with command `docker ps -a` at `plain.md`. It also replaces the earlier cross-field implementation's all-field accumulation. Cross-field matching and exclusions are unchanged, as are default-mode and field-operator scores. Since `frecency_weight` is unchanged (default **250**), lower fuzzy scores can give usage history more relative influence; tune `[search] frecency_weight` if needed.
+**Compatibility:** best-field scoring differs from default-mode accumulation even for single-term queries: `docker` scores **4980** rather than **6308** for a snippet named `docker ps` with command `docker ps -a` at `plain.md`. It also replaces the earlier cross-field implementation's all-field accumulation. This scoring change does not alter cross-field matching/exclusions, default-mode scores, or field-operator scores. Since `frecency_weight` is unchanged (default **250**), lower fuzzy scores can give usage history more relative influence; tune `[search] frecency_weight` if needed.
 
 Matching is **case-insensitive** with Unicode smart normalisation (accented characters match their ASCII base).
 

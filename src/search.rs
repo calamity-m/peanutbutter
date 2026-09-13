@@ -273,7 +273,7 @@ fn score_field_term(
 ) -> Option<u32> {
     let pattern = build_pattern(&term.value);
     match term.field {
-        QueryField::Name => best_score(
+        QueryField::Name => score_field_candidates(
             scorer,
             &pattern,
             [entry.name(), snippet_heading_slug(entry)].into_iter(),
@@ -285,7 +285,7 @@ fn score_field_term(
                 .score(&pattern, &path)
                 .map(|score| score.saturating_mul(config.fuzzy.path))
         }
-        QueryField::Tag => best_score(
+        QueryField::Tag => score_field_candidates(
             scorer,
             &pattern,
             entry.tags().iter().map(std::string::String::as_str),
@@ -297,14 +297,28 @@ fn score_field_term(
     }
 }
 
-fn best_score<'a>(
+fn score_field_candidates<'a>(
     scorer: &mut FuzzyScorer,
     pattern: &nucleo_matcher::pattern::Pattern,
     haystacks: impl Iterator<Item = &'a str>,
 ) -> Option<u32> {
-    haystacks
-        .filter_map(|haystack| scorer.score(pattern, haystack))
-        .max()
+    // A negative-only tag pattern also passes when there are no tags.
+    // Preserve the existing candidate requirement for zero-atom patterns.
+    let negative_only = !pattern.atoms.is_empty() && pattern.atoms.iter().all(|atom| atom.negative);
+    let mut best = negative_only.then_some(0);
+    for haystack in haystacks {
+        // Check exclusions even when this candidate cannot satisfy the positives.
+        // Nucleo returns None for a negative atom whose needle matches.
+        for atom in pattern.atoms.iter().filter(|atom| atom.negative) {
+            scorer.score_atom(atom, haystack)?;
+        }
+        // Keep positive atoms together in one candidate, rather than allowing
+        // them to match across separate tags or the heading and slug.
+        if let Some(score) = scorer.score(pattern, haystack) {
+            best = Some(best.map_or(score, |best| best.max(score)));
+        }
+    }
+    best
 }
 
 fn snippet_heading_slug(entry: &IndexedSnippet) -> &str {
@@ -915,6 +929,206 @@ mod tests {
     }
 
     #[test]
+    fn scoped_tag_exclusions_check_every_candidate() {
+        let index = SnippetIndex::from_files([
+            make_tagged_file("a.md", "first", "echo", "first", &["docker", "compose"]),
+            make_tagged_file("b.md", "last", "echo", "last", &["compose", "docker"]),
+            make_tagged_file("c.md", "only", "echo", "only", &["docker"]),
+            // Matches outside tags must not affect a tag-scoped exclusion.
+            make_tagged_file("docker.md", "docker", "docker", "docker", &["web", "tools"]),
+        ]);
+        for enabled in [false, true] {
+            let config = SearchConfig {
+                cross_field_matching: enabled,
+                ..SearchConfig::default()
+            };
+            for query in [
+                "tag:!docker",
+                "tag:\"!docker !compose\"",
+                "tag:\"!podman !docker\"",
+            ] {
+                let hits = rank_with_config(&index, query, &config);
+                assert_eq!(hits.len(), 1, "{query}, enabled={enabled}");
+                assert_eq!(hits[0].snippet.id().as_str(), "docker.md#docker");
+                assert_eq!(hits[0].fuzzy, Some(0));
+            }
+        }
+    }
+
+    #[test]
+    fn scoped_negative_only_tags_allow_untagged_snippets() {
+        let index =
+            SnippetIndex::from_files([make_file("docker.md", "docker", "docker", "docker")]);
+        for enabled in [false, true] {
+            let config = SearchConfig {
+                cross_field_matching: enabled,
+                ..SearchConfig::default()
+            };
+            for query in ["tag:!docker", "tag:\"!docker !compose\""] {
+                let hits = rank_with_config(&index, query, &config);
+                assert_eq!(hits.len(), 1, "{query}, enabled={enabled}");
+                assert_eq!(hits[0].fuzzy, Some(0));
+            }
+            // Positive and zero-atom patterns still require a candidate tag.
+            for query in ["tag:docker", "tag:\"docker !compose\"", "tag:!"] {
+                assert!(
+                    rank_with_config(&index, query, &config).is_empty(),
+                    "{query}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn scoped_name_exclusions_check_heading_and_slug_independently() {
+        // A duplicate heading gets a suffixed slug: suffix exclusions can
+        // match either candidate without matching the other.
+        let index = SnippetIndex::from_files([make_file("a.md", "docker", "echo", "docker-2")]);
+        for enabled in [false, true] {
+            let config = SearchConfig {
+                cross_field_matching: enabled,
+                ..SearchConfig::default()
+            };
+            for query in [
+                "name:!docker$",
+                "name:!docker-2$",
+                "name:!^docker$",
+                "name:\"docker !docker-2$\"",
+            ] {
+                assert!(
+                    rank_with_config(&index, query, &config).is_empty(),
+                    "{query}, enabled={enabled}"
+                );
+            }
+            let hits = rank_with_config(&index, "name:!podman", &config);
+            assert_eq!(hits.len(), 1);
+            assert_eq!(hits[0].fuzzy, Some(0));
+        }
+    }
+
+    #[test]
+    fn scoped_mixed_patterns_keep_positives_together_and_score_the_best_candidate() {
+        let index = SnippetIndex::from_files([
+            make_tagged_file(
+                "split.md",
+                "split",
+                "echo",
+                "split",
+                &["deploy", "service", "web"],
+            ),
+            make_tagged_file(
+                "blocked.md",
+                "blocked",
+                "echo",
+                "blocked",
+                &["deploy service", "docker"],
+            ),
+            make_tagged_file(
+                "clean.md",
+                "clean",
+                "echo",
+                "clean",
+                &["deploy service", "deploy-service tools", "web"],
+            ),
+        ]);
+        for enabled in [false, true] {
+            let config = SearchConfig {
+                cross_field_matching: enabled,
+                ..SearchConfig::default()
+            };
+            let mut scorer = FuzzyScorer::new();
+            let positive = build_pattern("deploy service");
+            let expected = ["deploy service", "deploy-service tools"]
+                .into_iter()
+                .filter_map(|tag| scorer.score(&positive, tag))
+                .max()
+                .unwrap()
+                * config.fuzzy.tag;
+            for query in [
+                "tag:\"deploy service !docker\"",
+                "tag:\"!docker service deploy\"",
+            ] {
+                let hits = rank_with_config(&index, query, &config);
+                assert_eq!(hits.len(), 1, "{query}, enabled={enabled}");
+                assert_eq!(hits[0].snippet.id().as_str(), "clean.md#clean");
+                assert_eq!(hits[0].fuzzy, Some(expected));
+            }
+            // Separate operators may use separate tags; one quoted pattern may not.
+            assert_eq!(
+                rank_with_config(&index, "tag:deploy tag:service tag:!docker", &config).len(),
+                2
+            );
+            assert_eq!(
+                rank_with_config(&index, "tag:\"deploy service\"", &config).len(),
+                2
+            );
+        }
+    }
+
+    #[test]
+    fn scoped_exclusions_still_filter_zero_weight_fields() {
+        let index = SnippetIndex::from_files([make_tagged_file(
+            "a.md",
+            "docker",
+            "echo",
+            "docker-2",
+            &["docker", "web"],
+        )]);
+        for enabled in [false, true] {
+            let config = SearchConfig {
+                cross_field_matching: enabled,
+                fuzzy: crate::config::FuzzyWeights {
+                    name: 0,
+                    tag: 0,
+                    ..Default::default()
+                },
+                ..SearchConfig::default()
+            };
+            for query in ["tag:!docker", "name:!docker$", "tag:\"web !docker\""] {
+                assert!(
+                    rank_with_config(&index, query, &config).is_empty(),
+                    "{query}, enabled={enabled}"
+                );
+            }
+            for query in ["tag:web", "name:docker", "tag:!podman"] {
+                let hits = rank_with_config(&index, query, &config);
+                assert_eq!(hits.len(), 1);
+                assert_eq!(hits[0].fuzzy, Some(0));
+            }
+        }
+    }
+
+    #[test]
+    fn scoped_tag_exclusions_preserve_modifiers_and_individual_tags() {
+        for (tags, query, survives) in [
+            (["Dócker tools", "clean"], "tag:!docker", false),
+            (["docker tools", "clean"], "tag:!dkr", true),
+            (["docker tools", "clean"], "tag:!^docker", false),
+            (["docker tools", "clean"], "tag:!tools$", false),
+            (["docker tools", "clean"], "tag:!docker$", true),
+            (
+                ["docker tools", "clean"],
+                r#"tag:"!^docker\ tools$""#,
+                false,
+            ),
+            (["docker", "tools"], r#"tag:"!docker\ tools""#, true),
+        ] {
+            let index = SnippetIndex::from_files([make_tagged_file(
+                "a.md", "tools", "echo", "tools", &tags,
+            )]);
+            for enabled in [false, true] {
+                let config = SearchConfig {
+                    cross_field_matching: enabled,
+                    ..SearchConfig::default()
+                };
+                let hits = rank_with_config(&index, query, &config);
+                assert_eq!(!hits.is_empty(), survives, "{query}, enabled={enabled}");
+                assert!(hits.iter().all(|hit| hit.fuzzy == Some(0)));
+            }
+        }
+    }
+
+    #[test]
     fn cross_field_mode_preserves_scoped_operator_scores_and_restrictions() {
         let index = operator_index();
         for (query, expected) in [
@@ -923,8 +1137,7 @@ mod tests {
             ("name:ship path:ops", vec!["ops/docker.md#ship-service"]),
             ("body:docker", vec!["plain/docker-body.md#body-mention"]),
             ("name:!docker logs", vec!["ops/docker.md#ship-service"]),
-            // Tag operators retain legacy best-tag semantics, not global exclusion.
-            ("tag:!docker logs", vec!["ops/docker.md#ship-service"]),
+            ("tag:!docker logs", vec![]),
             ("name:!ship logs", vec![]),
             ("tag:'docker compose'", vec![]),
             (
