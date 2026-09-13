@@ -1,6 +1,6 @@
 use crate::config::FuzzyWeights;
 use crate::index::IndexedSnippet;
-use nucleo_matcher::pattern::{CaseMatching, Normalization, Pattern};
+use nucleo_matcher::pattern::{Atom, CaseMatching, Normalization, Pattern};
 use nucleo_matcher::{Config, Matcher, Utf32Str};
 
 /// Thin wrapper around the `nucleo` fuzzy matcher that reuses its internal
@@ -24,6 +24,13 @@ impl FuzzyScorer {
         self.buf.clear();
         let hay = Utf32Str::new(haystack, &mut self.buf);
         pattern.score(hay, &mut self.matcher)
+    }
+
+    /// Score one parsed query atom, preserving Nucleo's negation semantics.
+    pub fn score_atom(&mut self, atom: &Atom, haystack: &str) -> Option<u32> {
+        self.buf.clear();
+        let hay = Utf32Str::new(haystack, &mut self.buf);
+        atom.score(hay, &mut self.matcher).map(u32::from)
     }
 
     pub fn indices(&mut self, pattern: &Pattern, haystack: &str) -> Option<Vec<usize>> {
@@ -71,67 +78,63 @@ pub fn score_snippet(
     let mut total: u32 = 0;
     let mut matched = false;
 
-    let bump = |raw: Option<u32>, weight: u32, total: &mut u32, matched: &mut bool| {
-        if let Some(v) = raw {
-            *total = total.saturating_add(v.saturating_mul(weight));
-            *matched = true;
+    visit_fields(entry, weights, |text, weight| {
+        if let Some(raw) = scorer.score(pattern, text) {
+            total = total.saturating_add(raw.saturating_mul(weight));
+            matched = true;
         }
-    };
-
-    bump(
-        scorer.score(pattern, entry.name()),
-        weights.name,
-        &mut total,
-        &mut matched,
-    );
-    bump(
-        scorer.score(pattern, entry.body()),
-        weights.command,
-        &mut total,
-        &mut matched,
-    );
-    bump(
-        scorer.score(pattern, entry.description()),
-        weights.description,
-        &mut total,
-        &mut matched,
-    );
-    let path = entry.relative_path_display();
-    bump(
-        scorer.score(pattern, &path),
-        weights.path,
-        &mut total,
-        &mut matched,
-    );
-    if let Some(name) = entry.frontmatter.name.as_deref() {
-        bump(
-            scorer.score(pattern, name),
-            weights.frontmatter_name,
-            &mut total,
-            &mut matched,
-        );
-    }
-    if let Some(desc) = entry.frontmatter.description.as_deref() {
-        bump(
-            scorer.score(pattern, desc),
-            weights.description,
-            &mut total,
-            &mut matched,
-        );
-    }
-    for tag in entry.tags() {
-        bump(
-            scorer.score(pattern, tag),
-            weights.tag,
-            &mut total,
-            &mut matched,
-        );
-    }
-
-    // language is not scored: interpreter dispatch and language-aware filtering
-    // are deferred to a future config mapping and are out of scope for this PR.
+    });
 
     if matched { Some(total) } else { None }
+}
+
+/// Score positive atoms across all fields; negative atoms must pass every field.
+///
+/// Matching is independent of weight, so zero-weight fields still admit positive
+/// terms and reject excluded terms. Negative-only patterns contribute zero.
+pub fn score_snippet_cross_field(
+    scorer: &mut FuzzyScorer,
+    pattern: &Pattern,
+    entry: &IndexedSnippet,
+    weights: &FuzzyWeights,
+) -> Option<u32> {
+    let mut total = 0_u32;
+    for atom in &pattern.atoms {
+        let mut matched = false;
+        let mut excluded = false;
+        visit_fields(entry, weights, |text, weight| {
+            let raw = scorer.score_atom(atom, text);
+            if atom.negative {
+                // A negative atom returns None precisely when its needle matches.
+                excluded |= raw.is_none();
+            } else if let Some(raw) = raw {
+                matched = true;
+                total = total.saturating_add(raw.saturating_mul(weight));
+            }
+        });
+        if excluded || (!atom.negative && !matched) {
+            return None;
+        }
+    }
+    Some(total)
+}
+
+// Keep both modes on the same individual fields, without joining tags or adding
+// the heading slug/language that are not part of free-text matching.
+fn visit_fields(entry: &IndexedSnippet, weights: &FuzzyWeights, mut visit: impl FnMut(&str, u32)) {
+    visit(entry.name(), weights.name);
+    visit(entry.body(), weights.command);
+    visit(entry.description(), weights.description);
+    visit(&entry.relative_path_display(), weights.path);
+    if let Some(name) = entry.frontmatter.name.as_deref() {
+        visit(name, weights.frontmatter_name);
+    }
+    if let Some(description) = entry.frontmatter.description.as_deref() {
+        visit(description, weights.description);
+    }
+    for tag in entry.tags() {
+        visit(tag, weights.tag);
+    }
 }
 
 /// Fuzzy search state. Holds the raw query string and the currently selected
@@ -300,6 +303,115 @@ mod tests {
         assert!(
             score_snippet(&mut scorer, &pattern, false, &e, &FuzzyWeights::default()).is_some()
         );
+    }
+
+    fn cross_score(query: &str, entry: &IndexedSnippet, weights: &FuzzyWeights) -> Option<u32> {
+        score_snippet_cross_field(
+            &mut FuzzyScorer::new(),
+            &build_pattern(query),
+            entry,
+            weights,
+        )
+    }
+
+    #[test]
+    fn cross_field_covers_each_individual_field_and_excludes_from_it() {
+        let mut e = entry("heading", "command", &["firsttag", "secondtag"], "path.md");
+        e.snippet.description = "prose".into();
+        e.frontmatter.name = Some("collection".into());
+        e.frontmatter.description = Some("summary".into());
+        let weights = FuzzyWeights::default();
+        assert!(
+            cross_score(
+                "heading command firsttag secondtag path prose collection summary",
+                &e,
+                &weights,
+            )
+            .is_some()
+        );
+        for field in [
+            "heading",
+            "command",
+            "firsttag",
+            "secondtag",
+            "path",
+            "prose",
+            "collection",
+            "summary",
+        ] {
+            assert_eq!(
+                cross_score(&format!("!{field}"), &e, &weights),
+                None,
+                "{field}"
+            );
+        }
+        assert_eq!(cross_score("missingneedle", &e, &weights), None);
+        // One atom may not bridge separate tags, even though two atoms can.
+        assert_eq!(cross_score(r"firsttag\ secondtag", &e, &weights), None);
+        e.snippet.language = Some("languageonly".into());
+        assert_eq!(cross_score("languageonly", &e, &weights), None);
+        assert_eq!(cross_score("slug", &e, &weights), None);
+    }
+
+    #[test]
+    fn cross_field_sums_every_field_and_preserves_single_atom_scores() {
+        let mut e = entry("needle", "needle", &["needle", "needle"], "needle");
+        e.snippet.description = "needle".into();
+        e.frontmatter.name = Some("needle".into());
+        e.frontmatter.description = Some("needle".into());
+        let weights = FuzzyWeights::default();
+        let mut scorer = FuzzyScorer::new();
+        let pattern = build_pattern("needle");
+        let raw = scorer.score(&pattern, "needle").unwrap();
+        let expected = raw
+            * (weights.name
+                + weights.command
+                + 2 * weights.description
+                + weights.frontmatter_name
+                + weights.path
+                + 2 * weights.tag);
+        assert_eq!(cross_score("needle", &e, &weights), Some(expected));
+        assert_eq!(
+            score_snippet(&mut scorer, &pattern, false, &e, &weights),
+            Some(expected)
+        );
+        assert_eq!(
+            cross_score("needle needle", &e, &weights),
+            Some(2 * expected)
+        );
+    }
+
+    #[test]
+    fn cross_field_zero_weights_still_match_and_exclude() {
+        let weights = FuzzyWeights {
+            name: 0,
+            command: 0,
+            description: 0,
+            frontmatter_name: 0,
+            path: 0,
+            tag: 0,
+        };
+        let e = entry("kitchen", "eza", &["docker"], "p.md");
+        assert_eq!(cross_score("kitchen eza", &e, &weights), Some(0));
+        assert_eq!(cross_score("kitchen !docker", &e, &weights), None);
+        assert_eq!(cross_score("!absent", &e, &weights), Some(0));
+        assert_eq!(cross_score("", &e, &weights), Some(0));
+    }
+
+    #[test]
+    fn cross_field_weighted_scores_saturate() {
+        let e = entry("needle", "needle", &[], "needle");
+        let weights = FuzzyWeights {
+            name: u32::MAX,
+            ..FuzzyWeights::default()
+        };
+        assert_eq!(cross_score("needle needle", &e, &weights), Some(u32::MAX));
+        let weights = FuzzyWeights {
+            name: u32::MAX / 100,
+            command: u32::MAX / 100,
+            ..FuzzyWeights::default()
+        };
+        assert_eq!(cross_score("needle needle", &e, &weights), Some(u32::MAX));
     }
 
     #[test]

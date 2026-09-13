@@ -19,14 +19,32 @@ pub(super) struct HighlightPattern {
 }
 
 /// Compiles the current query into field-aware highlight patterns.
-pub(super) fn compile_highlight_patterns(query: &str) -> Vec<HighlightPattern> {
-    search::highlight_terms(query)
-        .into_iter()
-        .map(|term| HighlightPattern {
-            field: term.field,
-            pattern: build_pattern(&term.value),
-        })
-        .collect()
+pub(super) fn compile_highlight_patterns(
+    query: &str,
+    cross_field_matching: bool,
+) -> Vec<HighlightPattern> {
+    let mut patterns = Vec::new();
+    for term in search::highlight_terms(query) {
+        let pattern = build_pattern(&term.value);
+        if cross_field_matching && term.field.is_none() {
+            // Each positive atom can explain a hit in a different display field.
+            // Keep parsed modifiers and escaped spaces intact.
+            for atom in pattern.atoms.into_iter().filter(|atom| !atom.negative) {
+                let mut pattern = Pattern::default();
+                pattern.atoms.push(atom);
+                patterns.push(HighlightPattern {
+                    field: None,
+                    pattern,
+                });
+            }
+        } else {
+            patterns.push(HighlightPattern {
+                field: term.field,
+                pattern,
+            });
+        }
+    }
+    patterns
 }
 
 /// Returns sorted, deduplicated character positions matched in `haystack`.

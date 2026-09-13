@@ -1,6 +1,6 @@
 use crate::config::SearchConfig;
 use crate::frecency::FrecencyStore;
-use crate::fuzzy::{FuzzyScorer, build_pattern, score_snippet};
+use crate::fuzzy::{FuzzyScorer, build_pattern, score_snippet, score_snippet_cross_field};
 use crate::index::{IndexedSnippet, SnippetIndex};
 use std::path::Path;
 
@@ -211,11 +211,12 @@ pub fn rank<'a>(
     let mut scorer = FuzzyScorer::new();
     let parsed = ParsedQuery::parse(query.trim());
     let empty = parsed.is_empty();
+    let free_pattern = build_pattern(&parsed.free_text);
 
     let mut hits: Vec<SearchHit<'a>> = index
         .iter()
         .filter_map(|entry| {
-            let fuzzy = score_query(&mut scorer, &parsed, empty, entry, config)?;
+            let fuzzy = score_query(&mut scorer, &parsed, &free_pattern, empty, entry, config)?;
             let frec = frecency.score(entry.id(), cwd, now, &config.frecency);
             let combined = fuzzy as f64 + frec * config.frecency_weight;
             Some(SearchHit {
@@ -239,6 +240,7 @@ pub fn rank<'a>(
 fn score_query(
     scorer: &mut FuzzyScorer,
     parsed: &ParsedQuery,
+    free_pattern: &nucleo_matcher::pattern::Pattern,
     query_is_empty: bool,
     entry: &IndexedSnippet,
     config: &SearchConfig,
@@ -249,14 +251,11 @@ fn score_query(
 
     let mut total: u32 = 0;
     if !parsed.free_text.is_empty() {
-        let pattern = build_pattern(&parsed.free_text);
-        total = total.saturating_add(score_snippet(
-            scorer,
-            &pattern,
-            false,
-            entry,
-            &config.fuzzy,
-        )?);
+        total = if config.cross_field_matching {
+            score_snippet_cross_field(scorer, free_pattern, entry, &config.fuzzy)?
+        } else {
+            score_snippet(scorer, free_pattern, false, entry, &config.fuzzy)?
+        };
     }
 
     for term in &parsed.terms {
@@ -414,6 +413,21 @@ mod tests {
         .collect()
     }
 
+    fn rank_with_config<'a>(
+        index: &'a SnippetIndex,
+        query: &str,
+        config: &SearchConfig,
+    ) -> Vec<SearchHit<'a>> {
+        rank(
+            index,
+            query,
+            &FrecencyStore::new(),
+            Path::new("/tmp"),
+            0,
+            config,
+        )
+    }
+
     fn tiny_index() -> SnippetIndex {
         SnippetIndex::from_files([
             make_file("git/log.md", "git log pretty", "git log --oneline", "a"),
@@ -476,6 +490,359 @@ mod tests {
             &SearchConfig::default(),
         );
         assert_eq!(hits[0].snippet.id().as_str(), "docker/run.md#b");
+    }
+
+    #[test]
+    fn cross_field_matching_is_opt_in_and_requires_every_positive_term() {
+        let index = SnippetIndex::from_files([make_tagged_file(
+            "files/eza.md",
+            "kitchen sink",
+            "eza --all",
+            "kitchen-sink",
+            &["eza", "tools"],
+        )]);
+        let mut config = SearchConfig::default();
+        for query in ["kitchen eza", "eza kitchen"] {
+            config.cross_field_matching = false;
+            assert!(rank_with_config(&index, query, &config).is_empty());
+            config.cross_field_matching = true;
+            let hits = rank_with_config(&index, query, &config);
+            assert_eq!(hits.len(), 1);
+            assert_eq!(hits[0].snippet.id().as_str(), "files/eza.md#kitchen-sink");
+            assert!(hits[0].fuzzy.unwrap() > 0);
+        }
+        let forward = rank_with_config(&index, "kitchen eza", &config);
+        let reverse = rank_with_config(&index, "eza kitchen", &config);
+        assert_eq!(forward[0].fuzzy, reverse[0].fuzzy);
+        for query in [
+            "kitchen eza missing",
+            "kitchen eza tag:missing",
+            "kitchen eza name:eza",
+            "kitchen eza body:kitchen",
+        ] {
+            assert!(
+                rank_with_config(&index, query, &config).is_empty(),
+                "{query}"
+            );
+        }
+        let mixed = rank_with_config(&index, "kitchen eza tag:tools", &config);
+        let scoped = rank_with_config(&index, "tag:tools", &config);
+        assert_eq!(mixed.len(), 1);
+        assert_eq!(
+            mixed[0].fuzzy,
+            Some(forward[0].fuzzy.unwrap() + scoped[0].fuzzy.unwrap())
+        );
+    }
+
+    #[test]
+    fn cross_field_scores_accumulate_all_weighted_fields_and_beat_name_only() {
+        let mut file = make_tagged_file(
+            "eza.md",
+            "kitchen",
+            "eza",
+            "all-fields",
+            &["kitchen", "eza"],
+        );
+        file.snippets[0].description = "kitchen".to_string();
+        file.frontmatter.name = Some("eza".to_string());
+        file.frontmatter.description = Some("kitchen".to_string());
+        let index = SnippetIndex::from_files([
+            file,
+            make_file("other.md", "kitchen eza", "echo", "name-only"),
+        ]);
+        let config = SearchConfig {
+            cross_field_matching: true,
+            fuzzy: crate::config::FuzzyWeights {
+                name: 3,
+                command: 5,
+                description: 7,
+                path: 11,
+                frontmatter_name: 13,
+                tag: 17,
+            },
+            ..SearchConfig::default()
+        };
+        let mut scorer = FuzzyScorer::new();
+        let mut expected = 0;
+        for (query, text, weight) in [
+            ("kitchen", "kitchen", config.fuzzy.name),
+            ("eza", "eza", config.fuzzy.command),
+            ("kitchen", "kitchen", config.fuzzy.description),
+            ("eza", "eza.md", config.fuzzy.path),
+            ("eza", "eza", config.fuzzy.frontmatter_name),
+            ("kitchen", "kitchen", config.fuzzy.description),
+            ("kitchen", "kitchen", config.fuzzy.tag),
+            ("eza", "eza", config.fuzzy.tag),
+        ] {
+            expected += scorer.score(&build_pattern(query), text).unwrap() * weight;
+        }
+        let hits = rank_with_config(&index, "kitchen eza", &config);
+        assert_eq!(hits.len(), 2);
+        assert_eq!(hits[0].snippet.id().as_str(), "eza.md#all-fields");
+        assert_eq!(hits[0].fuzzy, Some(expected));
+        assert_eq!(hits[0].combined, f64::from(expected));
+        assert_eq!(hits[1].snippet.id().as_str(), "other.md#name-only");
+        assert!(hits[0].fuzzy > hits[1].fuzzy);
+
+        // A single positive atom must retain the legacy all-field score.
+        for query in ["kitchen", "eza"] {
+            let pattern = build_pattern(query);
+            for hit in rank_with_config(&index, query, &config) {
+                assert_eq!(
+                    hit.fuzzy,
+                    score_snippet(&mut scorer, &pattern, false, hit.snippet, &config.fuzzy)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn disabled_multiword_scores_and_order_match_direct_legacy_scoring() {
+        let index = SnippetIndex::from_files([
+            make_tagged_file(
+                "a.md",
+                "kitchen eza",
+                "kitchen eza",
+                "both",
+                &["kitchen eza"],
+            ),
+            make_file("b.md", "kitchen eza", "echo", "name"),
+            make_file("eza.md", "kitchen sink", "eza", "split"),
+            make_file("c.md", "unrelated", "echo", "missing"),
+        ]);
+        let config = SearchConfig::default();
+        assert!(!config.cross_field_matching);
+        for query in ["kitchen eza", "eza kitchen", "kitchen eza !docker"] {
+            let pattern = build_pattern(query);
+            let mut scorer = FuzzyScorer::new();
+            let mut expected: Vec<_> = index
+                .iter()
+                .filter_map(|entry| {
+                    score_snippet(&mut scorer, &pattern, false, entry, &config.fuzzy)
+                        .map(|score| (entry.id().as_str(), score))
+                })
+                .collect();
+            expected.sort_by_key(|(_, score)| std::cmp::Reverse(*score));
+            assert_eq!(expected.len(), 2);
+            assert_eq!(expected[0].0, "a.md#both");
+            assert_eq!(expected[1].0, "b.md#name");
+            let hits = rank_with_config(&index, query, &config);
+            let actual: Vec<_> = hits
+                .iter()
+                .map(|hit| {
+                    assert_eq!(hit.combined, f64::from(hit.fuzzy.unwrap()));
+                    (hit.snippet.id().as_str(), hit.fuzzy.unwrap())
+                })
+                .collect();
+            assert_eq!(actual, expected, "{query}");
+        }
+    }
+
+    #[test]
+    fn negative_only_queries_exclude_globally_and_keep_zero_score_ranking() {
+        let index = SnippetIndex::from_files([
+            make_tagged_file("a.md", "alpha", "echo", "a", &["docker"]),
+            make_file("b.md", "bravo", "echo", "b"),
+            make_file("c.md", "charlie", "echo", "c"),
+        ]);
+        let mut config = SearchConfig::default();
+        let legacy = rank_with_config(&index, "!docker", &config);
+        assert_eq!(legacy.len(), 3);
+        assert_eq!(legacy[0].snippet.id().as_str(), "a.md#a");
+        assert!(legacy.iter().all(|hit| hit.fuzzy == Some(0)));
+
+        config.cross_field_matching = true;
+        let hits = rank_with_config(&index, "!docker", &config);
+        assert_eq!(
+            hits.iter()
+                .map(|hit| hit.snippet.name())
+                .collect::<Vec<_>>(),
+            vec!["bravo", "charlie"]
+        );
+        assert!(
+            hits.iter()
+                .all(|hit| hit.fuzzy == Some(0) && hit.combined == 0.0)
+        );
+        let mut store = FrecencyStore::new();
+        store.record(SnippetId::new("c.md", "c"), PathBuf::from("/tmp"), 1000);
+        let recent = rank(&index, "!docker", &store, Path::new("/tmp"), 1000, &config);
+        assert_eq!(recent.len(), 2);
+        assert_eq!(recent[0].snippet.name(), "charlie");
+        assert_eq!(recent[0].fuzzy, Some(0));
+        assert_eq!(
+            recent[0].combined,
+            recent[0].frecency * config.frecency_weight
+        );
+        assert!(recent[0].combined > recent[1].combined);
+    }
+
+    #[test]
+    fn multiple_exclusions_check_every_field_even_with_zero_weights() {
+        let mut files = vec![make_file("clean.md", "kitchen", "eza", "clean")];
+        for field in [
+            "name",
+            "body",
+            "description",
+            "path",
+            "file-name",
+            "file-description",
+            "tag",
+        ] {
+            let mut file = make_file(&format!("{field}.md"), "kitchen", "eza", "excluded");
+            match field {
+                "name" => file.snippets[0].name = "kitchen docker".to_string(),
+                "body" => file.snippets[0].body = "eza podman".to_string(),
+                "description" => file.snippets[0].description = "docker".to_string(),
+                "path" => file = make_file("podman.md", "kitchen", "eza", "excluded"),
+                "file-name" => file.frontmatter.name = Some("docker".to_string()),
+                "file-description" => file.frontmatter.description = Some("podman".to_string()),
+                "tag" => file.frontmatter.tags = vec!["clean".to_string(), "docker".to_string()],
+                _ => unreachable!(),
+            }
+            files.push(file);
+        }
+        let index = SnippetIndex::from_files(files);
+        let config = SearchConfig {
+            cross_field_matching: true,
+            fuzzy: crate::config::FuzzyWeights {
+                name: 0,
+                command: 0,
+                description: 0,
+                path: 0,
+                frontmatter_name: 0,
+                tag: 0,
+            },
+            ..SearchConfig::default()
+        };
+        assert_eq!(rank_with_config(&index, "kitchen eza", &config).len(), 8);
+        for query in [
+            "!docker !podman",
+            "kitchen eza !docker !podman",
+            "!podman !docker eza kitchen",
+        ] {
+            let hits = rank_with_config(&index, query, &config);
+            assert_eq!(hits.len(), 1, "{query}");
+            assert_eq!(hits[0].snippet.id().as_str(), "clean.md#clean");
+            assert_eq!(hits[0].fuzzy, Some(0));
+        }
+    }
+
+    #[test]
+    fn cross_field_mode_preserves_scoped_operator_scores_and_restrictions() {
+        let index = operator_index();
+        for (query, expected) in [
+            ("tag:docker logs", vec!["ops/docker.md#ship-service"]),
+            ("tag:web logs", vec![]),
+            ("name:ship path:ops", vec!["ops/docker.md#ship-service"]),
+            ("body:docker", vec!["plain/docker-body.md#body-mention"]),
+            ("name:!docker logs", vec!["ops/docker.md#ship-service"]),
+            // Tag operators retain legacy best-tag semantics, not global exclusion.
+            ("tag:!docker logs", vec!["ops/docker.md#ship-service"]),
+            ("name:!ship logs", vec![]),
+            ("tag:'docker compose'", vec![]),
+            (
+                "snippet:\"search google\"",
+                vec!["guides/search.md#search-google"],
+            ),
+        ] {
+            let mut config = SearchConfig::default();
+            let legacy = rank_with_config(&index, query, &config);
+            assert_eq!(
+                legacy
+                    .iter()
+                    .map(|hit| hit.snippet.id().as_str())
+                    .collect::<Vec<_>>(),
+                expected,
+                "{query}"
+            );
+            config.cross_field_matching = true;
+            let enabled = rank_with_config(&index, query, &config);
+            let scores = |hits: &[SearchHit<'_>]| {
+                hits.iter()
+                    .map(|hit| {
+                        (
+                            hit.snippet.id().as_str().to_string(),
+                            hit.fuzzy,
+                            hit.combined,
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            };
+            assert_eq!(scores(&enabled), scores(&legacy), "{query}");
+        }
+    }
+
+    #[test]
+    fn escaped_space_atoms_stay_within_one_field_through_rank() {
+        let index = SnippetIndex::from_files([
+            make_file("split.md", "kitchen", "eza", "split"),
+            make_file("phrase.md", "kitchen eza", "echo", "phrase"),
+            make_tagged_file("tags.md", "tools", "echo", "tags", &["kitchen", "eza"]),
+        ]);
+        for enabled in [false, true] {
+            let config = SearchConfig {
+                cross_field_matching: enabled,
+                ..SearchConfig::default()
+            };
+            for query in [r"kitchen\ eza", r"'kitchen\ eza"] {
+                let hits = rank_with_config(&index, query, &config);
+                assert_eq!(hits.len(), 1, "{query}, enabled={enabled}");
+                assert_eq!(hits[0].snippet.id().as_str(), "phrase.md#phrase");
+            }
+            assert_eq!(
+                rank_with_config(&index, "kitchen eza", &config).len(),
+                if enabled { 3 } else { 1 }
+            );
+        }
+    }
+
+    #[test]
+    fn cross_field_matching_preserves_anchors_exact_modifiers_and_normalization() {
+        let index = SnippetIndex::from_files([make_file("a.md", "CAFÉ kitchen", "eza", "a")]);
+        let config = SearchConfig {
+            cross_field_matching: true,
+            ..SearchConfig::default()
+        };
+        for query in ["^cafe eza$", "'cafe 'EZA", "kitchen$ ^eza$"] {
+            assert_eq!(rank_with_config(&index, query, &config).len(), 1, "{query}");
+        }
+        for query in [
+            "cafe$ eza",
+            "^kitchen eza",
+            "'cfe eza",
+            "cafe ^ez$",
+            "cafe !^eza$",
+        ] {
+            assert!(
+                rank_with_config(&index, query, &config).is_empty(),
+                "{query}"
+            );
+        }
+    }
+
+    #[test]
+    fn empty_queries_and_nonempty_zero_atom_queries_preserve_score_distinction() {
+        let index = tiny_index();
+        for enabled in [false, true] {
+            let config = SearchConfig {
+                cross_field_matching: enabled,
+                ..SearchConfig::default()
+            };
+            for query in ["", " \t ", "'", "!", "^", "$"] {
+                assert!(build_pattern(query.trim()).atoms.is_empty());
+                let hits = rank_with_config(&index, query, &config);
+                assert_eq!(hits.len(), 3, "{query:?}, enabled={enabled}");
+                let expected = if query.trim().is_empty() {
+                    None
+                } else {
+                    Some(0)
+                };
+                assert!(
+                    hits.iter()
+                        .all(|hit| hit.fuzzy == expected && hit.combined == 0.0)
+                );
+            }
+        }
     }
 
     #[test]

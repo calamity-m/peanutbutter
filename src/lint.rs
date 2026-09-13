@@ -373,6 +373,7 @@ mod tests {
             },
             ui: UiConfig::default(),
             search: SearchConfig {
+                cross_field_matching: false,
                 frecency_weight: 250.0,
                 fuzzy: FuzzyWeights::default(),
                 frecency: FrecencyConfig::default(),
@@ -863,6 +864,7 @@ mod dependent_tests {
             },
             ui: UiConfig::default(),
             search: SearchConfig {
+                cross_field_matching: false,
                 frecency_weight: 250.0,
                 fuzzy: FuzzyWeights::default(),
                 frecency: FrecencyConfig::default(),

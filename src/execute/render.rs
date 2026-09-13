@@ -58,7 +58,12 @@ impl<P: SuggestionProvider> ExecutionApp<P> {
             &self.search_config,
         );
         let highlight_pattern = matches!(self.nav_mode, NavigationMode::Fuzzy)
-            .then(|| compile_highlight_patterns(&self.fuzzy.query))
+            .then(|| {
+                compile_highlight_patterns(
+                    &self.fuzzy.query,
+                    self.search_config.cross_field_matching,
+                )
+            })
             .unwrap_or_default();
         let mut highlighter = FuzzyScorer::new();
         let browse_visible = self.browse.visible(&self.tree);
@@ -754,7 +759,7 @@ mod tests {
     fn fuzzy_row_highlights_name_and_path_matches() {
         let theme = crate::config::Theme::default();
         let mut scorer = FuzzyScorer::new();
-        let patterns = compile_highlight_patterns("dock");
+        let patterns = compile_highlight_patterns("dock", false);
         let spans = fuzzy_snippet_row_spans(
             &theme,
             &snippet("docker run", "desc", "echo hi", &[]),
@@ -768,10 +773,80 @@ mod tests {
     }
 
     #[test]
+    fn cross_field_preview_highlights_independent_positive_atoms() {
+        let theme = crate::config::Theme::default();
+        let mut entry = snippet("kitchen sink", "", "eza --long", &["eza"]);
+        entry.relative_path = std::path::PathBuf::from("files/eza.md");
+        let mut scorer = FuzzyScorer::new();
+        for enabled in [false, true] {
+            let patterns = compile_highlight_patterns("kitchen eza !docker", enabled);
+            let preview = render_snippet_preview_text(&entry, 80, &theme, &patterns, &mut scorer);
+            let chars = text_to_styled_chars(&preview);
+            if enabled {
+                assert_substr_style(
+                    &chars,
+                    "kitchen",
+                    theme.emphasis.patch(theme.fuzzy_highlight),
+                );
+                assert_substr_style(&chars, "eza", theme.fuzzy_highlight);
+                for field in [
+                    search::QueryField::Path,
+                    search::QueryField::Tag,
+                    search::QueryField::Body,
+                ] {
+                    assert_eq!(
+                        match_positions(&mut scorer, &patterns, Some(field), "eza"),
+                        vec![0, 1, 2]
+                    );
+                }
+            } else {
+                assert_substr_not_style(
+                    &chars,
+                    "kitchen",
+                    theme.emphasis.patch(theme.fuzzy_highlight),
+                );
+                assert_substr_not_style(&chars, "eza", theme.fuzzy_highlight);
+            }
+        }
+    }
+
+    #[test]
+    fn cross_field_highlights_preserve_modifiers_and_operator_scope() {
+        let mut scorer = FuzzyScorer::new();
+        let patterns =
+            compile_highlight_patterns(r"^kitchen eza$ !docker name:only ^two\ words$", true);
+        assert_eq!(
+            match_positions(
+                &mut scorer,
+                &patterns,
+                Some(search::QueryField::Name),
+                "kitchen"
+            ),
+            (0..7).collect::<Vec<_>>()
+        );
+        assert!(match_positions(&mut scorer, &patterns, None, "docker only").is_empty());
+        assert!(match_positions(&mut scorer, &patterns, None, "notkitchen ezanot").is_empty());
+        assert_eq!(
+            match_positions(&mut scorer, &patterns, None, "two words"),
+            (0..9).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            match_positions(
+                &mut scorer,
+                &patterns,
+                Some(search::QueryField::Name),
+                "only"
+            ),
+            (0..4).collect::<Vec<_>>()
+        );
+        assert!(compile_highlight_patterns("!docker !eza", true).is_empty());
+    }
+
+    #[test]
     fn preview_highlights_markdown_description_text() {
         let theme = crate::config::Theme::default();
         let mut scorer = FuzzyScorer::new();
-        let patterns = compile_highlight_patterns("docker");
+        let patterns = compile_highlight_patterns("docker", false);
         let preview = render_snippet_preview_text(
             &snippet("Demo", "docker setup", "echo hi", &["ops"]),
             80,
@@ -795,7 +870,7 @@ mod tests {
     fn preview_highlights_single_operator_value_in_name() {
         let theme = crate::config::Theme::default();
         let mut scorer = FuzzyScorer::new();
-        let patterns = compile_highlight_patterns("name:prompt");
+        let patterns = compile_highlight_patterns("name:prompt", false);
         let preview = render_snippet_preview_text(
             &snippet("prompt helper", "desc", "echo hi", &[]),
             80,
@@ -821,6 +896,7 @@ mod tests {
         let mut scorer = FuzzyScorer::new();
         let patterns = compile_highlight_patterns(
             "name:NameNeedle path:demo tag:TagNeedle snippet:BodyNeedle",
+            false,
         );
         let preview = render_snippet_preview_text(
             &snippet(
@@ -851,7 +927,7 @@ mod tests {
     fn preview_does_not_apply_field_operator_highlight_to_other_fields() {
         let theme = crate::config::Theme::default();
         let mut scorer = FuzzyScorer::new();
-        let patterns = compile_highlight_patterns("snippet:NameNeedle");
+        let patterns = compile_highlight_patterns("snippet:NameNeedle", false);
         let preview = render_snippet_preview_text(
             &snippet("NameNeedle helper", "", "echo BodyNeedle", &[]),
             80,
@@ -950,7 +1026,7 @@ mod tests {
     fn preview_body_highlight_patches_existing_shell_style() {
         let theme = crate::config::Theme::default();
         let mut scorer = FuzzyScorer::new();
-        let patterns = compile_highlight_patterns("home");
+        let patterns = compile_highlight_patterns("home", false);
         let preview = render_snippet_preview_text(
             &snippet("Demo", "", "echo $HOME", &[]),
             80,

@@ -33,6 +33,10 @@ timeout_ms = 2000
 allow_commands = true
 
 [search]
+# Opt in to matching positive terms across fields and snippet-wide unscoped
+# exclusions. TOML-only: this switch is not available in `pb settings`.
+cross_field_matching = false
+
 # Search weights can also be tuned interactively with `pb settings`.
 # How much frecency influences the final ranking relative to fuzzy score.
 # Higher values make your usage history matter more.
