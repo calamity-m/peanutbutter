@@ -104,6 +104,9 @@ impl Default for UiConfig {
 /// Parameters controlling how fuzzy and frecency scores are combined.
 #[derive(Debug, Clone)]
 pub struct SearchConfig {
+    /// Allow positive free-text atoms to match different fields and apply
+    /// unscoped exclusions snippet-wide. TOML-only; defaults to `false`.
+    pub cross_field_matching: bool,
     /// Multiplier applied to the raw frecency score before it is added to the
     /// fuzzy score. Larger values make location/recency history dominate;
     /// smaller values make the query text dominate.
@@ -117,6 +120,7 @@ pub struct SearchConfig {
 impl Default for SearchConfig {
     fn default() -> Self {
         Self {
+            cross_field_matching: false,
             frecency_weight: 250.0,
             fuzzy: FuzzyWeights::default(),
             frecency: FrecencyConfig::default(),
@@ -431,6 +435,7 @@ pub fn load_with_theme_override(theme_name: Option<&str>) -> io::Result<AppConfi
             allow_commands: file.suggestion_commands.allow_commands.unwrap_or(true),
         },
         search: SearchConfig {
+            cross_field_matching: file.search.cross_field_matching.unwrap_or(false),
             frecency_weight: file.search.frecency_weight.unwrap_or(250.0),
             fuzzy: FuzzyWeights {
                 name: file.search.fuzzy.name.unwrap_or(30),
@@ -537,6 +542,7 @@ struct UiFileConfig {
 
 #[derive(Debug, Default, Deserialize)]
 struct SearchFileConfig {
+    cross_field_matching: Option<bool>,
     frecency_weight: Option<f64>,
     #[serde(default)]
     fuzzy: FuzzyWeightsFileConfig,
@@ -1018,6 +1024,36 @@ disable = true
     }
 
     #[test]
+    fn cross_field_matching_defaults_to_false() {
+        assert!(!SearchConfig::default().cross_field_matching);
+    }
+
+    #[test]
+    fn cross_field_matching_is_optional() {
+        for raw in ["", "[search]\n"] {
+            let parsed: FileConfig = toml::from_str(raw).unwrap();
+            assert_eq!(parsed.search.cross_field_matching, None);
+        }
+    }
+
+    #[test]
+    fn cross_field_matching_accepts_false_and_true() {
+        for enabled in [false, true] {
+            let raw = format!("[search]\ncross_field_matching = {enabled}\n");
+            let parsed: FileConfig = toml::from_str(&raw).unwrap();
+            assert_eq!(parsed.search.cross_field_matching, Some(enabled));
+        }
+    }
+
+    #[test]
+    fn cross_field_matching_rejects_non_boolean_values() {
+        for value in ["\"true\"", "1", "[]"] {
+            let raw = format!("[search]\ncross_field_matching = {value}\n");
+            assert!(toml::from_str::<FileConfig>(&raw).is_err());
+        }
+    }
+
+    #[test]
     fn example_config_deserializes() {
         // Reads the same canonical file that `pb docs config` embeds (via
         // build.rs/OUT_DIR). Kept on the direct path intentionally so this test
@@ -1030,6 +1066,7 @@ disable = true
             variable.command.as_deref(),
             Some("find . -maxdepth 1 -type f | sed 's#^./##' | sort")
         );
+        assert_eq!(parsed.search.cross_field_matching, Some(false));
         assert_eq!(parsed.search.fuzzy.command, Some(8));
     }
 
