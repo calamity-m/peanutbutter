@@ -104,9 +104,6 @@ impl Default for UiConfig {
 /// Parameters controlling how fuzzy and frecency scores are combined.
 #[derive(Debug, Clone)]
 pub struct SearchConfig {
-    /// Allow positive free-text atoms to match different fields and apply
-    /// unscoped exclusions snippet-wide. TOML-only; defaults to `false`.
-    pub cross_field_matching: bool,
     /// Multiplier applied to the raw frecency score before it is added to the
     /// fuzzy score. Larger values make location/recency history dominate;
     /// smaller values make the query text dominate.
@@ -120,7 +117,6 @@ pub struct SearchConfig {
 impl Default for SearchConfig {
     fn default() -> Self {
         Self {
-            cross_field_matching: false,
             frecency_weight: 250.0,
             fuzzy: FuzzyWeights::default(),
             frecency: FrecencyConfig::default(),
@@ -435,7 +431,6 @@ pub fn load_with_theme_override(theme_name: Option<&str>) -> io::Result<AppConfi
             allow_commands: file.suggestion_commands.allow_commands.unwrap_or(true),
         },
         search: SearchConfig {
-            cross_field_matching: file.search.cross_field_matching.unwrap_or(false),
             frecency_weight: file.search.frecency_weight.unwrap_or(250.0),
             fuzzy: FuzzyWeights {
                 name: file.search.fuzzy.name.unwrap_or(30),
@@ -542,7 +537,6 @@ struct UiFileConfig {
 
 #[derive(Debug, Default, Deserialize)]
 struct SearchFileConfig {
-    cross_field_matching: Option<bool>,
     frecency_weight: Option<f64>,
     #[serde(default)]
     fuzzy: FuzzyWeightsFileConfig,
@@ -711,12 +705,25 @@ fn load_file_config(path: &PathBuf) -> io::Result<FileConfig> {
         Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(FileConfig::default()),
         Err(err) => return Err(err),
     };
-    toml::from_str(&raw).map_err(|err| {
+    let invalid_config = |err: toml::de::Error| {
         io::Error::new(
             io::ErrorKind::InvalidData,
             format!("invalid config file {}: {err}", path.display()),
         )
-    })
+    };
+    let value: toml::Value = toml::from_str(&raw).map_err(invalid_config)?;
+    if let Some(warning) = retired_search_config_warning(&value) {
+        // stdout is reserved for the selected command on the shell hotkey path.
+        eprintln!("warning: {}: {warning}", path.display());
+    }
+    value.try_into().map_err(invalid_config)
+}
+
+fn retired_search_config_warning(value: &toml::Value) -> Option<&'static str> {
+    value.get("search")?.get("cross_field_matching")?;
+    Some(
+        "search.cross_field_matching is ignored; cross-field matching is now always enabled, and scores/ordering may change. Remove the retired key from your config.",
+    )
 }
 
 fn resolve_snippet_roots(file: &FileConfig, xdg_default: &Path) -> Vec<PathBuf> {
@@ -1024,32 +1031,42 @@ disable = true
     }
 
     #[test]
-    fn cross_field_matching_defaults_to_false() {
-        assert!(!SearchConfig::default().cross_field_matching);
-    }
-
-    #[test]
-    fn cross_field_matching_is_optional() {
-        for raw in ["", "[search]\n"] {
-            let parsed: FileConfig = toml::from_str(raw).unwrap();
-            assert_eq!(parsed.search.cross_field_matching, None);
+    fn retired_search_key_warning_is_absent_without_key() {
+        for raw in ["", "[search]\n", "[search]\nfrecency_weight = 100\n"] {
+            let value = toml::from_str(raw).unwrap();
+            assert_eq!(retired_search_config_warning(&value), None);
         }
     }
 
     #[test]
-    fn cross_field_matching_accepts_false_and_true() {
+    fn retired_search_key_warns_for_false_and_true() {
         for enabled in [false, true] {
             let raw = format!("[search]\ncross_field_matching = {enabled}\n");
-            let parsed: FileConfig = toml::from_str(&raw).unwrap();
-            assert_eq!(parsed.search.cross_field_matching, Some(enabled));
+            let value = toml::from_str(&raw).unwrap();
+            let warning = retired_search_config_warning(&value).unwrap();
+            assert!(warning.contains("search.cross_field_matching is ignored"));
+            assert!(warning.contains("cross-field matching is now always enabled"));
+            assert!(warning.contains("scores/ordering may change"));
         }
     }
 
     #[test]
-    fn cross_field_matching_rejects_non_boolean_values() {
-        for value in ["\"true\"", "1", "[]"] {
-            let raw = format!("[search]\ncross_field_matching = {value}\n");
-            assert!(toml::from_str::<FileConfig>(&raw).is_err());
+    fn retired_search_key_is_accepted_regardless_of_value() {
+        for retired_value in [
+            "false",
+            "true",
+            "\"true\"",
+            "1",
+            "[]",
+            "{ enabled = false }",
+        ] {
+            let raw = format!(
+                "[search]\ncross_field_matching = {retired_value}\nfrecency_weight = 100\n"
+            );
+            let value: toml::Value = toml::from_str(&raw).unwrap();
+            assert!(retired_search_config_warning(&value).is_some());
+            let parsed: FileConfig = value.try_into().unwrap();
+            assert_eq!(parsed.search.frecency_weight, Some(100.0));
         }
     }
 
@@ -1066,7 +1083,6 @@ disable = true
             variable.command.as_deref(),
             Some("find . -maxdepth 1 -type f | sed 's#^./##' | sort")
         );
-        assert_eq!(parsed.search.cross_field_matching, Some(false));
         assert_eq!(parsed.search.fuzzy.command, Some(8));
     }
 

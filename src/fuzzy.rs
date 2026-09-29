@@ -58,56 +58,28 @@ pub fn build_pattern(query: &str) -> Pattern {
     Pattern::parse(query, CaseMatching::Ignore, Normalization::Smart)
 }
 
-/// Score a single snippet against a compiled pattern, summing weighted field
-/// scores. Returns `None` if the query is non-empty and no field matched,
-/// which lets callers filter out non-matching entries efficiently.
-///
-/// When `query_is_empty` is `true` the pattern is ignored and `Some(0)` is
-/// returned for every entry so all snippets appear unfiltered.
-pub fn score_snippet(
-    scorer: &mut FuzzyScorer,
-    pattern: &Pattern,
-    query_is_empty: bool,
-    entry: &IndexedSnippet,
-    weights: &FuzzyWeights,
-) -> Option<u32> {
-    if query_is_empty {
-        return Some(0);
-    }
-
-    let mut total: u32 = 0;
-    let mut matched = false;
-
-    visit_fields(entry, weights, |text, weight| {
-        if let Some(raw) = scorer.score(pattern, text) {
-            total = total.saturating_add(raw.saturating_mul(weight));
-            matched = true;
-        }
-    });
-
-    if matched { Some(total) } else { None }
-}
-
 /// Sum each positive atom's best weighted field score; negatives must pass every field.
 ///
 /// Taking the maximum after weighting prevents repeated metadata from stacking
 /// weaker matches above stronger name matches. Default weights favor names, but
 /// custom weights and the separately added frecency score can change ordering.
-/// Unlike legacy accumulation, even single-atom scores can be lower.
 /// Matching is independent of weight, so zero-weight fields still admit positive
-/// terms and reject excluded terms. Negative-only patterns contribute zero.
-pub fn score_snippet_cross_field(
+/// terms and reject excluded terms. Negative-only and empty patterns contribute
+/// zero. Returns `None` if any positive atom misses all fields or any exclusion
+/// matches a field.
+pub fn score_snippet(
     scorer: &mut FuzzyScorer,
     pattern: &Pattern,
     entry: &IndexedSnippet,
     weights: &FuzzyWeights,
 ) -> Option<u32> {
+    let relative_path = entry.relative_path_display();
     let mut total = 0_u32;
     for atom in &pattern.atoms {
         let mut matched = false;
         let mut best = 0;
         let mut excluded = false;
-        visit_fields(entry, weights, |text, weight| {
+        visit_fields(entry, &relative_path, weights, |text, weight| {
             let raw = scorer.score_atom(atom, text);
             if atom.negative {
                 // A negative atom returns None precisely when its needle matches.
@@ -125,13 +97,18 @@ pub fn score_snippet_cross_field(
     Some(total)
 }
 
-// Keep both modes on the same individual fields, without joining tags or adding
-// the heading slug/language that are not part of free-text matching.
-fn visit_fields(entry: &IndexedSnippet, weights: &FuzzyWeights, mut visit: impl FnMut(&str, u32)) {
+// Visit individual fields without joining tags or adding the heading
+// slug/language that are not part of free-text matching.
+fn visit_fields(
+    entry: &IndexedSnippet,
+    relative_path: &str,
+    weights: &FuzzyWeights,
+    mut visit: impl FnMut(&str, u32),
+) {
     visit(entry.name(), weights.name);
     visit(entry.body(), weights.command);
     visit(entry.description(), weights.description);
-    visit(&entry.relative_path_display(), weights.path);
+    visit(relative_path, weights.path);
     if let Some(name) = entry.frontmatter.name.as_deref() {
         visit(name, weights.frontmatter_name);
     }
@@ -261,7 +238,7 @@ mod tests {
         let pattern = build_pattern("");
         let e = entry("git log", "git log --oneline", &["git"], "git/log.md");
         assert_eq!(
-            score_snippet(&mut scorer, &pattern, true, &e, &FuzzyWeights::default()),
+            score_snippet(&mut scorer, &pattern, &e, &FuzzyWeights::default()),
             Some(0)
         );
     }
@@ -272,18 +249,11 @@ mod tests {
         let pattern = build_pattern("git");
         let name_match = entry("git log", "echo foo", &[], "a.md");
         let command_match = entry("zzz", "git log --oneline", &[], "b.md");
-        let ns = score_snippet(
-            &mut scorer,
-            &pattern,
-            false,
-            &name_match,
-            &FuzzyWeights::default(),
-        )
-        .unwrap();
+        let ns =
+            score_snippet(&mut scorer, &pattern, &name_match, &FuzzyWeights::default()).unwrap();
         let bs = score_snippet(
             &mut scorer,
             &pattern,
-            false,
             &command_match,
             &FuzzyWeights::default(),
         )
@@ -296,9 +266,7 @@ mod tests {
         let mut scorer = FuzzyScorer::new();
         let pattern = build_pattern("xyzq");
         let e = entry("git log", "git log --oneline", &[], "a.md");
-        assert!(
-            score_snippet(&mut scorer, &pattern, false, &e, &FuzzyWeights::default()).is_none()
-        );
+        assert!(score_snippet(&mut scorer, &pattern, &e, &FuzzyWeights::default()).is_none());
     }
 
     #[test]
@@ -306,13 +274,11 @@ mod tests {
         let mut scorer = FuzzyScorer::new();
         let pattern = build_pattern("docker");
         let e = entry("run it", "echo", &["docker", "compose"], "r.md");
-        assert!(
-            score_snippet(&mut scorer, &pattern, false, &e, &FuzzyWeights::default()).is_some()
-        );
+        assert!(score_snippet(&mut scorer, &pattern, &e, &FuzzyWeights::default()).is_some());
     }
 
     fn cross_score(query: &str, entry: &IndexedSnippet, weights: &FuzzyWeights) -> Option<u32> {
-        score_snippet_cross_field(
+        score_snippet(
             &mut FuzzyScorer::new(),
             &build_pattern(query),
             entry,
@@ -369,18 +335,6 @@ mod tests {
         let mut scorer = FuzzyScorer::new();
         let pattern = build_pattern("needle");
         let raw = scorer.score(&pattern, "needle").unwrap();
-        let expected = raw
-            * (weights.name
-                + weights.command
-                + 2 * weights.description
-                + weights.frontmatter_name
-                + weights.path
-                + 2 * weights.tag);
-        // Legacy scoring still accumulates every field, even for one atom.
-        assert_eq!(
-            score_snippet(&mut scorer, &pattern, false, &e, &weights),
-            Some(expected)
-        );
         assert_eq!(
             cross_score("needle", &e, &weights),
             Some(raw * weights.name)

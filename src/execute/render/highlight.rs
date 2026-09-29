@@ -19,14 +19,11 @@ pub(super) struct HighlightPattern {
 }
 
 /// Compiles the current query into field-aware highlight patterns.
-pub(super) fn compile_highlight_patterns(
-    query: &str,
-    cross_field_matching: bool,
-) -> Vec<HighlightPattern> {
+pub(super) fn compile_highlight_patterns(query: &str) -> Vec<HighlightPattern> {
     let mut patterns = Vec::new();
     for term in search::highlight_terms(query) {
         let pattern = build_pattern(&term.value);
-        if cross_field_matching && term.field.is_none() {
+        if term.field.is_none() {
             // Each positive atom can explain a hit in a different display field.
             // Keep parsed modifiers and escaped spaces intact.
             for atom in pattern.atoms.into_iter().filter(|atom| !atom.negative) {

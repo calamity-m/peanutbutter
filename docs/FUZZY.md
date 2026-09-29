@@ -8,27 +8,14 @@ The fuzzy search bar accepts two complementary syntaxes that can be freely combi
 
 Free text searches the snippet name, command block, description, relative path, optional frontmatter name/description, and each individual tag. Language and heading slug are not free-text fields.
 
-By default, the **whole free-text pattern must match within at least one field**. Terms cannot be satisfied by different fields, and exclusions apply within each field's pattern match. Omitting `cross_field_matching` or setting it to `false` preserves this behaviour, scores, ordering, and highlighting.
-
-Opt in through your TOML config:
-
-```toml
-[search]
-cross_field_matching = true
-```
-
-This switch is **TOML-only**; it is not available in `pb settings` or as a CLI flag.
-
-With it enabled:
+Free text always matches across fields:
 
 - Positive terms (Nucleo atoms) are **AND-ed across fields**: every atom must match at least one field, but different atoms may match different fields or tags. A single atom, including one containing an escaped space, must still match within one field; fields and tags are not concatenated.
 - An **unscoped negative atom applies snippet-wide**: a match in any searchable field excludes the snippet. All negative atoms must pass. Plain `!word` excludes a substring, not a fuzzy subsequence.
 - A negative-only query returns surviving snippets with fuzzy score zero, ordered by frecency and the usual tie-breaking.
 - Each positive atom scores only its best weighted field. This changes ranking as well as matching, even for single-term queries; see [Scoring and Ranking](#scoring-and-ranking).
 
-For example, `kitchen eza` finds a snippet named `kitchen sink` in `files/eza.md` even when no field contains both terms. `kitchen !docker` requires a `kitchen` match somewhere and excludes the snippet if any searchable field contains `docker`, including a tag. For an explicitly scoped alternative in **either mode**, use `name:kitchen path:eza`.
-
-Field operators and their scoring are unchanged by this option.
+For example, `kitchen eza` finds a snippet named `kitchen sink` in `files/eza.md` even when no field contains both terms. `kitchen !docker` requires a `kitchen` match somewhere and excludes the snippet if any searchable field contains `docker`, including a tag. For an explicitly scoped alternative, use `name:kitchen path:eza`.
 
 ---
 
@@ -60,11 +47,11 @@ name:deploy path:ops            # heading matches "deploy" AND path contains "op
 tag:docker command:logs         # docker tag AND "logs" in the command block
 ```
 
-**Scoped exclusions apply to every candidate in the selected field**, in both free-text modes. `tag:!docker` rejects a snippet if any tag contains `docker`; `name:!docker` rejects it if either the heading or its slug contains `docker`. Matches outside that field do not exclude it. An untagged snippet passes a negative-only tag query with score zero.
+**Scoped exclusions apply to every candidate in the selected field**. `tag:!docker` rejects a snippet if any tag contains `docker`; `name:!docker` rejects it if either the heading or its slug contains `docker`. Matches outside that field do not exclude it. An untagged snippet passes a negative-only tag query with score zero.
 
 Within one operator value, all positive atoms must still match **the same candidate**. For example, `tag:"deploy service !docker"` requires one tag matching both `deploy` and `service`, and no tag containing `docker`. Unlike `tag:deploy tag:service`, separate tags cannot satisfy those positives.
 
-**Operators combine with free text**, using the free-text matching mode described above:
+**Operators combine with free text**, using the free-text matching rules described above:
 
 ```
 tag:docker logs                 # docker tag AND "logs" anywhere
@@ -83,7 +70,7 @@ These are passed directly to the [nucleo](https://github.com/helix-editor/nucleo
 | `^word` | Prefix match — haystack must start with `word` |
 | `word$` | Suffix match — haystack must end with `word` |
 | `^word$` | Exact match |
-| `!word` | Inverse substring — exclude a contiguous `word` match (field-wide for operators; snippet-wide for unscoped terms in cross-field mode) |
+| `!word` | Inverse substring — exclude a contiguous `word` match (field-wide for operators; snippet-wide for unscoped terms) |
 | `!^word` | Inverse prefix |
 | `!word$` | Inverse suffix |
 
@@ -105,14 +92,13 @@ When the query is empty, results are ordered purely by frecency (recency × freq
 
 When the query is non-empty:
 
-- In default mode, each field matching the whole free-text pattern contributes its **weighted** score — name matches rank higher than command-block matches by default.
-- In cross-field mode, each positive atom contributes only its **best weighted field score** (`max(raw_score × field_weight)`), then scores are summed across atoms. Repeating an atom in additional fields or tags does not stack up extra points. Negative atoms add no score; zero-weight fields still count for matching and exclusions.
+- Each positive atom contributes only its **best weighted field score** (`max(raw_score × field_weight)`), then scores are summed across atoms. Repeating an atom in additional fields or tags does not stack up extra points. Negative atoms add no score; zero-weight fields still count for matching and exclusions.
 - Field operators use the best whole-pattern candidate score, weighted by the selected field. Negative-only operators score zero; zero weights do not disable matching or exclusions. Operator scores are added to the free-text score.
 - The final score is `fuzzy_score + frecency_score × frecency_weight`.
 
 Default field weights remain name **30**, tag **20**, frontmatter name **15**, description **10**, path **10**, and command **8**. Best-field scoring prevents repeated metadata from overwhelming a stronger name match merely by appearing in more fields. It does not guarantee exact-name-first ordering for every query, custom weight configuration, or usage history.
 
-**Compatibility:** best-field scoring differs from default-mode accumulation even for single-term queries: `docker` scores **4980** rather than **6308** for a snippet named `docker ps` with command `docker ps -a` at `plain.md`. It also replaces the earlier cross-field implementation's all-field accumulation. This scoring change does not alter cross-field matching/exclusions, default-mode scores, or field-operator scores. Since `frecency_weight` is unchanged (default **250**), lower fuzzy scores can give usage history more relative influence; tune `[search] frecency_weight` if needed.
+**Migration from v0.29:** cross-field matching replaces the legacy default and the `[search] cross_field_matching` option has been removed. A stale key is ignored with a config-load warning, including when set to `false`. Results and ranking can change even for single-term queries: `docker` scores **4980** rather than **6308** for a snippet named `docker ps` with command `docker ps -a` at `plain.md`. Field-operator scores are unchanged. Since `frecency_weight` is unchanged (default **250**), lower fuzzy scores can give usage history more relative influence; tune `[search] frecency_weight` if needed.
 
 Matching is **case-insensitive** with Unicode smart normalisation (accented characters match their ASCII base).
 
