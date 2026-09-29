@@ -1,6 +1,6 @@
 use crate::config::SearchConfig;
 use crate::frecency::FrecencyStore;
-use crate::fuzzy::{FuzzyScorer, build_pattern, score_snippet, score_snippet_cross_field};
+use crate::fuzzy::{FuzzyScorer, build_pattern, score_snippet};
 use crate::index::{IndexedSnippet, SnippetIndex};
 use std::path::Path;
 
@@ -251,11 +251,7 @@ fn score_query(
 
     let mut total: u32 = 0;
     if !parsed.free_text.is_empty() {
-        total = if config.cross_field_matching {
-            score_snippet_cross_field(scorer, free_pattern, entry, &config.fuzzy)?
-        } else {
-            score_snippet(scorer, free_pattern, false, entry, &config.fuzzy)?
-        };
+        total = score_snippet(scorer, free_pattern, entry, &config.fuzzy)?;
     }
 
     for term in &parsed.terms {
@@ -507,7 +503,7 @@ mod tests {
     }
 
     #[test]
-    fn cross_field_matching_is_opt_in_and_requires_every_positive_term() {
+    fn cross_field_matching_requires_every_positive_term() {
         let index = SnippetIndex::from_files([make_tagged_file(
             "files/eza.md",
             "kitchen sink",
@@ -515,11 +511,8 @@ mod tests {
             "kitchen-sink",
             &["eza", "tools"],
         )]);
-        let mut config = SearchConfig::default();
+        let config = SearchConfig::default();
         for query in ["kitchen eza", "eza kitchen"] {
-            config.cross_field_matching = false;
-            assert!(rank_with_config(&index, query, &config).is_empty());
-            config.cross_field_matching = true;
             let hits = rank_with_config(&index, query, &config);
             assert_eq!(hits.len(), 1);
             assert_eq!(hits[0].snippet.id().as_str(), "files/eza.md#kitchen-sink");
@@ -565,7 +558,6 @@ mod tests {
             make_file("other.md", "kitchen eza", "echo", "name-only"),
         ]);
         let config = SearchConfig {
-            cross_field_matching: true,
             fuzzy: crate::config::FuzzyWeights {
                 name: 3,
                 command: 5,
@@ -622,10 +614,7 @@ mod tests {
             &["eza"],
         );
         kitchen.snippets[0].description = "kitchen utilities".into();
-        let config = SearchConfig {
-            cross_field_matching: true,
-            ..SearchConfig::default()
-        };
+        let config = SearchConfig::default();
         for (query, body, other, exact_score, other_score) in [
             ("docker ps", "docker ps -a", described_compose, 6840, 4190),
             ("docker ps", "docker ps -a", compose, 6840, 4190),
@@ -653,13 +642,10 @@ mod tests {
     }
 
     #[test]
-    fn cross_field_single_atom_uses_best_field_while_legacy_still_accumulates() {
+    fn cross_field_single_atom_uses_best_field() {
         let index =
             SnippetIndex::from_files([make_file("plain.md", "docker ps", "docker ps -a", "exact")]);
-        let mut config = SearchConfig::default();
-        let legacy = rank_with_config(&index, "docker", &config);
-        assert_eq!(legacy[0].fuzzy, Some(6308));
-        config.cross_field_matching = true;
+        let config = SearchConfig::default();
         let hits = rank_with_config(&index, "docker", &config);
         assert_eq!(hits[0].fuzzy, Some(4980));
     }
@@ -676,10 +662,7 @@ mod tests {
                 &["docker"],
             ),
         ]);
-        let config = SearchConfig {
-            cross_field_matching: true,
-            ..SearchConfig::default()
-        };
+        let config = SearchConfig::default();
         let mut store = FrecencyStore::new();
         // One recent use should not erase this fuzzy gap; repeated use should.
         for uses in 1..=6 {
@@ -758,10 +741,7 @@ mod tests {
             make_file("plain.md", "kitchen eza", "echo ready", "exact"),
             kitchen,
         ]);
-        let config = SearchConfig {
-            cross_field_matching: true,
-            ..SearchConfig::default()
-        };
+        let config = SearchConfig::default();
         // A close fuzzy result needs less history to win. The frequency bonus
         // does not decay, so enough old usage can still outweigh an exact name.
         for (uses, age_half_lives, expected_name) in [
@@ -798,61 +778,13 @@ mod tests {
     }
 
     #[test]
-    fn disabled_multiword_scores_and_order_match_direct_legacy_scoring() {
-        let index = SnippetIndex::from_files([
-            make_tagged_file(
-                "a.md",
-                "kitchen eza",
-                "kitchen eza",
-                "both",
-                &["kitchen eza"],
-            ),
-            make_file("b.md", "kitchen eza", "echo", "name"),
-            make_file("eza.md", "kitchen sink", "eza", "split"),
-            make_file("c.md", "unrelated", "echo", "missing"),
-        ]);
-        let config = SearchConfig::default();
-        assert!(!config.cross_field_matching);
-        for query in ["kitchen eza", "eza kitchen", "kitchen eza !docker"] {
-            let pattern = build_pattern(query);
-            let mut scorer = FuzzyScorer::new();
-            let mut expected: Vec<_> = index
-                .iter()
-                .filter_map(|entry| {
-                    score_snippet(&mut scorer, &pattern, false, entry, &config.fuzzy)
-                        .map(|score| (entry.id().as_str(), score))
-                })
-                .collect();
-            expected.sort_by_key(|(_, score)| std::cmp::Reverse(*score));
-            assert_eq!(expected.len(), 2);
-            assert_eq!(expected[0].0, "a.md#both");
-            assert_eq!(expected[1].0, "b.md#name");
-            let hits = rank_with_config(&index, query, &config);
-            let actual: Vec<_> = hits
-                .iter()
-                .map(|hit| {
-                    assert_eq!(hit.combined, f64::from(hit.fuzzy.unwrap()));
-                    (hit.snippet.id().as_str(), hit.fuzzy.unwrap())
-                })
-                .collect();
-            assert_eq!(actual, expected, "{query}");
-        }
-    }
-
-    #[test]
     fn negative_only_queries_exclude_globally_and_keep_zero_score_ranking() {
         let index = SnippetIndex::from_files([
             make_tagged_file("a.md", "alpha", "echo", "a", &["docker"]),
             make_file("b.md", "bravo", "echo", "b"),
             make_file("c.md", "charlie", "echo", "c"),
         ]);
-        let mut config = SearchConfig::default();
-        let legacy = rank_with_config(&index, "!docker", &config);
-        assert_eq!(legacy.len(), 3);
-        assert_eq!(legacy[0].snippet.id().as_str(), "a.md#a");
-        assert!(legacy.iter().all(|hit| hit.fuzzy == Some(0)));
-
-        config.cross_field_matching = true;
+        let config = SearchConfig::default();
         let hits = rank_with_config(&index, "!docker", &config);
         assert_eq!(
             hits.iter()
@@ -904,7 +836,6 @@ mod tests {
         }
         let index = SnippetIndex::from_files(files);
         let config = SearchConfig {
-            cross_field_matching: true,
             fuzzy: crate::config::FuzzyWeights {
                 name: 0,
                 command: 0,
@@ -937,21 +868,16 @@ mod tests {
             // Matches outside tags must not affect a tag-scoped exclusion.
             make_tagged_file("docker.md", "docker", "docker", "docker", &["web", "tools"]),
         ]);
-        for enabled in [false, true] {
-            let config = SearchConfig {
-                cross_field_matching: enabled,
-                ..SearchConfig::default()
-            };
-            for query in [
-                "tag:!docker",
-                "tag:\"!docker !compose\"",
-                "tag:\"!podman !docker\"",
-            ] {
-                let hits = rank_with_config(&index, query, &config);
-                assert_eq!(hits.len(), 1, "{query}, enabled={enabled}");
-                assert_eq!(hits[0].snippet.id().as_str(), "docker.md#docker");
-                assert_eq!(hits[0].fuzzy, Some(0));
-            }
+        let config = SearchConfig::default();
+        for query in [
+            "tag:!docker",
+            "tag:\"!docker !compose\"",
+            "tag:\"!podman !docker\"",
+        ] {
+            let hits = rank_with_config(&index, query, &config);
+            assert_eq!(hits.len(), 1, "{query}");
+            assert_eq!(hits[0].snippet.id().as_str(), "docker.md#docker");
+            assert_eq!(hits[0].fuzzy, Some(0));
         }
     }
 
@@ -959,23 +885,18 @@ mod tests {
     fn scoped_negative_only_tags_allow_untagged_snippets() {
         let index =
             SnippetIndex::from_files([make_file("docker.md", "docker", "docker", "docker")]);
-        for enabled in [false, true] {
-            let config = SearchConfig {
-                cross_field_matching: enabled,
-                ..SearchConfig::default()
-            };
-            for query in ["tag:!docker", "tag:\"!docker !compose\""] {
-                let hits = rank_with_config(&index, query, &config);
-                assert_eq!(hits.len(), 1, "{query}, enabled={enabled}");
-                assert_eq!(hits[0].fuzzy, Some(0));
-            }
-            // Positive and zero-atom patterns still require a candidate tag.
-            for query in ["tag:docker", "tag:\"docker !compose\"", "tag:!"] {
-                assert!(
-                    rank_with_config(&index, query, &config).is_empty(),
-                    "{query}"
-                );
-            }
+        let config = SearchConfig::default();
+        for query in ["tag:!docker", "tag:\"!docker !compose\""] {
+            let hits = rank_with_config(&index, query, &config);
+            assert_eq!(hits.len(), 1, "{query}");
+            assert_eq!(hits[0].fuzzy, Some(0));
+        }
+        // Positive and zero-atom patterns still require a candidate tag.
+        for query in ["tag:docker", "tag:\"docker !compose\"", "tag:!"] {
+            assert!(
+                rank_with_config(&index, query, &config).is_empty(),
+                "{query}"
+            );
         }
     }
 
@@ -984,26 +905,21 @@ mod tests {
         // A duplicate heading gets a suffixed slug: suffix exclusions can
         // match either candidate without matching the other.
         let index = SnippetIndex::from_files([make_file("a.md", "docker", "echo", "docker-2")]);
-        for enabled in [false, true] {
-            let config = SearchConfig {
-                cross_field_matching: enabled,
-                ..SearchConfig::default()
-            };
-            for query in [
-                "name:!docker$",
-                "name:!docker-2$",
-                "name:!^docker$",
-                "name:\"docker !docker-2$\"",
-            ] {
-                assert!(
-                    rank_with_config(&index, query, &config).is_empty(),
-                    "{query}, enabled={enabled}"
-                );
-            }
-            let hits = rank_with_config(&index, "name:!podman", &config);
-            assert_eq!(hits.len(), 1);
-            assert_eq!(hits[0].fuzzy, Some(0));
+        let config = SearchConfig::default();
+        for query in [
+            "name:!docker$",
+            "name:!docker-2$",
+            "name:!^docker$",
+            "name:\"docker !docker-2$\"",
+        ] {
+            assert!(
+                rank_with_config(&index, query, &config).is_empty(),
+                "{query}"
+            );
         }
+        let hits = rank_with_config(&index, "name:!podman", &config);
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].fuzzy, Some(0));
     }
 
     #[test]
@@ -1031,38 +947,33 @@ mod tests {
                 &["deploy service", "deploy-service tools", "web"],
             ),
         ]);
-        for enabled in [false, true] {
-            let config = SearchConfig {
-                cross_field_matching: enabled,
-                ..SearchConfig::default()
-            };
-            let mut scorer = FuzzyScorer::new();
-            let positive = build_pattern("deploy service");
-            let expected = ["deploy service", "deploy-service tools"]
-                .into_iter()
-                .filter_map(|tag| scorer.score(&positive, tag))
-                .max()
-                .unwrap()
-                * config.fuzzy.tag;
-            for query in [
-                "tag:\"deploy service !docker\"",
-                "tag:\"!docker service deploy\"",
-            ] {
-                let hits = rank_with_config(&index, query, &config);
-                assert_eq!(hits.len(), 1, "{query}, enabled={enabled}");
-                assert_eq!(hits[0].snippet.id().as_str(), "clean.md#clean");
-                assert_eq!(hits[0].fuzzy, Some(expected));
-            }
-            // Separate operators may use separate tags; one quoted pattern may not.
-            assert_eq!(
-                rank_with_config(&index, "tag:deploy tag:service tag:!docker", &config).len(),
-                2
-            );
-            assert_eq!(
-                rank_with_config(&index, "tag:\"deploy service\"", &config).len(),
-                2
-            );
+        let config = SearchConfig::default();
+        let mut scorer = FuzzyScorer::new();
+        let positive = build_pattern("deploy service");
+        let expected = ["deploy service", "deploy-service tools"]
+            .into_iter()
+            .filter_map(|tag| scorer.score(&positive, tag))
+            .max()
+            .unwrap()
+            * config.fuzzy.tag;
+        for query in [
+            "tag:\"deploy service !docker\"",
+            "tag:\"!docker service deploy\"",
+        ] {
+            let hits = rank_with_config(&index, query, &config);
+            assert_eq!(hits.len(), 1, "{query}");
+            assert_eq!(hits[0].snippet.id().as_str(), "clean.md#clean");
+            assert_eq!(hits[0].fuzzy, Some(expected));
         }
+        // Separate operators may use separate tags; one quoted pattern may not.
+        assert_eq!(
+            rank_with_config(&index, "tag:deploy tag:service tag:!docker", &config).len(),
+            2
+        );
+        assert_eq!(
+            rank_with_config(&index, "tag:\"deploy service\"", &config).len(),
+            2
+        );
     }
 
     #[test]
@@ -1074,27 +985,24 @@ mod tests {
             "docker-2",
             &["docker", "web"],
         )]);
-        for enabled in [false, true] {
-            let config = SearchConfig {
-                cross_field_matching: enabled,
-                fuzzy: crate::config::FuzzyWeights {
-                    name: 0,
-                    tag: 0,
-                    ..Default::default()
-                },
-                ..SearchConfig::default()
-            };
-            for query in ["tag:!docker", "name:!docker$", "tag:\"web !docker\""] {
-                assert!(
-                    rank_with_config(&index, query, &config).is_empty(),
-                    "{query}, enabled={enabled}"
-                );
-            }
-            for query in ["tag:web", "name:docker", "tag:!podman"] {
-                let hits = rank_with_config(&index, query, &config);
-                assert_eq!(hits.len(), 1);
-                assert_eq!(hits[0].fuzzy, Some(0));
-            }
+        let config = SearchConfig {
+            fuzzy: crate::config::FuzzyWeights {
+                name: 0,
+                tag: 0,
+                ..Default::default()
+            },
+            ..SearchConfig::default()
+        };
+        for query in ["tag:!docker", "name:!docker$", "tag:\"web !docker\""] {
+            assert!(
+                rank_with_config(&index, query, &config).is_empty(),
+                "{query}"
+            );
+        }
+        for query in ["tag:web", "name:docker", "tag:!podman"] {
+            let hits = rank_with_config(&index, query, &config);
+            assert_eq!(hits.len(), 1);
+            assert_eq!(hits[0].fuzzy, Some(0));
         }
     }
 
@@ -1116,20 +1024,14 @@ mod tests {
             let index = SnippetIndex::from_files([make_tagged_file(
                 "a.md", "tools", "echo", "tools", &tags,
             )]);
-            for enabled in [false, true] {
-                let config = SearchConfig {
-                    cross_field_matching: enabled,
-                    ..SearchConfig::default()
-                };
-                let hits = rank_with_config(&index, query, &config);
-                assert_eq!(!hits.is_empty(), survives, "{query}, enabled={enabled}");
-                assert!(hits.iter().all(|hit| hit.fuzzy == Some(0)));
-            }
+            let hits = rank_with_config(&index, query, &SearchConfig::default());
+            assert_eq!(!hits.is_empty(), survives, "{query}");
+            assert!(hits.iter().all(|hit| hit.fuzzy == Some(0)));
         }
     }
 
     #[test]
-    fn cross_field_mode_preserves_scoped_operator_scores_and_restrictions() {
+    fn cross_field_matching_preserves_scoped_operator_restrictions() {
         let index = operator_index();
         for (query, expected) in [
             ("tag:docker logs", vec!["ops/docker.md#ship-service"]),
@@ -1145,30 +1047,14 @@ mod tests {
                 vec!["guides/search.md#search-google"],
             ),
         ] {
-            let mut config = SearchConfig::default();
-            let legacy = rank_with_config(&index, query, &config);
+            let hits = rank_with_config(&index, query, &SearchConfig::default());
             assert_eq!(
-                legacy
-                    .iter()
+                hits.iter()
                     .map(|hit| hit.snippet.id().as_str())
                     .collect::<Vec<_>>(),
                 expected,
                 "{query}"
             );
-            config.cross_field_matching = true;
-            let enabled = rank_with_config(&index, query, &config);
-            let scores = |hits: &[SearchHit<'_>]| {
-                hits.iter()
-                    .map(|hit| {
-                        (
-                            hit.snippet.id().as_str().to_string(),
-                            hit.fuzzy,
-                            hit.combined,
-                        )
-                    })
-                    .collect::<Vec<_>>()
-            };
-            assert_eq!(scores(&enabled), scores(&legacy), "{query}");
         }
     }
 
@@ -1179,30 +1065,19 @@ mod tests {
             make_file("phrase.md", "kitchen eza", "echo", "phrase"),
             make_tagged_file("tags.md", "tools", "echo", "tags", &["kitchen", "eza"]),
         ]);
-        for enabled in [false, true] {
-            let config = SearchConfig {
-                cross_field_matching: enabled,
-                ..SearchConfig::default()
-            };
-            for query in [r"kitchen\ eza", r"'kitchen\ eza"] {
-                let hits = rank_with_config(&index, query, &config);
-                assert_eq!(hits.len(), 1, "{query}, enabled={enabled}");
-                assert_eq!(hits[0].snippet.id().as_str(), "phrase.md#phrase");
-            }
-            assert_eq!(
-                rank_with_config(&index, "kitchen eza", &config).len(),
-                if enabled { 3 } else { 1 }
-            );
+        let config = SearchConfig::default();
+        for query in [r"kitchen\ eza", r"'kitchen\ eza"] {
+            let hits = rank_with_config(&index, query, &config);
+            assert_eq!(hits.len(), 1, "{query}");
+            assert_eq!(hits[0].snippet.id().as_str(), "phrase.md#phrase");
         }
+        assert_eq!(rank_with_config(&index, "kitchen eza", &config).len(), 3);
     }
 
     #[test]
     fn cross_field_matching_preserves_anchors_exact_modifiers_and_normalization() {
         let index = SnippetIndex::from_files([make_file("a.md", "CAFÉ kitchen", "eza", "a")]);
-        let config = SearchConfig {
-            cross_field_matching: true,
-            ..SearchConfig::default()
-        };
+        let config = SearchConfig::default();
         for query in ["^cafe eza$", "'cafe 'EZA", "kitchen$ ^eza$"] {
             assert_eq!(rank_with_config(&index, query, &config).len(), 1, "{query}");
         }
@@ -1223,25 +1098,20 @@ mod tests {
     #[test]
     fn empty_queries_and_nonempty_zero_atom_queries_preserve_score_distinction() {
         let index = tiny_index();
-        for enabled in [false, true] {
-            let config = SearchConfig {
-                cross_field_matching: enabled,
-                ..SearchConfig::default()
+        let config = SearchConfig::default();
+        for query in ["", " \t ", "'", "!", "^", "$"] {
+            assert!(build_pattern(query.trim()).atoms.is_empty());
+            let hits = rank_with_config(&index, query, &config);
+            assert_eq!(hits.len(), 3, "{query:?}");
+            let expected = if query.trim().is_empty() {
+                None
+            } else {
+                Some(0)
             };
-            for query in ["", " \t ", "'", "!", "^", "$"] {
-                assert!(build_pattern(query.trim()).atoms.is_empty());
-                let hits = rank_with_config(&index, query, &config);
-                assert_eq!(hits.len(), 3, "{query:?}, enabled={enabled}");
-                let expected = if query.trim().is_empty() {
-                    None
-                } else {
-                    Some(0)
-                };
-                assert!(
-                    hits.iter()
-                        .all(|hit| hit.fuzzy == expected && hit.combined == 0.0)
-                );
-            }
+            assert!(
+                hits.iter()
+                    .all(|hit| hit.fuzzy == expected && hit.combined == 0.0)
+            );
         }
     }
 
