@@ -69,7 +69,9 @@ pub(super) fn compute_code_actions_filtered(
 ) -> Option<CodeActionResponse> {
     let pos = range.start;
     let mut actions = Vec::new();
-    if let Some(inline) = inline_placeholder_at(content, pos) {
+    if let Some(inline) = inline_placeholder_at(content, pos)
+        && extraction_preserves_prompt(&inline, config_vars)
+    {
         actions.push(extract_code_action(uri, content, &inline, config_vars));
     }
     if let Some(action) = inline_code_action(uri, content, pos, config_vars) {
@@ -92,6 +94,26 @@ pub(super) fn compute_code_actions_filtered(
                 .map(CodeActionOrCommand::CodeAction)
                 .collect(),
         )
+    }
+}
+
+/// Whether moving `inline` into a frontmatter spec keeps the prompt the same.
+/// Inline commands and lists shadow every lower layer, but a file-local spec
+/// only overlays config field by field: a config `default` would start
+/// pre-filling `<@name>`, and an empty `suggestions: []` would let config or
+/// built-in suggestions through. Decline rather than change what Enter
+/// accepts. Inline `:?` extraction is unaffected: its `default_value` ghost
+/// takes priority over any editable `default`.
+fn extraction_preserves_prompt(
+    inline: &InlinePlaceholder,
+    config_vars: &BTreeMap<String, VariableSpec>,
+) -> bool {
+    match inline.kind {
+        InlineSourceKind::Suggestions if inline.suggestion_items().is_empty() => false,
+        InlineSourceKind::Suggestions | InlineSourceKind::Command => config_vars
+            .get(&inline.name)
+            .is_none_or(|spec| spec.default.is_none()),
+        InlineSourceKind::Default => true,
     }
 }
 
@@ -1254,5 +1276,83 @@ mod code_action_tests {
         let round_tripped = apply_edits(&with_frontmatter, edits(&inlined[0]));
         let body_after = round_tripped.split("---\n").last().unwrap();
         assert_eq!(body_after, body);
+    }
+
+    #[test]
+    fn extract_suggestion_list_declines_when_config_default_would_apply() {
+        // An inline list ignores config `default`, but a frontmatter spec only
+        // overlays config field by field, so `<@x>` would start pre-filling it.
+        let content = "## D\n\n```bash\necho <@x:[a,b]>\n```\n";
+        let refactors = |config: &BTreeMap<String, VariableSpec>| {
+            compute_code_actions_filtered(
+                &uri(),
+                content,
+                range(3, 7),
+                config,
+                Some(&[CodeActionKind::REFACTOR]),
+            )
+        };
+        let mut config = BTreeMap::new();
+        config.insert(
+            "x".to_string(),
+            VariableSpec {
+                default: Some("fallback".to_string()),
+                ..Default::default()
+            },
+        );
+        assert!(refactors(&config).is_none());
+
+        // Config sources the extracted spec still shadows don't block it.
+        config.insert(
+            "x".to_string(),
+            VariableSpec {
+                suggestions: vec!["z".to_string()],
+                default_value: Some("ghost".to_string()),
+                ..Default::default()
+            },
+        );
+        let actions = refactors(&config).unwrap();
+        assert!(action_title(&actions[0]).contains("Extract `<@x>`"));
+    }
+
+    #[test]
+    fn extract_declines_empty_suggestion_list() {
+        // `suggestions: []` would let config or builtin suggestions through.
+        let content = "## D\n\n```bash\necho <@file:[]>\n```\n";
+        assert!(
+            compute_code_actions_filtered(
+                &uri(),
+                content,
+                range(3, 7),
+                &BTreeMap::new(),
+                Some(&[CodeActionKind::REFACTOR]),
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn extract_command_declines_when_config_default_would_apply() {
+        // Same exposure as lists: an inline command ignores config `default`,
+        // but the extracted `<@x>` would start pre-filling it.
+        let content = "## D\n\n```bash\necho <@x:git branch>\n```\n";
+        let mut config = BTreeMap::new();
+        config.insert(
+            "x".to_string(),
+            VariableSpec {
+                default: Some("fallback".to_string()),
+                ..Default::default()
+            },
+        );
+        assert!(
+            compute_code_actions_filtered(
+                &uri(),
+                content,
+                range(3, 7),
+                &config,
+                Some(&[CodeActionKind::REFACTOR]),
+            )
+            .is_none()
+        );
     }
 }
