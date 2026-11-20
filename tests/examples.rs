@@ -85,6 +85,27 @@ fn bundled_starter_frontmatter_parses_default_value() {
 }
 
 #[test]
+fn bundled_starter_uses_inline_suggestion_list() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let path = root.join("examples/starter_snippets.md");
+    let content = fs::read_to_string(&path).unwrap();
+    let parsed = parse_file(&path, &root, &content);
+    let snippet = parsed
+        .snippets
+        .iter()
+        .find(|snippet| snippet.name == "Send an HTTP request")
+        .expect("starter snippet with an inline suggestion list");
+    assert_eq!(
+        snippet.variables[0].source,
+        peanutbutter::domain::VariableSource::Suggestions(
+            ["GET", "POST", "PUT", "PATCH", "DELETE"]
+                .map(String::from)
+                .to_vec()
+        )
+    );
+}
+
+#[test]
 fn simple_file_frontmatter_is_parsed() {
     let root = fixtures_root();
     let path = root.join("simple/snippets.md");

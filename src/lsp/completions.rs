@@ -103,6 +103,10 @@ pub(super) fn compute_completions(
     // easily detect from raw text), so we offer them whenever the cursor
     // follows a `<#` token.
     if let Some(at_pos) = before_cursor.rfind("<#") {
+        // `<#` is reserved inside an inline `[...]` list and never expands.
+        if inside_suggestion_list(before_cursor, at_pos) {
+            return None;
+        }
         let var_prefix = &before_cursor[at_pos + 2..];
         let parsed =
             parser::parse_file(std::path::Path::new(""), std::path::Path::new(""), content);
@@ -183,6 +187,19 @@ pub(super) fn compute_completions(
     }
 
     None
+}
+
+/// Whether the `<#` at `hash_pos` sits inside a still-open `<@name:[...`
+/// placeholder whose source is an inline suggestion list.
+fn inside_suggestion_list(before_cursor: &str, hash_pos: usize) -> bool {
+    let prefix = &before_cursor[..hash_pos];
+    let Some(at_pos) = prefix.rfind("<@") else {
+        return false;
+    };
+    parser::find_placeholder_end(prefix, at_pos + 2).is_none()
+        && prefix[at_pos + 2..]
+            .split_once(':')
+            .is_some_and(|(_, source)| source.trim_start().starts_with('['))
 }
 
 fn completion_item(label: &str, documentation: &str, kind: CompletionItemKind) -> CompletionItem {

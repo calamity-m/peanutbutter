@@ -1048,6 +1048,27 @@ mod dependent_lsp_tests {
     }
 
     #[test]
+    fn no_dependent_completion_inside_suggestion_list() {
+        let content = "## D\n\n```bash\n<@a> <@b:[x,<#\n```\n";
+        let line = content.lines().nth(3).unwrap();
+        assert!(
+            compute_completions(content, pos(3, line.len() as u32), &empty_config_vars()).is_none()
+        );
+
+        // A closed list earlier on the line does not block a later command.
+        let content = "## D\n\n```bash\n<@a> <@b:[x]> <@c:ls <#\n```\n";
+        let line = content.lines().nth(3).unwrap();
+        let resp =
+            compute_completions(content, pos(3, line.len() as u32), &empty_config_vars()).unwrap();
+        let CompletionResponse::Array(items) = resp else {
+            panic!("expected array");
+        };
+        let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
+        assert!(labels.contains(&"a"), "got {labels:?}");
+        assert!(labels.contains(&"b"), "got {labels:?}");
+    }
+
+    #[test]
     fn default_dependent_completion_uses_earlier_prompt_order() {
         let content = "## D\n\n```bash\n<@a> <@out:?<#> <@later>\n```\n";
         let line_idx = 3;

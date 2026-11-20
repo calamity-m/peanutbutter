@@ -200,14 +200,27 @@ pub(super) fn lint_dependent_references(
 
 /// Find all `<#name>` token spans in `content`. Returns
 /// `(name, line_1based, col_start, col_end)` tuples in document order.
-/// Backslash-escaped `\<#...>` is skipped. The returned columns are 0-based
-/// byte offsets within the line.
+/// Backslash-escaped `\<#...>` is skipped, and so is everything inside an
+/// inline `<@name:[...]>` list: `<#` is reserved there and never a reference,
+/// so it must not claim the span of a real reference later in the file.
+/// The returned columns are 0-based byte offsets within the line.
 fn find_dependent_ref_spans(content: &str) -> Vec<(String, usize, usize, usize)> {
     let mut out = Vec::new();
     for (line_idx, line) in content.lines().enumerate() {
         let bytes = line.as_bytes();
         let mut i = 0;
         while i < bytes.len() {
+            if bytes[i] == b'<'
+                && i + 1 < bytes.len()
+                && bytes[i + 1] == b'@'
+                && let Some(end) = parser::find_placeholder_end(line, i + 2)
+                && line[i + 2..end]
+                    .split_once(':')
+                    .is_some_and(|(_, source)| parser::parse_suggestion_list(source).is_some())
+            {
+                i = end + 1;
+                continue;
+            }
             // Skip escaped \<#...>
             if bytes[i] == b'\\'
                 && i + 2 < bytes.len()
@@ -366,7 +379,7 @@ fn command_sources(
                     out.push((variable.name.clone(), command));
                 }
             }
-            VariableSource::Default(_) => {}
+            VariableSource::Default(_) | VariableSource::Suggestions(_) => {}
         }
     }
     out

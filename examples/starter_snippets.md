@@ -115,6 +115,14 @@ Quick static server on `<@port:?8000>`. Useful for sharing a build folder or pre
 python3 -m http.server <@port:?8000>
 ```
 
+## Send an HTTP request
+
+The method comes from an inline suggestion list: pick one or type another. The list lives in the placeholder itself because only this snippet uses it; move it to frontmatter `suggestions` once several snippets share it.
+
+```bash
+curl -sS -X <@method:[GET,POST,PUT,PATCH,DELETE]> <@url>
+```
+
 ## Placeholder syntax cheat sheet
 
 This snippet uses a `text` fence as a preview-only example. Peanutbutter shows it in the picker preview but picks the shell fence below as the runnable body — so selecting it runs `pb edit`, not the cheatsheet text.
@@ -123,6 +131,7 @@ This snippet uses a `text` fence as a preview-only example. Peanutbutter shows i
 <@name>             prompt for a value
 <@name:?default>    prompt with an accepted ghost default
 <@name:command>     prompt with suggestions from a shell command
+<@name:[a,b,c]>     prompt with a fixed inline suggestion list
 
 inside a suggestion command, reference an earlier prompt's value:
   <#name>           shell-quoted splice of the confirmed value

@@ -291,6 +291,8 @@ impl SuggestionProvider for SystemSuggestionProvider {
         };
         match &variable.source {
             VariableSource::Command(cmd) => run(cmd),
+            // Static lists never execute, so `allow_commands` doesn't gate them.
+            VariableSource::Suggestions(items) => Ok(items.clone()),
             VariableSource::Default(_) => Ok(Vec::new()),
             // An inline hint only supplies ghost text; suggestions resolve
             // exactly like a free-form placeholder.
@@ -341,7 +343,7 @@ impl SuggestionProvider for SystemSuggestionProvider {
     ) -> Option<String> {
         match &variable.source {
             VariableSource::Command(cmd) => Some(cmd.clone()),
-            VariableSource::Default(_) => None,
+            VariableSource::Default(_) | VariableSource::Suggestions(_) => None,
             VariableSource::Free | VariableSource::Hint(_) => {
                 if let Some(config) = local_variables.get(&variable.name) {
                     if !config.suggestions.is_empty() {
@@ -371,7 +373,10 @@ impl SuggestionProvider for SystemSuggestionProvider {
         _confirmed: &BTreeMap<String, String>,
     ) -> Option<String> {
         match &variable.source {
-            VariableSource::Default(_) | VariableSource::Command(_) => None,
+            // Inline sources shadow reusable specs, including their defaults.
+            VariableSource::Default(_)
+            | VariableSource::Command(_)
+            | VariableSource::Suggestions(_) => None,
             // A reusable-spec default still pre-fills a hint placeholder; the
             // hint only shows once the buffer is cleared.
             VariableSource::Free | VariableSource::Hint(_) => local_variables

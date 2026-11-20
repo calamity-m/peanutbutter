@@ -433,9 +433,9 @@ pub(crate) fn load_prompt_state<P: SuggestionProvider>(
             crate::domain::VariableSource::Free => {
                 provider.default_value(&variable, &prompt.local_variables, &confirmed)
             }
-            crate::domain::VariableSource::Command(_) | crate::domain::VariableSource::Hint(_) => {
-                None
-            }
+            crate::domain::VariableSource::Command(_)
+            | crate::domain::VariableSource::Suggestions(_)
+            | crate::domain::VariableSource::Hint(_) => None,
         }
         .filter(|value| !value.is_empty());
         if let Some(ghost) = ghost {

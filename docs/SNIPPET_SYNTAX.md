@@ -65,8 +65,8 @@ Each variable spec may include:
 
 These specs apply only to snippets in the same markdown file. They do not
 apply to other files. The peanutbutter LSP can refactor between inline
-`<@name:?default>` / `<@name:command>` placeholders and equivalent
-`variables.<name>` frontmatter specs with editor code actions.
+`<@name:?default>` / `<@name:command>` / `<@name:[a,b]>` placeholders and
+equivalent `variables.<name>` frontmatter specs with editor code actions.
 
 Malformed or unsupported frontmatter variable specs are ignored during normal
 execution. Run `pb lint` to validate supported frontmatter syntax and variable
@@ -193,9 +193,11 @@ The source variants at a glance:
 | `<@name:@hint>`     | deprecated ghost hint | empty value; hint is display-only         |
 | `<@name:?default>`  | accepted ghost default | the default becomes the value             |
 | `<@name:command>`   | suggestion command | selected suggestion (or empty with none)     |
+| `<@name:[a,b,c]>`   | inline suggestion list | selected suggestion (or empty with none) |
 
 Inside defaults and suggestion commands, `<#name>` and `<#name:raw>` reference
 earlier confirmed values — see [Dependent Variables](#dependent-variables).
+Inline suggestion lists are static and never expand them.
 
 ### Free-form Input
 
@@ -322,6 +324,68 @@ timeout_ms = 2000
 allow_commands = true
 ```
 
+### Inline Suggestion List
+
+```text
+<@name:[a,b,c]>
+```
+
+Offers a fixed list of suggestions without running a shell command. The user
+can pick a suggestion or type a different value, the same as with frontmatter
+`suggestions`. Use it for a short list that only one snippet needs; when
+several snippets share a list, define it once as frontmatter
+`variables.<name>.suggestions` instead.
+
+Example:
+
+```sh
+deploy --env <@env:[dev,stage,prod]>
+```
+
+Grammar:
+
+- The source is a list when it starts with `[` and ends with an unescaped `]`.
+  Whitespace around the brackets is ignored. Any other source keeps its usual
+  meaning.
+- Items are separated by `,` and trimmed, so `[dev, stage]` is the same as
+  `[dev,stage]`. Items may contain spaces and `:`.
+- Wrap an item in double quotes to keep commas, `]`, or surrounding spaces as
+  part of it: `[a, "b,c", " padded "]`. The quotes are not part of the value.
+  A `"` only starts a quoted item at the beginning of an item; elsewhere, as in
+  `a"b`, it is literal. Single quotes are always literal, so `['b,c']` is the
+  two items `'b` and `c'`.
+- Alternatively, escape with a backslash, inside or outside quotes: `\,`, `\]`,
+  `\"`, and `\\` stand for a literal comma, closing bracket, quote, and
+  backslash. `[a, b\,c]` is the same list as `[a, "b,c"]`, and `\"` lets an
+  item start with a literal quote. Any other backslash is kept as written, so
+  `[C:\tmp]` works.
+- An item cannot contain `>`, even inside quotes, because `>` ends the
+  placeholder. Put such values in frontmatter `suggestions`.
+- `<#` is reserved inside lists, even inside quotes: items are never expanded as
+  dependent references. For one value built from an earlier answer, use a
+  default such as `<@zone:?<#region>a>`; for several, use a suggestion command.
+  Write `\<#` for a literal `<#`.
+
+Like any inline source, a list takes precedence over frontmatter, config, and
+built-in suggestions for that name, and reusable `default` / `default_value`
+are not applied. Lists never execute anything, so they still work with
+`[suggestion_commands] allow_commands = false`.
+
+A malformed list still runs: empty items are dropped and `[]` offers no
+suggestions. An unterminated quote runs to the end of the list, and text after
+a closing quote is joined to the item. `pb lint` reports
+`lint/invalid-suggestion-list` as an error for an empty list or item, an
+unquoted, unescaped `]` before the end, an unterminated quote, text after a
+closing quote, or `<#` in an item. It warns when an inline command starts with
+`[` but contains no `]` outside quotes, such as `<@env:[dev,stage>`, because
+that source still runs as a shell command.
+
+Compatibility: before inline lists, every source not starting with `?` or `@`
+ran as a shell command. A command that both starts with `[` and ends with `]`,
+such as `<@x:[ -d build ]>`, is now a one-item list. A bare test like that
+prints nothing, so it never produced suggestions. A command that only starts
+with a test, such as `[ -d .git ] && git branch`, is unaffected.
+
 ### Built-in Variable Names
 
 Some free-form variable names have built-in suggestions:
@@ -342,7 +406,7 @@ A `default_value` is mutually exclusive with `default`, `suggestions`,
 Resolution order is:
 
 1. Inline placeholder source (`<@target:?world>`, deprecated
-   `<@target:@hint>`, or `<@target:command>`).
+   `<@target:@hint>`, `<@target:command>`, or `<@target:[a,b]>`).
 2. File-local frontmatter spec for that variable.
 3. Config-defined variable spec.
 4. Built-in suggestions for `file` and `directory`.

@@ -107,6 +107,7 @@ cp <@source> <@destination>
 - Free-form placeholder: `<@name>`
 - Accepted ghost default: `<@name:?default>` (use frontmatter/config `default_value` for the reusable equivalent)
 - Suggestion command: `<@name:command>`
+- Inline suggestion list: `<@name:[a,b,c]>` (static, never runs a command; double-quote items containing commas, e.g. `[a, "b,c"]`; prefer frontmatter `suggestions` when several snippets share the list)
 - Use dependent references only when the syntax reference says they are valid for that placeholder source.
 - Optional YAML frontmatter can define file metadata and file-local variable specs.
 

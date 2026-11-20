@@ -6,6 +6,7 @@ mod deprecated;
 mod frontmatter;
 mod gc;
 mod output;
+mod placeholders;
 mod structure;
 mod suppression;
 
@@ -49,6 +50,9 @@ pub const CODE_INVALID_DEPENDENT_REFERENCE: &str = "lint/invalid-dependent-refer
 pub const CODE_RAW_DEFAULT_UNTRUSTED_UPSTREAM: &str = "lint/raw-default-untrusted-upstream";
 /// The same variable name and command appear inline in multiple snippets in the same file.
 pub const CODE_DUPLICATE_INLINE_COMMAND: &str = "lint/duplicate-inline-command";
+/// An inline `<@name:[...]>` suggestion list is malformed, or an inline
+/// command looks like an unterminated one.
+pub const CODE_INVALID_SUGGESTION_LIST: &str = "lint/invalid-suggestion-list";
 /// `default_value` is combined with a mutually exclusive input source.
 pub const CODE_DEFAULT_VALUE_CONFLICT: &str = "lint/default-value-conflict";
 /// A snippet or reusable variable spec uses the deprecated hint source.
@@ -186,6 +190,7 @@ pub fn run<W: Write>(
         findings.extend(structure::lint_duplicate_slugs(file));
         findings.extend(frontmatter::lint_unused_file_variables(file));
         findings.extend(commands::lint_static_inline_commands(file));
+        findings.extend(commands::lint_inline_suggestion_lists(file));
         findings.extend(commands::lint_duplicate_inline_commands(file));
         findings.extend(dependent_refs::lint_dependent_references(
             file,
@@ -252,6 +257,7 @@ pub fn lint_file(path: &Path, root: &Path, content: &str, config: &AppConfig) ->
     findings.extend(structure::lint_duplicate_slugs(&ctx));
     findings.extend(frontmatter::lint_unused_file_variables(&ctx));
     findings.extend(commands::lint_static_inline_commands(&ctx));
+    findings.extend(commands::lint_inline_suggestion_lists(&ctx));
     findings.extend(commands::lint_duplicate_inline_commands(&ctx));
     findings.extend(dependent_refs::lint_dependent_references(
         &ctx,
@@ -834,8 +840,8 @@ mod tests {
 mod dependent_tests {
     use super::*;
     use crate::config::{
-        FrecencyConfig, FuzzyWeights, Paths, SearchConfig, SuggestionCommandsConfig, Theme,
-        UiConfig,
+        FrecencyConfig, FuzzyWeights, LintRuleConfig, Paths, SearchConfig,
+        SuggestionCommandsConfig, Theme, UiConfig,
     };
     use std::collections::BTreeMap;
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -1079,6 +1085,149 @@ mod dependent_tests {
             .filter(|f| f.code == CODE_RAW_DEFAULT_UNTRUSTED_UPSTREAM)
             .collect();
         assert_eq!(warnings.len(), 1, "got {:?}", result.findings);
+    }
+
+    fn lint_body(prefix: &str, body: &str) -> LintResult {
+        let root = temp_dir(prefix);
+        fs::write(
+            root.join("snippets.md"),
+            format!("## Demo\n\n```bash\n{body}\n```\n"),
+        )
+        .unwrap();
+        lint(root)
+    }
+
+    fn findings_with_code<'a>(result: &'a LintResult, code: &str) -> Vec<&'a LintFinding> {
+        result.findings.iter().filter(|f| f.code == code).collect()
+    }
+
+    #[test]
+    fn valid_suggestion_list_has_no_findings() {
+        let result = lint_body(
+            "list-valid",
+            r#"deploy <@env:[dev, stage\, eu, "us, east", \<#lit>]>"#,
+        );
+        assert!(result.findings.is_empty(), "got {:?}", result.findings);
+    }
+
+    #[test]
+    fn malformed_suggestion_lists_are_errors_with_spans() {
+        for (body, needle) in [
+            ("deploy <@env:[]>", "empty"),
+            ("deploy <@env:[dev,,prod]>", "empty item"),
+            ("deploy <@env:[dev,]>", "empty item"),
+            ("deploy <@env:[dev]x,prod]>", "unescaped ']'"),
+            ("deploy <@env:[<#region>a,b]>", "<# references"),
+            (r#"deploy <@env:[dev, "x]>"#, "unterminated quoted item"),
+            (r#"deploy <@env:["a"b]>"#, "text after a closing quote"),
+        ] {
+            let result = lint_body("list-malformed", body);
+            let found = findings_with_code(&result, CODE_INVALID_SUGGESTION_LIST);
+            assert_eq!(found.len(), 1, "{body}: got {:?}", result.findings);
+            let finding = found[0];
+            assert_eq!(finding.severity, LintSeverity::Error, "{body}");
+            assert!(
+                finding.message.contains(needle),
+                "{body}: {}",
+                finding.message
+            );
+            // The placeholder sits on line 4 (heading, blank, fence, body).
+            assert_eq!(finding.line, Some(4), "{body}");
+            assert_eq!(finding.col_start, Some(7), "{body}");
+            assert_eq!(finding.col_end, Some(body.len()), "{body}");
+        }
+    }
+
+    #[test]
+    fn reserved_reference_in_list_is_not_linted_as_a_dependent_reference() {
+        let result = lint_body("list-reserved-ref", "<@env:[<#nope>a]>");
+        assert!(
+            !result
+                .findings
+                .iter()
+                .any(|f| f.code == CODE_UNKNOWN_VARIABLE_REFERENCE),
+            "got {:?}",
+            result.findings
+        );
+    }
+
+    #[test]
+    fn dependent_reference_span_skips_reserved_reference_in_list() {
+        let result = lint_body(
+            "list-ref-span",
+            "<@env:[<#ghost>a]>\n<@target:echo <#ghost>>",
+        );
+        let unknown = findings_with_code(&result, CODE_UNKNOWN_VARIABLE_REFERENCE);
+        assert_eq!(unknown.len(), 1, "got {:?}", result.findings);
+        assert_eq!(unknown[0].line, Some(5));
+        assert_eq!(unknown[0].col_start, Some(14));
+    }
+
+    #[test]
+    fn unterminated_suggestion_list_command_is_a_warning() {
+        // A `]` inside quotes does not close the list.
+        for body in ["deploy <@env:[dev,stage>", r#"deploy <@env:[dev, "x]">"#] {
+            let result = lint_body("list-unterminated", body);
+            let found = findings_with_code(&result, CODE_INVALID_SUGGESTION_LIST);
+            assert_eq!(found.len(), 1, "{body}: got {:?}", result.findings);
+            assert_eq!(found[0].severity, LintSeverity::Warning, "{body}");
+            assert!(found[0].message.contains("unterminated"), "{body}");
+        }
+    }
+
+    #[test]
+    fn bracketed_test_commands_are_not_unterminated_lists() {
+        for body in [
+            "<@branch:[ -d .git ] && git branch --format=%(refname:short)>",
+            "<@dir:[[ -d src ]] && ls src>",
+            r#"<@env:[ "$ENV" = prod ] && echo prod>"#,
+            r"<@x:[a,b\]>",
+        ] {
+            let result = lint_body("list-test-command", body);
+            let found = findings_with_code(&result, CODE_INVALID_SUGGESTION_LIST);
+            let expected = usize::from(body.ends_with(r"\]>"));
+            assert_eq!(found.len(), expected, "{body}: got {:?}", result.findings);
+        }
+    }
+
+    #[test]
+    fn invalid_suggestion_list_can_be_suppressed_by_command_glob() {
+        let root = temp_dir("list-suppress");
+        fs::write(
+            root.join("snippets.md"),
+            "## Demo\n\n```bash\ndeploy <@env:[dev,]> <@other:[a,,b]>\n```\n",
+        )
+        .unwrap();
+        let mut cfg = config(root);
+        cfg.lint.insert(
+            "invalid-suggestion-list".to_string(),
+            LintRuleConfig {
+                ignore_command: vec!["*dev*".to_string()],
+                ..LintRuleConfig::default()
+            },
+        );
+        let mut out = Vec::new();
+        let result = run(
+            &cfg,
+            LintOptions {
+                strict: false,
+                json: false,
+            },
+            &mut out,
+        )
+        .unwrap();
+        let found = findings_with_code(&result, CODE_INVALID_SUGGESTION_LIST);
+        assert_eq!(found.len(), 1, "got {:?}", result.findings);
+        assert!(found[0].message.contains("'other'"));
+    }
+
+    #[test]
+    fn suggestion_list_is_not_a_static_inline_command() {
+        let result = lint_body("list-not-static", "<@env:[dev,stage]> <@x:printf a>");
+        let found = findings_with_code(&result, CODE_STATIC_INLINE_COMMAND);
+        assert_eq!(found.len(), 1, "got {:?}", result.findings);
+        assert!(found[0].message.contains("'x'"));
+        assert!(found[0].detail.as_deref().unwrap().contains("<@x:[a,b]>"));
     }
 
     #[test]

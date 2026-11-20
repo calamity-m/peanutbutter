@@ -17,16 +17,37 @@ const FRONTMATTER_SCAFFOLD: &str =
 enum InlineSourceKind {
     Default,
     Command,
+    /// An inline `[...]` list; `value` keeps the raw source, see
+    /// [`InlinePlaceholder::suggestion_items`].
+    Suggestions,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct InlinePlaceholder {
     name: String,
     kind: InlineSourceKind,
+    /// Raw source text after `:` (and after `?` for defaults).
     value: String,
     line: u32,
     start: usize,
     end: usize,
+}
+
+impl InlinePlaceholder {
+    /// Parsed items of an inline list (empty for other kinds). Lists compare
+    /// by items, so `[a,b]` and `[ a , b ]` collapse together.
+    fn suggestion_items(&self) -> Vec<String> {
+        inline_suggestion_items(self.kind, &self.value)
+    }
+}
+
+fn inline_suggestion_items(kind: InlineSourceKind, value: &str) -> Vec<String> {
+    match kind {
+        InlineSourceKind::Suggestions => parser::parse_suggestion_list(value)
+            .map(|list| list.items)
+            .unwrap_or_default(),
+        InlineSourceKind::Default | InlineSourceKind::Command => Vec::new(),
+    }
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
@@ -190,27 +211,28 @@ fn inline_code_action(
     }
     let parsed = parser::parse_file(std::path::Path::new(""), std::path::Path::new(""), content);
     let spec = parsed.frontmatter.variables.get(&name)?;
-    if !spec.suggestions.is_empty() {
-        return None;
-    }
     // Inlining removes the whole spec, so only offer it when the spec is a
     // single non-deprecated source that has an inline equivalent.
     if spec.hint.is_some() {
         return None;
     }
-    let (kind, value) = match (&spec.default_value, &spec.command, &spec.default) {
-        (Some(default), None, None) => (InlineSourceKind::Default, default.as_str()),
-        (None, Some(command), None) => (InlineSourceKind::Command, command.as_str()),
+    let source = match (
+        &spec.default_value,
+        &spec.command,
+        &spec.default,
+        spec.suggestions.as_slice(),
+    ) {
+        (Some(default), None, None, []) => format!("?{default}"),
+        (None, Some(command), None, []) => command.clone(),
+        // Skipped when an item can't be written inline (e.g. contains `>`).
+        (None, None, None, items @ [_, ..]) => parser::format_suggestion_list(items)?,
         _ => return None,
     };
     let target = first_placeholder(content, &name)?;
     if target.has_source {
         return None;
     }
-    let inline_text = match kind {
-        InlineSourceKind::Default => format!("<@{}:?{}>", name, value),
-        InlineSourceKind::Command => format!("<@{}:{}>", name, value),
-    };
+    let inline_text = format!("<@{name}:{source}>");
     let mut title = format!("Inline frontmatter variable `{name}`");
     let usages = placeholder_usage_count(content, &name);
     if usages > 1 {
@@ -258,15 +280,9 @@ fn inline_placeholder_at(content: &str, pos: Position) -> Option<InlinePlacehold
                 if !valid_variable_name(name) {
                     return None;
                 }
-                let (kind, value) = if let Some(default) = rest.strip_prefix('?') {
-                    (InlineSourceKind::Default, default)
-                } else if rest.starts_with('@') {
-                    // Deprecated hints remain recognized by the parser, but
-                    // authoring code actions must not generate equivalent specs.
+                let Some((kind, value)) = classify_inline_source(rest) else {
                     i = end;
                     continue;
-                } else {
-                    (InlineSourceKind::Command, rest)
                 };
                 return Some(InlinePlaceholder {
                     name: name.to_string(),
@@ -283,6 +299,23 @@ fn inline_placeholder_at(content: &str, pos: Position) -> Option<InlinePlacehold
         }
     }
     None
+}
+
+/// Classify the raw text after `<@name:` the same way the parser does, for
+/// the source kinds code actions can move to and from frontmatter. Returns
+/// `None` for deprecated hints: the parser keeps them reserved, but authoring
+/// actions must not generate equivalent specs or treat their display text as
+/// an executable command.
+fn classify_inline_source(source: &str) -> Option<(InlineSourceKind, &str)> {
+    if let Some(default) = source.strip_prefix('?') {
+        Some((InlineSourceKind::Default, default))
+    } else if source.starts_with('@') {
+        None
+    } else if parser::parse_suggestion_list(source).is_some() {
+        Some((InlineSourceKind::Suggestions, source))
+    } else {
+        Some((InlineSourceKind::Command, source))
+    }
 }
 
 /// Every placeholder in `content` whose name, source kind, and value match
@@ -305,20 +338,22 @@ fn matching_inline_placeholders(
                 let inner = &line[start + 2..end - 1];
                 if let Some((name, rest)) = inner.split_once(':') {
                     let name = name.trim();
-                    let (kind, value) = if let Some(default) = rest.strip_prefix('?') {
-                        (InlineSourceKind::Default, default)
-                    } else if rest.starts_with('@') {
-                        // Keep deprecated hints reserved rather than treating
-                        // their display text as an executable command source.
+                    let Some((kind, value)) = classify_inline_source(rest) else {
                         i = end;
                         continue;
-                    } else {
-                        (InlineSourceKind::Command, rest)
+                    };
+                    let same_source = match kind {
+                        InlineSourceKind::Suggestions => {
+                            inline_suggestion_items(kind, value) == target.suggestion_items()
+                        }
+                        InlineSourceKind::Default | InlineSourceKind::Command => {
+                            value == target.value
+                        }
                     };
                     if valid_variable_name(name)
                         && name == target.name
                         && kind == target.kind
-                        && value == target.value
+                        && same_source
                     {
                         matches.push(InlinePlaceholder {
                             name: name.to_string(),
@@ -385,6 +420,12 @@ fn spec_matches_inline(spec: &VariableSpec, inline: &InlinePlaceholder) -> bool 
         }
         InlineSourceKind::Command => {
             spec.command.as_deref() == Some(inline.value.as_str()) && spec.default.is_none()
+        }
+        InlineSourceKind::Suggestions => {
+            spec.suggestions == inline.suggestion_items()
+                && spec.command.is_none()
+                && spec.default.is_none()
+                && spec.default_value.is_none()
         }
     }
 }
@@ -465,13 +506,31 @@ fn remove_variable_spec_edit(lines: &[&str], name: &str) -> Option<TextEdit> {
 }
 
 fn variable_spec_text(inline: &InlinePlaceholder) -> String {
+    format!("  {}:\n{}", inline.name, spec_source_lines(inline))
+}
+
+/// The YAML written for the extracted source under a `  <name>:` entry, one
+/// level deeper (4 spaces) and newline-terminated.
+fn spec_source_lines(inline: &InlinePlaceholder) -> String {
     let key = inline_source_key(inline.kind);
-    format!(
-        "  {}:\n    {}: {}\n",
-        inline.name,
-        key,
-        yaml_scalar(&inline.value)
-    )
+    match inline.kind {
+        // Block form: `yaml_scalar` quotes for block context only, and an item
+        // like `a,b` or `c]` would split or break a flow `[...]` sequence.
+        InlineSourceKind::Suggestions => {
+            let items = inline.suggestion_items();
+            if items.is_empty() {
+                return format!("    {key}: []\n");
+            }
+            let mut out = format!("    {key}:\n");
+            for item in items {
+                out.push_str(&format!("      - {}\n", yaml_scalar(&item)));
+            }
+            out
+        }
+        InlineSourceKind::Default | InlineSourceKind::Command => {
+            format!("    {key}: {}\n", yaml_scalar(&inline.value))
+        }
+    }
 }
 
 fn variable_spec_text_preserving(
@@ -480,24 +539,8 @@ fn variable_spec_text_preserving(
     end_line: usize,
     inline: &InlinePlaceholder,
 ) -> String {
-    let source_key = inline_source_key(inline.kind);
-    // `default_value` is a source, not a composable prompt option. Extracting
-    // inline `:?` must remove every mutually-exclusive field, including a
-    // block-form suggestions list.
-    let replaced_keys: &[&str] = match inline.kind {
-        InlineSourceKind::Default => {
-            &["default_value", "default", "command", "hint", "suggestions"]
-        }
-        // Retained hints can compose with commands, so extraction must not
-        // silently discard their compatibility behavior.
-        InlineSourceKind::Command => &["default", "command"],
-    };
-    let mut out = format!(
-        "{}\n    {}: {}\n",
-        lines[decl_line],
-        source_key,
-        yaml_scalar(&inline.value)
-    );
+    let replaced_keys = replaced_spec_keys(inline.kind);
+    let mut out = format!("{}\n{}", lines[decl_line], spec_source_lines(inline));
     let mut skip_suggestions_list = false;
     for line in &lines[decl_line + 1..end_line] {
         let trimmed = line.trim_start();
@@ -526,10 +569,30 @@ fn variable_spec_text_preserving(
     out
 }
 
+/// Spec keys an extraction overwrites, so the frontmatter entry behaves the
+/// way the inline source did.
+fn replaced_spec_keys(kind: InlineSourceKind) -> &'static [&'static str] {
+    match kind {
+        // `default_value` is a source, not a composable prompt option.
+        // Extracting inline `:?` must remove every mutually-exclusive field,
+        // including a block-form suggestions list.
+        InlineSourceKind::Default => {
+            &["default_value", "default", "command", "hint", "suggestions"]
+        }
+        // Retained hints can compose with commands, so extraction must not
+        // silently discard their compatibility behavior.
+        InlineSourceKind::Command => &["default", "command"],
+        // An inline list shadows every other suggestion source and default,
+        // so the extracted spec must not regain them.
+        InlineSourceKind::Suggestions => &["suggestions", "command", "default", "default_value"],
+    }
+}
+
 fn inline_source_key(kind: InlineSourceKind) -> &'static str {
     match kind {
         InlineSourceKind::Default => "default_value",
         InlineSourceKind::Command => "command",
+        InlineSourceKind::Suggestions => "suggestions",
     }
 }
 
@@ -964,9 +1027,16 @@ mod code_action_tests {
 
     #[test]
     fn inline_skips_suggestions_ambiguous_config_and_inline_target() {
-        let suggestions =
-            "---\nvariables:\n  p:\n    suggestions: [a]\n---\n## D\n\n```bash\n<@p>\n```\n";
-        assert!(compute_code_actions(&uri(), suggestions, range(2, 3), &BTreeMap::new()).is_none());
+        // Suggestions only inline when they are the spec's sole source.
+        for extra in ["default: a", "command: b", "default_value: c"] {
+            let suggestions = format!(
+                "---\nvariables:\n  p:\n    suggestions: [a]\n    {extra}\n---\n## D\n\n```bash\n<@p>\n```\n"
+            );
+            assert!(
+                compute_code_actions(&uri(), &suggestions, range(2, 3), &BTreeMap::new()).is_none(),
+                "{extra}"
+            );
+        }
 
         let ambiguous = "---\nvariables:\n  p:\n    default: a\n    command: b\n---\n## D\n\n```bash\n<@p>\n```\n";
         assert!(compute_code_actions(&uri(), ambiguous, range(2, 3), &BTreeMap::new()).is_none());
@@ -1045,6 +1115,138 @@ mod code_action_tests {
     #[test]
     fn extract_then_inline_preserves_body_bytes() {
         let body = "## D\n\n```bash\necho <@p:?<#a:raw>.out>\n```\n";
+        let extracted = compute_code_actions(&uri(), body, range(3, 8), &BTreeMap::new()).unwrap();
+        let with_frontmatter = apply_edits(body, edits(&extracted[0]));
+        let inlined =
+            compute_code_actions(&uri(), &with_frontmatter, range(2, 3), &BTreeMap::new()).unwrap();
+        let round_tripped = apply_edits(&with_frontmatter, edits(&inlined[0]));
+        let body_after = round_tripped.split("---\n").last().unwrap();
+        assert_eq!(body_after, body);
+    }
+
+    fn frontmatter_suggestions(content: &str, name: &str) -> Vec<String> {
+        parser::parse_file(std::path::Path::new(""), std::path::Path::new(""), content)
+            .frontmatter
+            .variables
+            .get(name)
+            .unwrap_or_else(|| panic!("no frontmatter spec for {name} in {content}"))
+            .suggestions
+            .clone()
+    }
+
+    #[test]
+    fn inline_placeholder_at_classifies_suggestion_lists() {
+        let list = inline_placeholder_at("## D\n\n```bash\n<@env:[dev, stage]>\n```\n", pos(3, 3))
+            .unwrap();
+        assert_eq!(list.kind, InlineSourceKind::Suggestions);
+        assert_eq!(list.value, "[dev, stage]");
+
+        // An unterminated list is still an inline command.
+        let command =
+            inline_placeholder_at("## D\n\n```bash\n<@env:[dev,stage>\n```\n", pos(3, 3)).unwrap();
+        assert_eq!(command.kind, InlineSourceKind::Command);
+    }
+
+    #[test]
+    fn extract_suggestion_list_writes_block_form_frontmatter() {
+        let content = "## D\n\n```bash\ndeploy <@env:[dev, a\\,b, c\\], \\<#x>]>\n```\n";
+        let actions = compute_code_actions(&uri(), content, range(3, 8), &BTreeMap::new()).unwrap();
+        assert!(action_title(&actions[0]).contains("Extract `<@env>`"));
+        let updated = apply_edits(content, edits(&actions[0]));
+        assert!(
+            updated.starts_with(
+                "---\nvariables:\n  env:\n    suggestions:\n      - dev\n      - a,b\n      - c]\n      - \"<#x>\"\n---\n## D"
+            ),
+            "{updated}"
+        );
+        assert!(updated.contains("deploy <@env>\n"));
+        assert_eq!(
+            frontmatter_suggestions(&updated, "env"),
+            vec!["dev", "a,b", "c]", "<#x>"]
+        );
+    }
+
+    #[test]
+    fn extract_suggestion_list_collapses_equivalent_lists_only() {
+        let content =
+            "## D\n\n```bash\n<@env:[dev,stage]> <@env:[ dev , stage ]>\n<@env:[prod]>\n```\n";
+        let actions = compute_code_actions(&uri(), content, range(3, 2), &BTreeMap::new()).unwrap();
+        assert!(action_title(&actions[0]).contains("(collapses all 2 occurrences)"));
+        let updated = apply_edits(content, edits(&actions[0]));
+        assert!(
+            updated.contains("<@env> <@env>\n<@env:[prod]>"),
+            "{updated}"
+        );
+    }
+
+    #[test]
+    fn extract_suggestion_list_matching_spec_only_simplifies_placeholder() {
+        let content = "---\nvariables:\n  env:\n    suggestions: [dev, stage]\n---\n## D\n\n```bash\n<@env:[dev,stage]>\n```\n";
+        let actions = compute_code_actions(&uri(), content, range(8, 2), &BTreeMap::new()).unwrap();
+        let action_edits = edits(&actions[0]);
+        assert_eq!(action_edits.len(), 1);
+        assert_eq!(action_edits[0].new_text, "<@env>");
+    }
+
+    #[test]
+    fn extract_suggestion_list_overwrites_conflicting_sources() {
+        let content = "---\nvariables:\n  env:\n    default: local\n    command: ls envs\n    suggestions:\n      - old\n---\n## D\n\n```bash\n<@env:[dev,stage]>\n```\n";
+        let actions =
+            compute_code_actions(&uri(), content, range(11, 2), &BTreeMap::new()).unwrap();
+        assert!(action_title(&actions[0]).contains("overwrite"));
+        let updated = apply_edits(content, edits(&actions[0]));
+        assert!(
+            updated.starts_with(
+                "---\nvariables:\n  env:\n    suggestions:\n      - dev\n      - stage\n---\n"
+            ),
+            "{updated}"
+        );
+    }
+
+    #[test]
+    fn inline_suggestions_spec_round_trips_through_inline_list() {
+        let content = "---\nvariables:\n  env:\n    suggestions:\n      - dev\n      - a,b\n      - c]\n      - \"<#x>\"\n      - 'back\\slash'\n      - \" padded\"\n---\n## D\n\n```bash\ndeploy <@env> <@env>\n```\n";
+        let actions = compute_code_actions(&uri(), content, range(2, 3), &BTreeMap::new()).unwrap();
+        assert!(action_title(&actions[0]).contains("Inline frontmatter variable `env`"));
+        let updated = apply_edits(content, edits(&actions[0]));
+        assert!(
+            updated
+                .contains(r#"deploy <@env:[dev,"a,b","c]",\<#x>,back\\slash," padded"]> <@env>"#),
+            "{updated}"
+        );
+        assert!(!updated.contains("variables:"), "{updated}");
+        let body = updated.split("```bash\n").nth(1).unwrap();
+        assert_eq!(
+            parser::parse_variables(body)[0].source,
+            crate::domain::VariableSource::Suggestions(
+                ["dev", "a,b", "c]", "<#x>", r"back\slash", " padded"]
+                    .map(String::from)
+                    .to_vec()
+            )
+        );
+    }
+
+    #[test]
+    fn inline_skips_suggestions_that_cannot_round_trip() {
+        // Only `>` is unrepresentable from frontmatter: quoting handles commas,
+        // brackets, and surrounding spaces; the frontmatter parser drops empty
+        // items and can't produce multi-line ones (`format_suggestion_list`
+        // unit tests cover those guards directly).
+        for item in ["a>b", "\"quoted > too\""] {
+            let content = format!(
+                "---\nvariables:\n  env:\n    suggestions:\n      - ok\n      - {item}\n---\n## D\n\n```bash\n<@env>\n```\n"
+            );
+            assert!(
+                compute_code_actions(&uri(), &content, range(2, 3), &BTreeMap::new()).is_none(),
+                "{item}"
+            );
+        }
+    }
+
+    #[test]
+    fn extract_then_inline_suggestion_list_preserves_body() {
+        // The canonical inline form quotes items containing `,` or `]`.
+        let body = "## D\n\n```bash\ndeploy <@env:[dev,\"a,b\",\\<#x>]>\n```\n";
         let extracted = compute_code_actions(&uri(), body, range(3, 8), &BTreeMap::new()).unwrap();
         let with_frontmatter = apply_edits(body, edits(&extracted[0]));
         let inlined =
