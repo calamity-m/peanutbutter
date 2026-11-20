@@ -3149,3 +3149,135 @@ fn failed_dependent_command_is_not_cached() {
     // No suggestions for key (TestProvider returned empty).
     assert!(prompt.suggestions.is_empty());
 }
+
+fn system_app_for(
+    body: &str,
+    frontmatter: Frontmatter,
+    provider: SystemSuggestionProvider,
+) -> ExecutionApp<SystemSuggestionProvider> {
+    let mut file = snippet_file("x.md", "Demo", body, crate::parser::parse_variables(body));
+    file.frontmatter = frontmatter;
+    ExecutionApp::new(
+        SnippetIndex::from_files([file]),
+        FrecencyStore::new(),
+        PathBuf::from("."),
+        0,
+        crate::config::SearchConfig::default(),
+        crate::config::Theme::default(),
+        provider,
+    )
+}
+
+#[test]
+fn system_provider_serves_inline_list_with_commands_disabled() {
+    let provider = SystemSuggestionProvider::new(
+        BTreeMap::new(),
+        crate::config::SuggestionCommandsConfig {
+            allow_commands: false,
+            timeout_ms: 2000,
+        },
+    );
+    let variable = Variable {
+        name: "env".to_string(),
+        source: VariableSource::Suggestions(vec!["dev".to_string(), "stage".to_string()]),
+    };
+    let locals = BTreeMap::new();
+    let suggestions = provider
+        .suggestions(&variable, Path::new("."), &locals, &BTreeMap::new())
+        .unwrap();
+    assert_eq!(suggestions, vec!["dev", "stage"]);
+    // Nothing is executed, so there is no command source to render or cache.
+    assert_eq!(provider.command_source(&variable, &locals), None);
+}
+
+#[test]
+fn inline_list_selects_suggestion_or_accepts_typed_value() {
+    let body = "deploy --env <@env:[dev,stage,prod]>";
+    let mut app = system_app_for(
+        body,
+        Frontmatter::default(),
+        SystemSuggestionProvider::default(),
+    );
+    let _ = app.handle_key(press(KeyCode::Enter));
+    let Screen::Prompt(prompt) = &app.screen else {
+        panic!("expected prompt");
+    };
+    assert_eq!(prompt.suggestions, vec!["dev", "stage", "prod"]);
+    assert_eq!(prompt.input, "");
+
+    // Filter to "stage", fill it from the highlighted row, then submit.
+    let _ = app.handle_key(press(KeyCode::Char('s')));
+    let _ = app.handle_key(press(KeyCode::Char('t')));
+    let _ = app.handle_key(press(KeyCode::Enter));
+    let outcome = completed(app.handle_key(press(KeyCode::Enter)));
+    assert_eq!(outcome.command, "deploy --env stage");
+
+    // A value outside the list is still accepted as typed.
+    let mut app = system_app_for(
+        body,
+        Frontmatter::default(),
+        SystemSuggestionProvider::default(),
+    );
+    let _ = app.handle_key(press(KeyCode::Enter));
+    for ch in "qa".chars() {
+        let _ = app.handle_key(press(KeyCode::Char(ch)));
+    }
+    let outcome = completed(app.handle_key(press(KeyCode::Enter)));
+    assert_eq!(outcome.command, "deploy --env qa");
+}
+
+#[test]
+fn inline_list_shadows_frontmatter_suggestions_and_defaults() {
+    let mut frontmatter = Frontmatter::default();
+    frontmatter.variables.insert(
+        "env".to_string(),
+        VariableSpec {
+            default: Some("local".to_string()),
+            suggestions: vec!["local".to_string()],
+            ..Default::default()
+        },
+    );
+    let mut app = system_app_for(
+        "deploy <@env:[dev,stage]>",
+        frontmatter,
+        SystemSuggestionProvider::default(),
+    );
+    let _ = app.handle_key(press(KeyCode::Enter));
+    let Screen::Prompt(prompt) = &app.screen else {
+        panic!("expected prompt");
+    };
+    assert_eq!(prompt.suggestions, vec!["dev", "stage"]);
+    assert_eq!(prompt.input, "");
+    assert_eq!(prompt.ghost_default, None);
+}
+
+#[test]
+fn inline_list_reused_name_prompts_once_and_renders_everywhere() {
+    let mut app = system_app_for(
+        "echo <@env:[dev,stage]> && echo <@env>",
+        Frontmatter::default(),
+        SystemSuggestionProvider::default(),
+    );
+    let _ = app.handle_key(press(KeyCode::Enter));
+    let Screen::Prompt(prompt) = &app.screen else {
+        panic!("expected prompt");
+    };
+    assert_eq!(prompt.variables.len(), 1);
+    assert_eq!(prompt.suggestions, vec!["dev", "stage"]);
+    let _ = app.handle_key(press(KeyCode::Char('s')));
+    let _ = app.handle_key(press(KeyCode::Enter));
+    let outcome = completed(app.handle_key(press(KeyCode::Enter)));
+    assert_eq!(outcome.command, "echo stage && echo stage");
+}
+
+#[test]
+fn literal_reference_opener_in_list_keeps_later_placeholders_renderable() {
+    let values = BTreeMap::from([
+        ("x".to_string(), "<#".to_string()),
+        ("y".to_string(), "b".to_string()),
+    ]);
+    assert_eq!(
+        render_command(r"echo <@x:[\<#]> <@y>", &values),
+        "echo <# b"
+    );
+}

@@ -215,6 +215,266 @@ fn placeholder_end_skips_nested_dependent_refs_in_defaults() {
     assert_eq!(&body[start..end], "out:?<#a:raw>.<#b:raw>.out");
 }
 
+fn suggestions(items: &[&str]) -> VariableSource {
+    VariableSource::Suggestions(items.iter().map(|item| item.to_string()).collect())
+}
+
+fn source_of(body: &str) -> VariableSource {
+    let vars = parse_variables(body);
+    assert_eq!(vars.len(), 1, "expected one variable in {body:?}");
+    vars[0].source.clone()
+}
+
+#[test]
+fn parses_inline_suggestion_list() {
+    let vars = parse_variables("deploy --env <@env:[dev,stage,prod]>");
+    assert_eq!(vars.len(), 1);
+    assert_eq!(vars[0].name, "env");
+    assert_eq!(vars[0].source, suggestions(&["dev", "stage", "prod"]));
+}
+
+#[test]
+fn inline_suggestion_list_trims_source_and_items() {
+    assert_eq!(
+        source_of("<@env: [ dev , stage prod ] >"),
+        suggestions(&["dev", "stage prod"])
+    );
+}
+
+#[test]
+fn inline_suggestion_list_unescapes_commas_brackets_and_backslashes() {
+    assert_eq!(
+        source_of(r"<@v:[a\,b, c\]d, e\\f, g\nh]>"),
+        suggestions(&["a,b", "c]d", r"e\f", r"g\nh"])
+    );
+}
+
+#[test]
+fn inline_suggestion_list_escaped_reference_opener_is_literal() {
+    assert_eq!(source_of(r"<@v:[\<#r>a, b]>"), suggestions(&["<#r>a", "b"]));
+}
+
+#[test]
+fn inline_suggestion_list_keeps_reserved_reference_literal() {
+    assert_eq!(source_of("<@v:[<#r>a, b]>"), suggestions(&["<#r>a", "b"]));
+}
+
+#[test]
+fn inline_suggestion_list_drops_empty_items() {
+    assert_eq!(source_of("<@v:[]>"), suggestions(&[]));
+    assert_eq!(source_of("<@v:[a,,b, ]>"), suggestions(&["a", "b"]));
+}
+
+#[test]
+fn inline_suggestion_list_keeps_bare_inner_bracket_literal() {
+    assert_eq!(source_of("<@v:[a]b,c]>"), suggestions(&["a]b", "c"]));
+}
+
+#[test]
+fn inline_suggestion_list_requires_unescaped_closing_bracket() {
+    assert_eq!(source_of(r"<@v:[a\\]>"), suggestions(&[r"a\"]));
+    assert_eq!(
+        source_of(r"<@v:[a,b\]>"),
+        VariableSource::Command(r"[a,b\]".to_string())
+    );
+    assert_eq!(
+        source_of("<@v:[a,b>"),
+        VariableSource::Command("[a,b".to_string())
+    );
+}
+
+#[test]
+fn bracketed_test_command_is_reinterpreted_only_when_it_spans_the_source() {
+    assert_eq!(source_of("<@v:[ -d x ]>"), suggestions(&["-d x"]));
+    assert_eq!(
+        source_of("<@b:[ -d .git ] && git branch>"),
+        VariableSource::Command("[ -d .git ] && git branch".to_string())
+    );
+}
+
+#[test]
+fn inline_suggestion_list_items_may_contain_colons() {
+    assert_eq!(
+        source_of("<@url:[http://a,http://b]>"),
+        suggestions(&["http://a", "http://b"])
+    );
+}
+
+#[test]
+fn default_prefix_wins_over_suggestion_list() {
+    assert_eq!(
+        source_of("<@v:?[a]>"),
+        VariableSource::Default(vec![crate::syntax::Fragment::Literal("[a]".to_string())])
+    );
+}
+
+#[test]
+fn suggestion_lists_mix_with_other_sources() {
+    let vars = parse_variables(
+        "kubectl --context <@ctx:[dev,prod]> get <@kind> <@name:kubectl get <#kind> -o name> <@ctx>",
+    );
+    assert_eq!(vars.len(), 4);
+    assert_eq!(vars[0].source, suggestions(&["dev", "prod"]));
+    assert_eq!(vars[1].source, VariableSource::Free);
+    assert_eq!(
+        vars[2].source,
+        VariableSource::Command("kubectl get <#kind> -o name".to_string())
+    );
+    assert_eq!(vars[3].name, "ctx");
+    assert_eq!(vars[3].source, VariableSource::Free);
+}
+
+#[test]
+fn suggestion_list_reports_first_problem() {
+    use crate::parser::{SuggestionListError, parse_suggestion_list};
+    let error = |source: &str| parse_suggestion_list(source).unwrap().error;
+    assert!(parse_suggestion_list("rg . --files").is_none());
+    assert!(parse_suggestion_list("[a,b").is_none());
+    assert!(parse_suggestion_list(r"[a,b\]").is_none());
+    assert_eq!(error("[a, b]"), None);
+    assert_eq!(error(r"[a\,b, \<#r>]"), None);
+    assert_eq!(error("[]"), Some(SuggestionListError::Empty));
+    assert_eq!(error("[  ]"), Some(SuggestionListError::Empty));
+    assert_eq!(error("[a,,b]"), Some(SuggestionListError::EmptyItem));
+    assert_eq!(error("[a,]"), Some(SuggestionListError::EmptyItem));
+    assert_eq!(error("[a]b]"), Some(SuggestionListError::StrayBracket));
+    assert_eq!(
+        error("[<#r>a]"),
+        Some(SuggestionListError::ReservedReference)
+    );
+    assert_eq!(error(r#"[a, "b,c"]"#), None);
+    assert_eq!(error(r#"[""]"#), Some(SuggestionListError::EmptyItem));
+    assert_eq!(
+        error(r#"[a, "b,c]"#),
+        Some(SuggestionListError::UnterminatedQuote)
+    );
+    assert_eq!(
+        error(r#"["b"c]"#),
+        Some(SuggestionListError::TextAfterQuote)
+    );
+    assert_eq!(
+        error(r#"["<#r>"]"#),
+        Some(SuggestionListError::ReservedReference)
+    );
+}
+
+#[test]
+fn quoted_items_keep_commas_brackets_and_spaces() {
+    assert_eq!(source_of(r#"<@v:[a, "b,c"]>"#), suggestions(&["a", "b,c"]));
+    assert_eq!(
+        source_of(r#"<@v:[ "  spaced  " , "x]y"]>"#),
+        suggestions(&["  spaced  ", "x]y"])
+    );
+}
+
+#[test]
+fn quoted_and_escaped_forms_are_equivalent() {
+    assert_eq!(
+        source_of(r#"<@v:[a, "b,c"]>"#),
+        source_of(r"<@v:[a, b\,c]>")
+    );
+}
+
+#[test]
+fn quoted_items_unescape_quotes_and_backslashes() {
+    assert_eq!(
+        source_of(r#"<@v:["say \"hi\"", "c\\d", "e\,f"]>"#),
+        suggestions(&[r#"say "hi""#, r"c\d", "e,f"])
+    );
+}
+
+#[test]
+fn quotes_are_literal_unless_they_open_an_item() {
+    assert_eq!(
+        source_of(r#"<@v:[\"lit\", a"b]>"#),
+        suggestions(&[r#""lit""#, r#"a"b"#])
+    );
+    // Single quotes never group an item.
+    assert_eq!(source_of("<@v:['b,c']>"), suggestions(&["'b", "c'"]));
+}
+
+#[test]
+fn malformed_quoted_items_stay_usable() {
+    // An unterminated quote runs to the end of the list.
+    assert_eq!(source_of(r#"<@v:[a, "b,c]>"#), suggestions(&["a", "b,c"]));
+    // Text after a closing quote is kept, joined to the quoted text.
+    assert_eq!(source_of(r#"<@v:["b"c, d]>"#), suggestions(&["bc", "d"]));
+    // An empty quoted item is dropped like any other empty item.
+    assert_eq!(source_of(r#"<@v:["", d]>"#), suggestions(&["d"]));
+}
+
+#[test]
+fn format_suggestion_list_escapes_and_round_trips() {
+    use crate::parser::format_suggestion_list;
+    let items: Vec<String> = [
+        "dev",
+        "a,b",
+        "c]",
+        r"d\e",
+        "<#x>",
+        "a<b",
+        " padded",
+        r#""quoted"#,
+        r#"in"side"#,
+    ]
+    .map(String::from)
+    .to_vec();
+    let source = format_suggestion_list(&items).unwrap();
+    assert_eq!(
+        source,
+        r#"[dev,"a,b","c]",d\\e,\<#x>,a<b," padded","\"quoted",in"side]"#
+    );
+    assert_eq!(
+        source_of(&format!("<@v:{source}>")),
+        VariableSource::Suggestions(items)
+    );
+}
+
+#[test]
+fn format_suggestion_list_rejects_items_that_cannot_be_inline() {
+    use crate::parser::format_suggestion_list;
+    for items in [
+        vec![],
+        vec![String::new()],
+        vec!["a>b".to_string()],
+        vec!["<#x>y>z".to_string()],
+        vec!["two\nlines".to_string()],
+    ] {
+        assert_eq!(format_suggestion_list(&items), None, "{items:?}");
+    }
+}
+
+#[test]
+fn bare_reference_opener_in_list_does_not_swallow_next_placeholder() {
+    for body in [r"echo <@x:[\<#]> <@y>", "echo <@x:[<#]> <@y>"] {
+        let vars = parse_variables(body);
+        assert_eq!(vars.len(), 2, "{body}: {vars:?}");
+        assert_eq!(vars[0].source, suggestions(&["<#"]), "{body}");
+        assert_eq!(vars[1].name, "y", "{body}");
+        assert_eq!(vars[1].source, VariableSource::Free, "{body}");
+    }
+}
+
+#[test]
+fn placeholder_end_skips_only_reference_shaped_tokens() {
+    for (body, inner) in [
+        // Well-formed (escaped or not) references stay opaque.
+        ("<@k:ls <#b>> tail", "k:ls <#b>"),
+        (r"<@k:ls \<#b:raw>> tail", r"k:ls \<#b:raw>"),
+        // Unknown modifiers stay opaque so lint can report them.
+        ("<@k:ls <#b:bad>> tail", "k:ls <#b:bad>"),
+        // A bare opener is plain text; the next `>` closes the placeholder.
+        (r"<@k:[\<#]> tail>", r"k:[\<#]"),
+        ("<@k:[<# x]> tail>", "k:[<# x]"),
+        // Multi-byte text before and inside tokens must not split a char.
+        ("<@k:é <#b> ü> tail", "k:é <#b> ü"),
+        ("<@k:[é\\<#ü]> tail>", "k:[é\\<#ü]"),
+    ] {
+        let end = find_placeholder_end(body, 2).unwrap();
+        assert_eq!(&body[2..end], inner, "{body}");
+    }
+}
+
 #[test]
 fn skips_unterminated_variables() {
     let body = "echo <@unterminated and more";

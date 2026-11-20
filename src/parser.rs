@@ -10,8 +10,10 @@ use frontmatter::parse_frontmatter;
 use ranges::{parse_snippet_line_ranges, section_end};
 use snippets::parse_snippets;
 
-pub(crate) use variables::find_placeholder_end;
 pub use variables::parse_variables;
+pub(crate) use variables::{
+    SuggestionListError, find_placeholder_end, format_suggestion_list, parse_suggestion_list,
+};
 
 #[cfg(test)]
 use crate::domain::{Frontmatter, VariableSource};

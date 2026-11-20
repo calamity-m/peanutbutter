@@ -21,6 +21,8 @@ silently ignored, because the server cannot honour them.
 
 Inline `:?` extraction writes `default_value` (the accepted ghost value), while `default` remains an editable pre-fill and is never inlined as `:?`.
 
+Extracting an inline `<@name:[a,b]>` list writes a block-form `suggestions:` list. A frontmatter spec whose only source is `suggestions` can be inlined as `<@name:[...]>`: items containing `,` or `]`, with surrounding whitespace, or starting with `"` are double-quoted, and `\`, `"`, and `<#` are escaped. The action is not offered when an item cannot be written inline (it contains `>`). Extracting an inline command or list is not offered when config defines a `default` for that name, and an empty list is never extracted: a frontmatter spec only overlays config field by field, so either would change what the prompt offers or pre-fills. Inside an inline list, `<#` is plain text, so it is neither highlighted nor completed as a dependent reference.
+
 Deprecated `hint` specs and inline `:@` hints remain recognized. Existing
 specs are marked deprecated in hover information, diagnostics recommend
 migration, and completions/code actions no longer generate hints.

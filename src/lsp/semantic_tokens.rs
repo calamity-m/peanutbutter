@@ -59,6 +59,10 @@ fn tokenize_line(line_idx: u32, line: &str, out: &mut Vec<RawToken>) {
     let mut i = 0;
     while i + 1 < bytes.len() {
         if bytes[i] == b'<' && bytes[i + 1] == b'@' {
+            if let Some(end) = emit_suggestion_list(line_idx, line, i, out) {
+                i = end;
+                continue;
+            }
             let end = closing_gt(bytes, i);
             emit_placeholder(line_idx, line, i, end, out);
             i = end;
@@ -137,6 +141,84 @@ fn emit_placeholder(line_idx: u32, line: &str, start: usize, end: usize, out: &m
     if has_close {
         push(out, line_idx, inner_end, 1, TOK_OPERATOR); // `>`
     }
+}
+
+/// Emit tokens for a `<@name:[a,b]>` inline suggestion list starting at
+/// `start` and return the index just past its `>`, or `None` (emitting
+/// nothing) when the placeholder there is not a terminated list. Unlike other
+/// sources, the end comes from the parser's scan so a `\<#...>` or `<#...>`
+/// inside an item can't end the placeholder early, and items are plain
+/// strings: `<#` is reserved in lists, never a dependent reference.
+fn emit_suggestion_list(
+    line_idx: u32,
+    line: &str,
+    start: usize,
+    out: &mut Vec<RawToken>,
+) -> Option<usize> {
+    let close = crate::parser::find_placeholder_end(line, start + 2)?;
+    let colon = start + 2 + line[start + 2..close].find(':')?;
+    let source = &line[colon + 1..close];
+    crate::parser::parse_suggestion_list(source)?;
+    let open = colon + 1 + (source.len() - source.trim_start().len());
+    let end = colon + 1 + source.trim_end().len() - 1;
+
+    push(out, line_idx, start, 2, TOK_OPERATOR); // `<@`
+    if colon > start + 2 {
+        push(
+            out,
+            line_idx,
+            start + 2,
+            (colon - start - 2) as u32,
+            TOK_VARIABLE,
+        );
+    }
+    push(out, line_idx, colon, 1, TOK_OPERATOR); // `:`
+    push(out, line_idx, open, 1, TOK_OPERATOR); // `[`
+    let bytes = line.as_bytes();
+    // Mirrors the parser: a `"` opens a quoted item only at the item's start,
+    // and `,` inside quotes is part of the item, not a separator.
+    let mut item_start = open + 1;
+    let mut in_quotes = false;
+    let mut i = item_start;
+    while i < end {
+        match bytes[i] {
+            b'\\' => i += 2,
+            b'"' if in_quotes => {
+                in_quotes = false;
+                i += 1;
+            }
+            b'"' if line[item_start..i].trim().is_empty() => {
+                in_quotes = true;
+                i += 1;
+            }
+            b',' if !in_quotes => {
+                push_list_item(out, line_idx, line, item_start, i);
+                push(out, line_idx, i, 1, TOK_OPERATOR); // `,`
+                i += 1;
+                item_start = i;
+            }
+            _ => i += 1,
+        }
+    }
+    push_list_item(out, line_idx, line, item_start, end);
+    push(out, line_idx, end, 1, TOK_OPERATOR); // `]`
+    push(out, line_idx, close, 1, TOK_OPERATOR); // `>`
+    Some(close + 1)
+}
+
+/// Emit a string token for the list item in `[start, end)`, trimmed of the
+/// surrounding whitespace (a quoted item's token includes its quotes).
+fn push_list_item(out: &mut Vec<RawToken>, line_idx: u32, line: &str, start: usize, end: usize) {
+    let item = &line[start..end];
+    let leading = item.len() - item.trim_start().len();
+    let trimmed = item.trim();
+    push(
+        out,
+        line_idx,
+        start + leading,
+        trimmed.len() as u32,
+        TOK_STRING,
+    );
 }
 
 /// Emit `base`-typed tokens across `[region_start, region_end)`, splitting around
@@ -378,5 +460,61 @@ mod tests {
         assert!(toks.contains(&(0, 4, 4, TOK_VARIABLE))); // `name`
         assert!(toks.contains(&(0, 8, 4, TOK_STRING))); // `:?😀`
         assert!(toks.contains(&(0, 12, 1, TOK_OPERATOR))); // `>`
+    }
+
+    #[test]
+    fn suggestion_list_items_are_strings_between_operators() {
+        let toks = absolute(r"<@env:[dev, a\,b]>");
+        assert_eq!(
+            toks,
+            vec![
+                (0, 0, 2, TOK_OPERATOR),  // `<@`
+                (0, 2, 3, TOK_VARIABLE),  // env
+                (0, 5, 1, TOK_OPERATOR),  // `:`
+                (0, 6, 1, TOK_OPERATOR),  // `[`
+                (0, 7, 3, TOK_STRING),    // dev
+                (0, 10, 1, TOK_OPERATOR), // `,`
+                (0, 12, 4, TOK_STRING),   // a\,b
+                (0, 16, 1, TOK_OPERATOR), // `]`
+                (0, 17, 1, TOK_OPERATOR), // `>`
+            ]
+        );
+    }
+
+    #[test]
+    fn quoted_suggestion_item_keeps_its_comma() {
+        let toks = absolute(r#"<@env:[a, "b,c"]>"#);
+        assert_eq!(
+            toks,
+            vec![
+                (0, 0, 2, TOK_OPERATOR),  // `<@`
+                (0, 2, 3, TOK_VARIABLE),  // env
+                (0, 5, 1, TOK_OPERATOR),  // `:`
+                (0, 6, 1, TOK_OPERATOR),  // `[`
+                (0, 7, 1, TOK_STRING),    // a
+                (0, 8, 1, TOK_OPERATOR),  // `,`
+                (0, 10, 5, TOK_STRING),   // "b,c"
+                (0, 15, 1, TOK_OPERATOR), // `]`
+                (0, 16, 1, TOK_OPERATOR), // `>`
+            ]
+        );
+    }
+
+    #[test]
+    fn reserved_reference_in_suggestion_list_is_plain_text() {
+        let toks = absolute("<@env:[<#r>a, b]> <@c:ls <#r>>");
+        assert!(toks.contains(&(0, 7, 5, TOK_STRING))); // `<#r>a`
+        assert!(toks.contains(&(0, 15, 1, TOK_OPERATOR))); // `]`
+        assert!(toks.contains(&(0, 16, 1, TOK_OPERATOR))); // `>`
+        let params = toks.iter().filter(|t| t.3 == TOK_PARAMETER).count();
+        assert_eq!(
+            params, 1,
+            "only the command's <#r> is a reference: {toks:?}"
+        );
+
+        let toks = absolute(r"<@env:[\<#r>a]>");
+        assert!(toks.contains(&(0, 7, 6, TOK_STRING))); // `\<#r>a`
+        assert!(toks.contains(&(0, 13, 1, TOK_OPERATOR))); // `]`
+        assert!(toks.contains(&(0, 14, 1, TOK_OPERATOR))); // `>`
     }
 }

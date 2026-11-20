@@ -69,6 +69,10 @@ pub enum VariableSource {
     Free,
     /// Run `bash -c <command>` and split stdout into suggestion lines.
     Command(String),
+    /// Static inline suggestion list (`<@name:[a,b,c]>`), already unescaped.
+    /// Never runs a shell command; like [`Self::Command`], it shadows
+    /// frontmatter/config suggestion sources and defaults.
+    Suggestions(Vec<String>),
     /// Accepted ghost default (`<@name:?default>`); Tab materializes it and
     /// typing overrides it.
     Default(CommandTemplate),
