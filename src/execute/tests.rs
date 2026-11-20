@@ -3269,3 +3269,15 @@ fn inline_list_reused_name_prompts_once_and_renders_everywhere() {
     let outcome = completed(app.handle_key(press(KeyCode::Enter)));
     assert_eq!(outcome.command, "echo stage && echo stage");
 }
+
+#[test]
+fn literal_reference_opener_in_list_keeps_later_placeholders_renderable() {
+    let values = BTreeMap::from([
+        ("x".to_string(), "<#".to_string()),
+        ("y".to_string(), "b".to_string()),
+    ]);
+    assert_eq!(
+        render_command(r"echo <@x:[\<#]> <@y>", &values),
+        "echo <# b"
+    );
+}

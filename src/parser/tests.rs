@@ -445,6 +445,37 @@ fn format_suggestion_list_rejects_items_that_cannot_be_inline() {
 }
 
 #[test]
+fn bare_reference_opener_in_list_does_not_swallow_next_placeholder() {
+    for body in [r"echo <@x:[\<#]> <@y>", "echo <@x:[<#]> <@y>"] {
+        let vars = parse_variables(body);
+        assert_eq!(vars.len(), 2, "{body}: {vars:?}");
+        assert_eq!(vars[0].source, suggestions(&["<#"]), "{body}");
+        assert_eq!(vars[1].name, "y", "{body}");
+        assert_eq!(vars[1].source, VariableSource::Free, "{body}");
+    }
+}
+
+#[test]
+fn placeholder_end_skips_only_reference_shaped_tokens() {
+    for (body, inner) in [
+        // Well-formed (escaped or not) references stay opaque.
+        ("<@k:ls <#b>> tail", "k:ls <#b>"),
+        (r"<@k:ls \<#b:raw>> tail", r"k:ls \<#b:raw>"),
+        // Unknown modifiers stay opaque so lint can report them.
+        ("<@k:ls <#b:bad>> tail", "k:ls <#b:bad>"),
+        // A bare opener is plain text; the next `>` closes the placeholder.
+        (r"<@k:[\<#]> tail>", r"k:[\<#]"),
+        ("<@k:[<# x]> tail>", "k:[<# x]"),
+        // Multi-byte text before and inside tokens must not split a char.
+        ("<@k:é <#b> ü> tail", "k:é <#b> ü"),
+        ("<@k:[é\\<#ü]> tail>", "k:[é\\<#ü]"),
+    ] {
+        let end = find_placeholder_end(body, 2).unwrap();
+        assert_eq!(&body[2..end], inner, "{body}");
+    }
+}
+
+#[test]
 fn skips_unterminated_variables() {
     let body = "echo <@unterminated and more";
     assert!(parse_variables(body).is_empty());

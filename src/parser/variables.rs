@@ -26,29 +26,33 @@ pub fn parse_variables(body: &str) -> Vec<Variable> {
 }
 
 /// Scan forward from `start` in `src` to find the `>` that closes a `<@...>`
-/// placeholder, treating nested `<#...>` references as opaque (their inner
-/// `>` does not terminate the outer placeholder). Backslash-escaped `\<#`
-/// inside the inner text is also skipped. Returns the byte index of the
-/// closing `>` if found.
+/// placeholder, treating nested `<#...>` references and escaped `\<#...>`
+/// literals as opaque (their inner `>` does not terminate the outer
+/// placeholder). Returns the byte index of the closing `>` if found.
+///
+/// Only *reference-shaped* tokens are opaque (see [`reference_token_len`]). A
+/// bare opener such as the literal `\<#` in a list (`<@x:[\<#]>`) or a stray
+/// `<#` is plain text; skipping to "its" `>` would instead swallow the
+/// placeholder's own `>` and everything after it.
 pub(crate) fn find_placeholder_end(src: &str, start: usize) -> Option<usize> {
     let bytes = src.as_bytes();
     let mut i = start;
     while i < bytes.len() {
-        if bytes[i] == b'\\' && i + 2 < bytes.len() && bytes[i + 1] == b'<' && bytes[i + 2] == b'#'
+        // Compare bytes: `i` steps bytewise and may sit inside a multi-byte
+        // char, where slicing `src[i..]` would panic. The openers are ASCII,
+        // so a match always ends on a char boundary.
+        let token_start = if bytes[i..].starts_with(b"\\<#") {
+            Some(i + 3)
+        } else if bytes[i..].starts_with(b"<#") {
+            Some(i + 2)
+        } else {
+            None
+        };
+        if let Some(token_start) = token_start
+            && let Some(len) = reference_token_len(&src[token_start..])
         {
-            // Skip past the escaped `\<#...>`: find its `>` and continue after.
-            if let Some(offset) = src[i + 1..].find('>') {
-                i = i + 1 + offset + 1;
-                continue;
-            }
-            return None;
-        }
-        if bytes[i] == b'<' && i + 1 < bytes.len() && bytes[i + 1] == b'#' {
-            if let Some(offset) = src[i + 2..].find('>') {
-                i = i + 2 + offset + 1;
-                continue;
-            }
-            return None;
+            i = token_start + len + 1;
+            continue;
         }
         if bytes[i] == b'>' {
             return Some(i);
@@ -56,6 +60,20 @@ pub(crate) fn find_placeholder_end(src: &str, start: usize) -> Option<usize> {
         i += 1;
     }
     None
+}
+
+/// Byte length of the `name` / `name:modifier` text before the `>` that
+/// starts `rest`, when it is shaped like a dependent reference. Names follow
+/// the `<#...>` grammar (trimmed, ASCII alphanumerics, `_`, `-`); any
+/// name-like modifier is accepted so lint can still report unknown ones.
+fn reference_token_len(rest: &str) -> Option<usize> {
+    let end = rest.find('>')?;
+    let inner = &rest[..end];
+    let (name, modifier) = inner.split_once(':').unwrap_or((inner, ""));
+    let name = name.trim();
+    let shaped =
+        !name.is_empty() && name.chars().all(is_name_char) && modifier.chars().all(is_name_char);
+    shaped.then_some(end)
 }
 
 fn parse_variable_inner(inner: &str) -> Option<Variable> {
